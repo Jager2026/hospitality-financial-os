@@ -1,0 +1,124 @@
+import { randomUUID } from "node:crypto";
+import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { JwtService } from "@nestjs/jwt";
+import { RedisService } from "../redis/redis.service";
+import { AppException } from "../common/exceptions/app.exception";
+
+export interface AccessTokenPayload {
+  sub: string; // user id
+  jti: string;
+  type: "access";
+}
+
+export interface RefreshTokenPayload {
+  sub: string;
+  jti: string;
+  type: "refresh";
+}
+
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
+
+const REVOKED_KEY_PREFIX = "auth:revoked-jti:";
+
+/**
+ * ADR/DATABASE.md gap, flagged not hidden: DATABASE.md's Core Domain has no RefreshToken entity
+ * (unlike the 20 entities it does enumerate) — Withdrawal-style entities excluded from MVP are
+ * always named explicitly under "Future Entities"; this one simply isn't mentioned either way.
+ * Read as an oversight, not a deliberate exclusion, since API_Contract.md and
+ * IMPLEMENTATION_PLAN.md Sprint 2 both name "Refresh Token" as real, in-scope functionality.
+ *
+ * Chosen design: refresh tokens are stateless signed JWTs (no new Postgres table — nothing here
+ * needs DATABASE.md's Soft Deletes / immutability rules, since a refresh token isn't a financial
+ * or business fact, just a bearer credential). Revocation (logout, and rotation-on-refresh) is
+ * tracked in Redis by jti with a TTL matching the token's own remaining lifetime — Redis is
+ * already part of the stack (Sprint 1) and this is exactly the kind of short-lived, non-financial
+ * state it's meant for, unlike Wallet/Restaurant balance which must never live only in Redis
+ * (SYSTEM_ARCHITECTURE.md, Caching Strategy). Flagging this design choice explicitly for the
+ * Founder to confirm or override, same as the enum/status assumptions in Sprint 0-1.
+ */
+@Injectable()
+export class TokenService {
+  private readonly accessSecret: string;
+  private readonly refreshSecret: string;
+  private readonly accessTtlSeconds: number;
+  private readonly refreshTtlSeconds: number;
+
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly redis: RedisService,
+    config: ConfigService,
+  ) {
+    this.accessSecret = config.getOrThrow<string>("JWT_ACCESS_SECRET");
+    this.refreshSecret = config.getOrThrow<string>("JWT_REFRESH_SECRET");
+    this.accessTtlSeconds = config.get<number>("JWT_ACCESS_TTL_SECONDS", 900);
+    this.refreshTtlSeconds = config.get<number>("JWT_REFRESH_TTL_SECONDS", 604_800);
+  }
+
+  async issueTokenPair(userId: string): Promise<TokenPair> {
+    const accessToken = await this.jwt.signAsync(
+      { sub: userId, jti: randomUUID(), type: "access" } satisfies AccessTokenPayload,
+      { secret: this.accessSecret, expiresIn: this.accessTtlSeconds },
+    );
+    const refreshToken = await this.jwt.signAsync(
+      { sub: userId, jti: randomUUID(), type: "refresh" } satisfies RefreshTokenPayload,
+      { secret: this.refreshSecret, expiresIn: this.refreshTtlSeconds },
+    );
+    return { accessToken, refreshToken };
+  }
+
+  async verifyAccessToken(token: string): Promise<AccessTokenPayload> {
+    const payload = await this.verify<AccessTokenPayload>(token, this.accessSecret);
+    if (payload.type !== "access") {
+      throw new AppException("AUTH_INVALID", "Not an access token.", 401);
+    }
+    if (await this.isRevoked(payload.jti)) {
+      throw new AppException("AUTH_INVALID", "Token has been revoked.", 401);
+    }
+    return payload;
+  }
+
+  async verifyRefreshToken(token: string): Promise<RefreshTokenPayload> {
+    const payload = await this.verify<RefreshTokenPayload>(token, this.refreshSecret);
+    if (payload.type !== "refresh") {
+      throw new AppException("AUTH_INVALID", "Not a refresh token.", 401);
+    }
+    if (await this.isRevoked(payload.jti)) {
+      throw new AppException("AUTH_INVALID", "Refresh token has been revoked.", 401);
+    }
+    return payload;
+  }
+
+  /** Revokes one token's jti immediately — used for logout and for rotating out the old refresh
+   * token on every /auth/refresh call. `expSeconds` is the token's own remaining lifetime, so the
+   * Redis key expires at the same moment the JWT itself would have expired naturally — never
+   * revoked-forever bookkeeping for a token that's already unusable anyway. */
+  async revoke(jti: string, expSeconds: number): Promise<void> {
+    if (expSeconds <= 0) return;
+    await this.redis.getClient().set(`${REVOKED_KEY_PREFIX}${jti}`, "1", "EX", expSeconds);
+  }
+
+  private async isRevoked(jti: string): Promise<boolean> {
+    const value = await this.redis.getClient().get(`${REVOKED_KEY_PREFIX}${jti}`);
+    return value !== null;
+  }
+
+  private async verify<T extends object>(token: string, secret: string): Promise<T> {
+    try {
+      return await this.jwt.verifyAsync<T>(token, { secret });
+    } catch (err) {
+      // jsonwebtoken (wrapped by @nestjs/jwt) throws TokenExpiredError specifically for an
+      // otherwise-valid, naturally-expired token — everything else (bad signature, malformed,
+      // wrong secret) is a different failure mode a client should react to differently (re-login,
+      // not just refresh). Distinguished by name rather than importing jsonwebtoken directly,
+      // since @nestjs/jwt re-exports the same error classes without its own wrapper types.
+      if (err instanceof Error && err.name === "TokenExpiredError") {
+        throw new AppException("AUTH_EXPIRED", "Token has expired.", 401);
+      }
+      throw new AppException("AUTH_INVALID", "Token is invalid.", 401);
+    }
+  }
+}

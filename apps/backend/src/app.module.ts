@@ -9,6 +9,8 @@ import { RedisModule } from "./redis/redis.module";
 import { HealthModule } from "./health/health.module";
 import { LedgerModule } from "./ledger/ledger.module";
 import { OutboxModule } from "./outbox/outbox.module";
+import { AuthModule } from "./auth/auth.module";
+import { ProfileModule } from "./profile/profile.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { ResponseInterceptor } from "./common/interceptors/response.interceptor";
 import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor";
@@ -25,6 +27,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
           "req.headers.authorization",
           "req.headers.cookie",
           "req.body.password",
+          "req.body.refreshToken",
           "req.body.card",
         ],
       },
@@ -36,6 +39,8 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     HealthModule,
     LedgerModule,
     OutboxModule,
+    AuthModule,
+    ProfileModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
