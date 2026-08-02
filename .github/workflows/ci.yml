@@ -37,9 +37,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `version:` here, deliberately: pnpm/action-setup@v4 reads the version from
+      # package.json's "packageManager" field on its own. Specifying both made every CI run
+      # since the first commit fail immediately with "Multiple versions of pnpm specified" —
+      # confirmed from the actual failed-run log, not assumed.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
