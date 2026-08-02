@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.2.0
+version: 1.3.0
 status: Active — nineteen ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -248,14 +248,20 @@ Webhooks section) writes this one transition; nothing else ever updates a `Payme
 
 ---
 
-## ADR-019 — Refresh Token Storage: Stateless JWT + Redis Revocation, No New Postgres Table
-**Status:** Accepted (flagged during implementation, per `CLAUDE_RULES.md`'s "Documentation First" — not decided silently)
+## ADR-019 — Refresh Token Storage: Stateless JWT + Redis Revocation, Family-Wide on Reuse
+**Status:** Accepted (flagged during implementation, per `CLAUDE_RULES.md`'s "Documentation First" — not decided silently; revised once, see below)
 
 **Context:** Found while building Sprint 2 (Authentication). `DATABASE.md`'s Core Domain enumerates exactly twenty entities and never mentions a RefreshToken table — unlike entities deliberately excluded from MVP, which are always named explicitly under "Future Entities" (`Withdrawal`, `Settlement`, etc.). This reads as an oversight, not a deliberate exclusion: `API_Contract.md`'s `POST /auth/login` ("returns Access Token, Refresh Token...") and `IMPLEMENTATION_PLAN.md`'s Sprint 2 ("Refresh Token... JWT refresh works") both treat refresh tokens as real, in-scope functionality, not a Future Entity.
 
-**Decision:** Refresh tokens are stateless signed JWTs — a separate secret and a longer TTL than access tokens — not a persisted Postgres row. Revocation (needed for logout, and for rotate-on-every-refresh) is tracked in Redis, keyed by the token's `jti`, with a TTL matching the token's own remaining lifetime so revocation entries never need separate cleanup. Every `POST /auth/refresh` call revokes the presented refresh token and issues a new access+refresh pair, so a leaked refresh token is worthless the moment it's used once.
+**Decision:** Refresh tokens are stateless signed JWTs — a separate secret and a longer TTL than access tokens — not a persisted Postgres row. Every `POST /auth/refresh` call revokes the presented refresh token and issues a new pair, so a leaked refresh token is worthless the moment it's used once (rotation).
 
-**Consequences:** No schema migration was needed for Sprint 2. Revocation state lives only in Redis — consistent with `SYSTEM_ARCHITECTURE.md`'s Caching Strategy, which already treats Redis as appropriate for short-lived, non-financial state and explicitly wrong for anything that must survive as a source of truth (Wallet, Restaurant balance). Accepted risk: a Redis flush would silently un-revoke every outstanding refresh token (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage.
+**Revision — reuse detection, family-wide (Founder-requested, reviewing the code directly rather than the description of it):** the original version of this decision revoked only the individual token's `jti` on rotation. The Founder asked directly whether replaying an already-rotated-out token revoked just that token or the whole chain descended from it — the honest answer, checked against the code rather than assumed, was "just that token." That is the textbook-wrong response: replaying an already-superseded refresh token is the standard signature of a stolen token racing the legitimate client, and rejecting only the replay leaves the legitimate session's current token (and, if it really was theft, the attacker's) both still valid.
+
+Fixed: every refresh token now also carries a `familyId`, generated once at login/register and carried forward unchanged across every rotation descended from that login. Revocation is tracked in Redis two ways — by individual `jti` (the routine "this exact token was rotated out" case) and by `familyId` (set the moment a replay of an already-revoked `jti` is detected). A revoked family invalidates every token descended from that login, present or future, not just the one being replayed. Verified against real HTTP endpoints, not only unit tests: rotate → replay the old token → both the old token and the newer, never-replayed token are rejected by `POST /auth/refresh`.
+
+The detection moment itself is now distinguishable from an ordinary already-revoked-family rejection (`RefreshTokenReuseDetectedError`, not a generic 401), specifically so it can be written to `AuditLog` as its own action — `refresh_token_reuse_detected` — per `CLAUDE_RULES.md`'s Logging Philosophy ("Always log: ... Security Events"). Confirmed live: the row lands with the correct `user_id`, `familyId` in `metadata`, and the requesting IP/user-agent; a subsequent rejection of the same family's other token does not produce a second row, since it isn't a new detection.
+
+**Consequences:** No schema migration was needed for Sprint 2 (still no RefreshToken table — family tracking is a second Redis key, not a new Postgres entity). Revocation and family-revocation state both live only in Redis — consistent with `SYSTEM_ARCHITECTURE.md`'s Caching Strategy, which already treats Redis as appropriate for short-lived, non-financial state and explicitly wrong for anything that must survive as a source of truth (Wallet, Restaurant balance). Accepted risk, unchanged from the original decision: a Redis flush would silently un-revoke every outstanding refresh token and family flag (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage.
 
 ---
 

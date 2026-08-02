@@ -1,6 +1,6 @@
 import { JwtService } from "@nestjs/jwt";
 import { beforeEach, describe, expect, it } from "vitest";
-import { TokenService } from "./token.service";
+import { RefreshTokenReuseDetectedError, TokenService } from "./token.service";
 import type { RedisService } from "../redis/redis.service";
 import { AppException } from "../common/exceptions/app.exception";
 
@@ -157,13 +157,20 @@ describe("TokenService — refresh token reuse detection", () => {
     await service.revoke(firstPayload.jti, 3600);
     const second = await service.issueTokenPair(userId, firstPayload.familyId);
 
-    // An attacker (or a network retry race) replays the now-superseded token #1.
-    await expect(service.verifyRefreshToken(first.refreshToken)).rejects.toMatchObject({
+    // An attacker (or a network retry race) replays the now-superseded token #1. This exact
+    // request is the detection event — a distinguishable error type, not just a 401 — so the
+    // caller (AuthService) can log it as a security event, not a generic auth failure.
+    const reuseAttempt = service.verifyRefreshToken(first.refreshToken);
+    await expect(reuseAttempt).rejects.toBeInstanceOf(RefreshTokenReuseDetectedError);
+    await expect(reuseAttempt).rejects.toMatchObject({
       code: "AUTH_INVALID",
+      userId,
+      familyId: firstPayload.familyId,
     });
 
     // The legitimate, never-individually-revoked token #2 must ALSO now be rejected — this is
-    // the actual family-wide revocation, not just the replay itself being turned away.
+    // the actual family-wide revocation, not just the replay itself being turned away. This
+    // second rejection is the *ordinary* already-revoked-family path, not a fresh detection.
     await expect(service.verifyRefreshToken(second.refreshToken)).rejects.toMatchObject({
       code: "AUTH_INVALID",
     });

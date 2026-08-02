@@ -1,5 +1,6 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
+import type { Request } from "express";
 import { AuditEntity } from "../common/decorators/audit-entity.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthService } from "./auth.service";
@@ -32,15 +33,21 @@ export class AuthController {
   @Post("refresh")
   @HttpCode(HttpStatus.OK)
   @AuditEntity("Authentication")
-  refresh(@Body(new ZodValidationPipe(refreshSchema)) dto: RefreshDto) {
-    return this.authService.refresh(dto.refreshToken);
+  refresh(@Body(new ZodValidationPipe(refreshSchema)) dto: RefreshDto, @Req() req: Request) {
+    return this.authService.refresh(dto.refreshToken, {
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
   }
 
   @Post("logout")
   @HttpCode(HttpStatus.OK)
   @AuditEntity("Authentication")
-  logout(@Body(new ZodValidationPipe(refreshSchema)) dto: RefreshDto) {
-    return this.authService.logout(dto.refreshToken);
+  logout(@Body(new ZodValidationPipe(refreshSchema)) dto: RefreshDto, @Req() req: Request) {
+    return this.authService.logout(dto.refreshToken, {
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
   }
 
   @Get("me")

@@ -23,6 +23,26 @@ export interface TokenPair {
   refreshToken: string;
 }
 
+/** Thrown specifically at the moment reuse is *detected* — the first request to replay an
+ * already-rotated-out token, the one that actually triggers family revocation — as opposed to
+ * every subsequent request against that same already-revoked family, which gets the plain
+ * AppException below. CLAUDE_RULES.md, Logging Philosophy: "Always log: ... Security Events" —
+ * this is that event, and the caller needs a way to tell it apart from an ordinary auth failure
+ * in order to log it as one (see AuthService, action `refresh_token_reuse_detected`).
+ *
+ * Extends AppException on purpose: even if a future call site forgets to catch this specifically,
+ * it still produces the correct 401 to the client by default — only the audit entry is missed,
+ * not the security response itself. */
+export class RefreshTokenReuseDetectedError extends AppException {
+  constructor(
+    public readonly userId: string,
+    public readonly familyId: string,
+  ) {
+    super("AUTH_INVALID", "Refresh token has been revoked.", 401);
+    this.name = "RefreshTokenReuseDetectedError";
+  }
+}
+
 const REVOKED_JTI_PREFIX = "auth:revoked-jti:";
 const REVOKED_FAMILY_PREFIX = "auth:revoked-family:";
 
@@ -108,9 +128,11 @@ export class TokenService {
 
     if (await this.isJtiRevoked(payload.jti)) {
       // This exact token was already rotated away once — a replay, not a fresh use. Revoke the
-      // whole family so the token this replay is racing against also stops working.
+      // whole family so the token this replay is racing against also stops working, and signal
+      // this specific request as the detection event (distinct from the isFamilyRevoked check
+      // above, which fires for every *subsequent* request once the family is already revoked).
       await this.revokeFamily(payload.familyId, this.refreshTtlSeconds);
-      throw new AppException("AUTH_INVALID", "Refresh token has been revoked.", 401);
+      throw new RefreshTokenReuseDetectedError(payload.sub, payload.familyId);
     }
 
     return payload;
