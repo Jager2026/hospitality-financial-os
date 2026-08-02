@@ -1,0 +1,616 @@
+// Hospitality Operating System — Data Model
+//
+// This file is a direct translation of docs/DATABASE.md (v2.0.0), which is itself the
+// implementation of docs/ARCHITECTURE_DECISIONS.md. Do not add, remove, or "clean up" a field,
+// relation, index, or soft-delete rule here without updating DATABASE.md first — code follows
+// documentation (CLAUDE.md, "Documentation First").
+//
+// Where DATABASE.md gave an explicit field list for an entity, that list is followed literally,
+// including where it deliberately omits `updated_at` (Payment, Transaction, JournalEntry,
+// LedgerLine, Tip, Refund, Chargeback, Adjustment — all "never edited" per Database Philosophy)
+// or uses a natural key instead of a UUID (Currency.code, IdempotencyKey.key). Where DATABASE.md
+// gave no field list at all (Role, Permission), the general Database Principles section is
+// applied in full. See the Sprint 0 audit report for every judgment call made while translating
+// this file, including the items marked `/// ASSUMPTION` inline below.
+//
+// Naming: table and column names are snake_case (DATABASE.md, Naming Convention) via @map/@@map.
+// Model and field names are idiomatic Prisma/TS (PascalCase / camelCase) — this is a
+// presentation-layer choice, not a deviation from the documented DB-level convention.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+//
+// Every enum value carries an explicit @map to lowercase snake_case at the DB level — matching
+// DATABASE.md's literal values where it gives them (e.g. entry_type's "payment_captured",
+// "refund_issued"; ledger_line.direction's "debit"/"credit") and extending the same convention to
+// enums this schema had to invent (EntityStatus, PaymentStatus, etc.), for one consistent rule
+// rather than a mix of cases. This was corrected after an initial draft left values unmapped
+// (stored as PENDING, SUCCEEDED, ... instead of pending, succeeded, ...) — caught while
+// hand-authoring the entry_type CHECK constraint SQL, which would otherwise have compared against
+// the wrong literal values. See Sprint 1 notes.
+// ============================================================================
+
+/// ASSUMPTION: DATABASE.md does not enumerate values for the generic `status` column shared by
+/// Organization, Restaurant, User, and Membership. Filled with the smallest reasonable set;
+/// flagged to the Founder in the Sprint 0 audit rather than decided silently.
+enum EntityStatus {
+  ACTIVE   @map("active")
+  INACTIVE @map("inactive")
+  SUSPENDED @map("suspended")
+
+  @@map("entity_status")
+}
+
+/// ASSUMPTION: mirrors Stripe Connect Express's onboarding lifecycle (ADR-009, ADR-014;
+/// SEQUENCE_ONBOARDING.md) — not enumerated explicitly in DATABASE.md.
+enum OnboardingStatus {
+  NOT_STARTED @map("not_started")
+  IN_PROGRESS @map("in_progress")
+  COMPLETE    @map("complete")
+  RESTRICTED  @map("restricted")
+
+  @@map("onboarding_status")
+}
+
+/// ADR-018 (Accepted): Payment.status transitions exactly once, pending -> one terminal state.
+/// FAILED (processing error/timeout) and DECLINED (issuer explicitly rejected the card) are
+/// kept distinct because MASTERPLAN.md's Fraud Prevention section treats "repeated failed
+/// payments" as a fraud signal, and a decline vs. a timeout are different signals in practice.
+enum PaymentStatus {
+  PENDING   @map("pending")
+  SUCCEEDED @map("succeeded")
+  FAILED    @map("failed")
+  CANCELED  @map("canceled")
+  DECLINED  @map("declined")
+
+  @@map("payment_status")
+}
+
+/// ASSUMPTION: DATABASE.md does not enumerate Transaction.status. Reflects the states a
+/// Transaction can reach once Refund/Chargeback entities exist against it (ADR-008).
+enum TransactionStatus {
+  COMPLETED           @map("completed")
+  PARTIALLY_REFUNDED  @map("partially_refunded")
+  REFUNDED            @map("refunded")
+  DISPUTED            @map("disputed")
+
+  @@map("transaction_status")
+}
+
+/// Explicit in DATABASE.md's JournalEntry entity definition (ADR-002).
+enum JournalEntryType {
+  PAYMENT_CAPTURED @map("payment_captured")
+  TIP_ALLOCATED    @map("tip_allocated")
+  REFUND_ISSUED    @map("refund_issued")
+  CHARGEBACK       @map("chargeback")
+  ADJUSTMENT       @map("adjustment")
+  PAYOUT           @map("payout")
+
+  @@map("journal_entry_type")
+}
+
+/// Explicit in DATABASE.md's LedgerLine entity definition — the chart of accounts (ADR-002).
+enum LedgerAccount {
+  PROCESSOR_CLEARING         @map("processor_clearing")
+  RESTAURANT_REVENUE_PAYABLE @map("restaurant_revenue_payable")
+  TIP_PAYABLE                @map("tip_payable")
+  PLATFORM_FEE_REVENUE       @map("platform_fee_revenue")
+  TAX_PAYABLE                @map("tax_payable")
+  REFUND_CONTRA              @map("refund_contra")
+
+  @@map("ledger_account")
+}
+
+/// Explicit in DATABASE.md's LedgerLine entity definition (ADR-002).
+enum LedgerDirection {
+  DEBIT  @map("debit")
+  CREDIT @map("credit")
+
+  @@map("ledger_direction")
+}
+
+/// ASSUMPTION: DATABASE.md does not enumerate Tip.status. MASTERPLAN.md's Financial Events list
+/// names both "Tip Added" and "Tip Reversed" as real events, so a two-state (allocated-only)
+/// enum would be insufficient.
+enum TipStatus {
+  PENDING   @map("pending")
+  ALLOCATED @map("allocated")
+  REVERSED  @map("reversed")
+
+  @@map("tip_status")
+}
+
+/// ASSUMPTION: DATABASE.md does not enumerate Refund.status. Modeled on a typical processor
+/// refund lifecycle.
+enum RefundStatus {
+  PENDING   @map("pending")
+  SUCCEEDED @map("succeeded")
+  FAILED    @map("failed")
+  CANCELED  @map("canceled")
+
+  @@map("refund_status")
+}
+
+/// ASSUMPTION: DATABASE.md does not enumerate Chargeback.status, but SEQUENCE_REFUND_CHARGEBACK.md
+/// names `under_review` explicitly and describes a won/lost resolution (ADR-016).
+enum ChargebackStatus {
+  UNDER_REVIEW @map("under_review")
+  WON          @map("won")
+  LOST         @map("lost")
+
+  @@map("chargeback_status")
+}
+
+/// Explicit in DATABASE.md's IdempotencyKey entity definition (ADR-004).
+enum IdempotencyKeyStatus {
+  IN_PROGRESS @map("in_progress")
+  COMPLETED   @map("completed")
+  FAILED      @map("failed")
+
+  @@map("idempotency_key_status")
+}
+
+// ============================================================================
+// ORGANIZATIONS & PEOPLE
+// ============================================================================
+
+model Organization {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  status    EntityStatus @default(ACTIVE)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  restaurants  Restaurant[]
+  memberships  Membership[]
+
+  @@map("organization")
+}
+
+model Restaurant {
+  id                     String    @id @default(uuid()) @db.Uuid
+  organizationId         String    @map("organization_id") @db.Uuid
+  name                   String
+  legalName              String    @map("legal_name")
+  companyNumber          String    @map("company_number")
+  vatNumber              String    @map("vat_number")
+  email                  String
+  phone                  String
+  country                String    @db.Char(2)
+  currency               String    @db.Char(3)
+  defaultCustomerLocale  String    @map("default_customer_locale") // ADR-013
+  timezone               String
+  address                String
+  logoUrl                String?   @map("logo_url")
+  status                 EntityStatus @default(ACTIVE)
+
+  // Stripe Connect (ADR-009, ADR-014 — Express)
+  stripeAccountId        String?          @unique @map("stripe_account_id")
+  onboardingStatus       OnboardingStatus @default(NOT_STARTED) @map("onboarding_status")
+  chargesEnabled         Boolean          @default(false) @map("charges_enabled")
+  payoutsEnabled         Boolean          @default(false) @map("payouts_enabled")
+  requirementsDue        Json?            @map("requirements_due")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  currencyRef  Currency     @relation(fields: [currency], references: [code])
+
+  memberships  Membership[]
+  payments     Payment[]
+  transactions Transaction[]
+  ledgerLines  LedgerLine[]
+  adjustments  Adjustment[]
+
+  @@index([organizationId])
+  @@index([currency])
+  @@map("restaurant")
+}
+
+model User {
+  id                String    @id @default(uuid()) @db.Uuid
+  email             String    @unique
+  passwordHash      String    @map("password_hash")
+  emailVerified     Boolean   @default(false) @map("email_verified")
+  twoFactorEnabled  Boolean   @default(false) @map("two_factor_enabled")
+  locale            String    @default("en") // ADR-013: "en" | "lt" for MVP
+  lastLogin         DateTime? @map("last_login")
+  status            EntityStatus @default(ACTIVE)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  deletedAt         DateTime? @map("deleted_at")
+
+  memberships       Membership[]
+  auditLogs         AuditLog[]
+  refundsRequested  Refund[]     @relation("RefundRequestedBy")
+  refundsApproved   Refund[]     @relation("RefundApprovedBy")
+  adjustmentsCreated Adjustment[] @relation("AdjustmentCreatedBy")
+
+  @@map("user")
+}
+
+model Membership {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  restaurantId   String?   @map("restaurant_id") @db.Uuid // nullable = org-wide role (ADR-005)
+  roleId         String    @map("role_id") @db.Uuid
+  status         EntityStatus @default(ACTIVE)
+  hireDate       DateTime? @map("hire_date")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  user         User        @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id])
+  role         Role        @relation(fields: [roleId], references: [id])
+  wallet       Wallet?
+  ledgerLines  LedgerLine[]
+  adjustments  Adjustment[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([restaurantId])
+  @@index([roleId])
+  @@map("membership")
+}
+
+/// ASSUMPTION: DATABASE.md gives no field list for Role ("Unchanged from v1.0. Owner · Manager ·
+/// Waiter · Administrator · future Accountant · future Auditor.") — Database Principles applied
+/// in full since no entity-specific list overrides it. Rows are seeded data (IMPLEMENTATION_PLAN
+/// Sprint 2), never hardcoded by name in permission checks (DOMAIN_GLOSSARY).
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  memberships     Membership[]
+  rolePermissions RolePermission[]
+
+  @@map("role")
+}
+
+/// ASSUMPTION: see Role above — same gap, same resolution.
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rolePermissions RolePermission[]
+
+  @@map("permission")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@index([permissionId]) // reverse lookup: every Role holding a given Permission
+  @@map("role_permission")
+}
+
+// ============================================================================
+// MONEY & LEDGER
+// ============================================================================
+
+model Currency {
+  code     String @id @db.Char(3) // ISO 4217, e.g. "EUR"
+  exponent Int
+  name     String
+
+  restaurants  Restaurant[]
+  ledgerLines  LedgerLine[]
+  wallets      Wallet[]
+  payments     Payment[]
+  transactions Transaction[]
+  tips         Tip[]
+  refunds      Refund[]
+  chargebacks  Chargeback[]
+  adjustments  Adjustment[]
+
+  @@map("currency")
+}
+
+model Wallet {
+  id               String   @id @default(uuid()) @db.Uuid
+  membershipId     String   @unique @map("membership_id") @db.Uuid
+  availableBalance BigInt   @default(0) @map("available_balance") // minor units (ADR-001)
+  pendingBalance   BigInt   @default(0) @map("pending_balance")   // minor units (ADR-001)
+  currency         String   @db.Char(3)
+  status           EntityStatus @default(ACTIVE)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  membership  Membership @relation(fields: [membershipId], references: [id])
+  currencyRef Currency   @relation(fields: [currency], references: [code])
+
+  // Never written directly outside the Outbox projection consumer (ADR-002, ADR-006,
+  // DATABASE.md "Financial Integrity") — enforce this at the application layer; Prisma cannot
+  // express "only this one service may call .update()".
+
+  @@index([currency])
+  @@map("wallet")
+}
+
+model Payment {
+  id                 String   @id @default(uuid()) @db.Uuid
+  restaurantId       String   @map("restaurant_id") @db.Uuid
+  processor          String
+  processorPaymentId String   @map("processor_payment_id")
+  amount             BigInt   // minor units (ADR-001)
+  currency           String   @db.Char(3)
+  status             PaymentStatus @default(PENDING)
+  paymentMethod      String   @map("payment_method")
+  idempotencyKey     String   @unique @map("idempotency_key")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  // ADR-018 (Accepted), resolving the Sprint 0 audit's open question: "Immutable once created"
+  // (DATABASE.md) describes the payment's identity and economic facts — amount, restaurant_id,
+  // processor, processor_payment_id, currency, payment_method, idempotency_key — none of which
+  // ever change after creation. `status` is the one exception: it transitions exactly once, from
+  // PENDING to a terminal state, recorded here via updatedAt. Without this, failed/declined
+  // attempts would never become visible, which is incompatible with MASTERPLAN.md's Fraud
+  // Prevention requirement to detect "repeated failed payments."
+
+  restaurant       Restaurant     @relation(fields: [restaurantId], references: [id])
+  idempotencyKeyRef IdempotencyKey @relation(fields: [idempotencyKey], references: [key])
+  currencyRef      Currency       @relation(fields: [currency], references: [code])
+  transaction      Transaction?
+
+  @@index([restaurantId])
+  @@index([currency])
+  @@map("payment")
+}
+
+model Transaction {
+  id           String   @id @default(uuid()) @db.Uuid
+  paymentId    String   @unique @map("payment_id") @db.Uuid
+  restaurantId String   @map("restaurant_id") @db.Uuid
+  grossAmount  BigInt   @map("gross_amount") // minor units (ADR-001)
+  currency     String   @db.Char(3)
+  status       TransactionStatus @default(COMPLETED)
+  createdAt    DateTime @default(now()) @map("created_at")
+  // No updated_at: never edited (ADR-002) — corrections are new JournalEntry rows.
+
+  payment      Payment       @relation(fields: [paymentId], references: [id])
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id])
+  currencyRef  Currency      @relation(fields: [currency], references: [code])
+  journalEntries JournalEntry[]
+  tip          Tip?
+  refunds      Refund[]
+  chargebacks  Chargeback[]
+
+  @@index([restaurantId])
+  @@index([restaurantId, createdAt]) // dashboard queries — Index Strategy
+  @@index([currency])
+  @@map("transaction")
+}
+
+model JournalEntry {
+  id            String   @id @default(uuid()) @db.Uuid
+  entryType     JournalEntryType @map("entry_type")
+  transactionId String?  @map("transaction_id") @db.Uuid
+  // ADR-017 (Accepted): nullable FKs on JournalEntry itself, mirroring transactionId — not a
+  // single FK owned by Refund/Chargeback/Adjustment. Required because a Chargeback can produce
+  // more than one compensating JournalEntry over its lifetime (provisional loss, then a reversal
+  // if the dispute is later won — ADR-016): that is one-to-many from Chargeback's side, which a
+  // unique journal_entry_id on Chargeback cannot express. Refund and Adjustment get the same
+  // shape for consistency, even though today's flows only ever produce one JournalEntry each.
+  refundId      String?  @map("refund_id") @db.Uuid
+  chargebackId  String?  @map("chargeback_id") @db.Uuid
+  adjustmentId  String?  @map("adjustment_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  // No updated_at: "Never edited or deleted" (ADR-002).
+
+  // INVARIANT, enforced by a plain single-row Postgres CHECK constraint (not expressible in
+  // Prisma's schema language) — see prisma/sql/ledger_integrity.sql:
+  //   entry_type = 'refund_issued'                        -> refund_id set, other two null
+  //   entry_type = 'chargeback'                            -> chargeback_id set, other two null
+  //   entry_type = 'adjustment'                            -> adjustment_id set, other two null
+  //   entry_type IN ('payment_captured','tip_allocated','payout') -> all three null
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+  refund      Refund?      @relation(fields: [refundId], references: [id])
+  chargeback  Chargeback?  @relation(fields: [chargebackId], references: [id])
+  adjustment  Adjustment?  @relation(fields: [adjustmentId], references: [id])
+  ledgerLines LedgerLine[]
+
+  @@index([transactionId])
+  @@index([refundId])
+  @@index([chargebackId])
+  @@index([adjustmentId])
+  @@map("journal_entry")
+}
+
+model LedgerLine {
+  id             String   @id @default(uuid()) @db.Uuid
+  journalEntryId String   @map("journal_entry_id") @db.Uuid
+  account        LedgerAccount
+  direction      LedgerDirection
+  amount         BigInt   // minor units (ADR-001)
+  currency       String   @db.Char(3)
+  restaurantId   String?  @map("restaurant_id") @db.Uuid
+  membershipId   String?  @map("membership_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+  // No updated_at: "Never edited or deleted" (ADR-002).
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id])
+  restaurant   Restaurant?  @relation(fields: [restaurantId], references: [id])
+  membership   Membership?  @relation(fields: [membershipId], references: [id])
+  currencyRef  Currency     @relation(fields: [currency], references: [code])
+
+  @@index([journalEntryId]) // Index Strategy
+  @@index([membershipId])   // Index Strategy
+  @@index([restaurantId])   // Index Strategy
+  @@index([currency])
+  @@map("ledger_line")
+}
+
+model Tip {
+  id            String   @id @default(uuid()) @db.Uuid
+  transactionId String   @unique @map("transaction_id") @db.Uuid // Transaction → zero-or-one Tip
+  grossTip      BigInt   @map("gross_tip") // minor units (ADR-001)
+  currency      String   @db.Char(3)
+  status        TipStatus @default(PENDING)
+  createdAt     DateTime @default(now()) @map("created_at")
+  // No updated_at: distribution lives in LedgerLine, not here (ADR-007) — this row doesn't
+  // change shape after creation, only `status` transitions via new compensating Ledger activity.
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  currencyRef Currency    @relation(fields: [currency], references: [code])
+
+  @@index([currency])
+  @@map("tip")
+}
+
+model Refund {
+  id                 String   @id @default(uuid()) @db.Uuid
+  transactionId      String   @map("transaction_id") @db.Uuid // many Refunds per Transaction allowed
+  processorRefundId  String   @map("processor_refund_id")
+  amount             BigInt   // minor units (ADR-001)
+  currency           String   @db.Char(3)
+  reason             String
+  tipRefunded        Boolean  @map("tip_refunded")
+  requestedBy        String?  @map("requested_by") @db.Uuid
+  approvedBy         String?  @map("approved_by") @db.Uuid
+  status             RefundStatus @default(PENDING)
+  createdAt          DateTime @default(now()) @map("created_at")
+  // No updated_at: compensating entries are immutable (ADR-008).
+
+  transaction     Transaction    @relation(fields: [transactionId], references: [id])
+  currencyRef     Currency       @relation(fields: [currency], references: [code])
+  requestedByUser User?          @relation("RefundRequestedBy", fields: [requestedBy], references: [id])
+  approvedByUser  User?          @relation("RefundApprovedBy", fields: [approvedBy], references: [id])
+  journalEntries  JournalEntry[] // ADR-017 (Accepted) — JournalEntry owns the FK; see there
+
+  @@index([transactionId])
+  @@index([requestedBy])
+  @@index([approvedBy])
+  @@index([currency])
+  @@map("refund")
+}
+
+model Chargeback {
+  id                 String   @id @default(uuid()) @db.Uuid
+  transactionId      String   @map("transaction_id") @db.Uuid
+  processorDisputeId String   @map("processor_dispute_id")
+  reason             String
+  amount             BigInt   // minor units (ADR-001)
+  currency           String   @db.Char(3)
+  status             ChargebackStatus @default(UNDER_REVIEW)
+  evidenceDueBy      DateTime? @map("evidence_due_by")
+  resolvedAt         DateTime? @map("resolved_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  // No updated_at: `status` and `resolvedAt` are set once at resolution via a new webhook event,
+  // not an in-place edit of history — the compensating JournalEntry itself is what changes
+  // (ADR-016), not this row's other fields.
+
+  transaction    Transaction    @relation(fields: [transactionId], references: [id])
+  currencyRef    Currency       @relation(fields: [currency], references: [code])
+  // ADR-017 (Accepted): one-to-many, by design — the provisional-loss entry (ADR-016) and, if
+  // the dispute is later won, the reversal entry are two separate JournalEntry rows both
+  // pointing back to this Chargeback via JournalEntry.chargebackId.
+  journalEntries JournalEntry[]
+
+  @@index([transactionId])
+  @@index([currency])
+  @@map("chargeback")
+}
+
+model Adjustment {
+  id             String   @id @default(uuid()) @db.Uuid
+  restaurantId   String?  @map("restaurant_id") @db.Uuid
+  membershipId   String?  @map("membership_id") @db.Uuid
+  amount         BigInt   // minor units (ADR-001)
+  currency       String   @db.Char(3)
+  reason         String
+  createdBy      String   @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+  // No updated_at: "still never edits history" (DATABASE.md, Adjustment Purpose).
+
+  restaurant     Restaurant?    @relation(fields: [restaurantId], references: [id])
+  membership     Membership?    @relation(fields: [membershipId], references: [id])
+  createdByUser  User           @relation("AdjustmentCreatedBy", fields: [createdBy], references: [id])
+  currencyRef    Currency       @relation(fields: [currency], references: [code])
+  journalEntries JournalEntry[] // ADR-017 (Accepted) — same shape as Refund/Chargeback, for consistency
+
+  @@index([restaurantId])
+  @@index([membershipId])
+  @@index([createdBy])
+  @@index([currency])
+  @@map("adjustment")
+}
+
+// ============================================================================
+// RELIABILITY
+// ============================================================================
+
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id") @db.Uuid
+  eventType     String    @map("event_type")
+  payload       Json
+  createdAt     DateTime  @default(now()) @map("created_at")
+  publishedAt   DateTime? @map("published_at")
+  attempts      Int       @default(0)
+
+  @@index([publishedAt]) // Index Strategy — the poller's query
+  @@map("outbox_event")
+}
+
+model IdempotencyKey {
+  key               String   @id
+  endpointScope     String   @map("endpoint_scope")
+  requestFingerprint String  @map("request_fingerprint")
+  status            IdempotencyKeyStatus @default(IN_PROGRESS)
+  responseSnapshot  Json?    @map("response_snapshot")
+  createdAt         DateTime @default(now()) @map("created_at")
+  expiresAt         DateTime @map("expires_at")
+
+  payment Payment?
+
+  @@index([expiresAt]) // Index Strategy
+  @@map("idempotency_keys") // plural, matching DATABASE.md's Index Strategy examples literally
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  entity    String
+  entityId  String   @map("entity_id") @db.Uuid
+  action    String
+  metadata  Json?
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  timestamp DateTime @default(now())
+  // Append-only, never edited or deleted (DATABASE.md) — no created_at/updated_at pair, matching
+  // the single `timestamp` column DATABASE.md's Fields list literally specifies for this entity.
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entity, entityId]) // "who did what to this record" — AuditLog's stated purpose
+  @@map("audit_log")
+}
