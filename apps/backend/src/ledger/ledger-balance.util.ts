@@ -1,6 +1,9 @@
 import type { LedgerLineInput, PostJournalEntryInput } from "./ledger.types";
 
-const COMPENSATING_ENTITY_BY_TYPE: Record<string, "refundId" | "chargebackId" | "adjustmentId" | null> = {
+const COMPENSATING_ENTITY_BY_TYPE: Record<
+  string,
+  "refundId" | "chargebackId" | "adjustmentId" | null
+> = {
   PAYMENT_CAPTURED: null,
   TIP_ALLOCATED: null,
   PAYOUT: null,
@@ -20,7 +23,9 @@ export class LedgerUnbalancedError extends Error {
 
 export class LedgerEmptyPostingError extends Error {
   constructor() {
-    super("A JournalEntry must have at least one LedgerLine — an empty posting has no event to record.");
+    super(
+      "A JournalEntry must have at least one LedgerLine — an empty posting has no event to record.",
+    );
     this.name = "LedgerEmptyPostingError";
   }
 }

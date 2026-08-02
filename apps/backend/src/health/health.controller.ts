@@ -33,8 +33,7 @@ export class HealthController {
       checks: { database, redis },
     };
 
-    const status =
-      result.status === "ok" ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
+    const status = result.status === "ok" ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
     res.status(status).json(result);
   }
 

@@ -1,0 +1,5 @@
+# Normalize line endings to LF in the repository itself, independent of each contributor's local
+# core.autocrlf setting — Windows' autocrlf=true rewrites the working tree to CRLF, which then
+# fails `prettier --check` (default endOfLine: "lf") both locally and, if the mismatch ever made
+# it into a commit, in CI. This is the fix at the source, not a Prettier config workaround.
+* text=auto eol=lf

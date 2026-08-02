@@ -15,7 +15,12 @@ describe("assertBalanced", () => {
   it("accepts a balanced posting", () => {
     const lines: LedgerLineInput[] = [
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 11500n, currency: "EUR" },
-      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 10000n, currency: "EUR" },
+      {
+        account: "RESTAURANT_REVENUE_PAYABLE",
+        direction: "CREDIT",
+        amount: 10000n,
+        currency: "EUR",
+      },
       { account: "TIP_PAYABLE", direction: "CREDIT", amount: 1500n, currency: "EUR" },
     ];
     expect(() => assertBalanced(lines)).not.toThrow();
@@ -24,7 +29,12 @@ describe("assertBalanced", () => {
   it("rejects an unbalanced posting", () => {
     const lines: LedgerLineInput[] = [
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 11500n, currency: "EUR" },
-      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 10000n, currency: "EUR" },
+      {
+        account: "RESTAURANT_REVENUE_PAYABLE",
+        direction: "CREDIT",
+        amount: 10000n,
+        currency: "EUR",
+      },
       // Missing the 1500 tip credit line — debits (11500) != credits (10000).
     ];
     expect(() => assertBalanced(lines)).toThrow(LedgerUnbalancedError);
@@ -33,9 +43,19 @@ describe("assertBalanced", () => {
   it("rejects a posting where one currency is unbalanced, even if another in the same batch is fine", () => {
     const lines: LedgerLineInput[] = [
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 10000n, currency: "EUR" },
-      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 10000n, currency: "EUR" },
+      {
+        account: "RESTAURANT_REVENUE_PAYABLE",
+        direction: "CREDIT",
+        amount: 10000n,
+        currency: "EUR",
+      },
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 5000n, currency: "USD" },
-      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 4999n, currency: "USD" },
+      {
+        account: "RESTAURANT_REVENUE_PAYABLE",
+        direction: "CREDIT",
+        amount: 4999n,
+        currency: "USD",
+      },
     ];
     expect(() => assertBalanced(lines)).toThrow(LedgerUnbalancedError);
   });
@@ -49,9 +69,19 @@ describe("assertBalanced", () => {
   it("rejects when currencies are individually unbalanced but a flat sum across them would look balanced", () => {
     const lines: LedgerLineInput[] = [
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 10000n, currency: "EUR" },
-      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 5000n, currency: "EUR" },
+      {
+        account: "RESTAURANT_REVENUE_PAYABLE",
+        direction: "CREDIT",
+        amount: 5000n,
+        currency: "EUR",
+      },
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 5000n, currency: "USD" },
-      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 10000n, currency: "USD" },
+      {
+        account: "RESTAURANT_REVENUE_PAYABLE",
+        direction: "CREDIT",
+        amount: 10000n,
+        currency: "USD",
+      },
     ];
     expect(() => assertBalanced(lines)).toThrow(LedgerUnbalancedError);
   });

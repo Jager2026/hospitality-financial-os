@@ -26,7 +26,15 @@ module.exports = [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
-      "@typescript-eslint/no-unused-vars": "error",
+      // Leading-underscore params/vars are the established convention in this codebase for
+      // "required by the interface but intentionally unused" (e.g. NestJS's ParamDecorator
+      // factory signature, or a fake test double matching a real method's shape) — matching
+      // TypeScript's own noUnusedParameters behavior, which already ignores them. Without this,
+      // ESLint and tsc disagree on the same convention.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
       "@typescript-eslint/explicit-function-return-type": "off",
       "@typescript-eslint/no-explicit-any": "warn",
     },

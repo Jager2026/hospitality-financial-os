@@ -36,7 +36,9 @@ export class AuditLogInterceptor implements NestInterceptor {
       this.reflector.getAllAndOverride<string>(AUDIT_ENTITY_KEY, [
         context.getHandler(),
         context.getClass(),
-      ]) ?? request.route?.path ?? request.path;
+      ]) ??
+      request.route?.path ??
+      request.path;
 
     return next.handle().pipe(
       tap((data) => {

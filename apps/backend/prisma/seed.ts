@@ -58,9 +58,21 @@ const MANAGER_PERMISSIONS = [
 ];
 
 const ROLES: Array<{ name: string; description: string; permissions: readonly string[] }> = [
-  { name: "Owner", description: "Full control of an Organization and its Restaurants", permissions: ALL_PERMISSIONS },
-  { name: "Administrator", description: "Platform-level administrator", permissions: ALL_PERMISSIONS },
-  { name: "Manager", description: "Day-to-day operational control of one Restaurant", permissions: MANAGER_PERMISSIONS },
+  {
+    name: "Owner",
+    description: "Full control of an Organization and its Restaurants",
+    permissions: ALL_PERMISSIONS,
+  },
+  {
+    name: "Administrator",
+    description: "Platform-level administrator",
+    permissions: ALL_PERMISSIONS,
+  },
+  {
+    name: "Manager",
+    description: "Day-to-day operational control of one Restaurant",
+    permissions: MANAGER_PERMISSIONS,
+  },
   { name: "Waiter", description: "Restaurant staff member", permissions: [] },
 ];
 
@@ -72,7 +84,6 @@ async function seedCurrencies(): Promise<void> {
       update: { exponent: currency.exponent, name: currency.name },
     });
   }
-  // eslint-disable-next-line no-console
   console.log(`Seeded ${CURRENCIES.length} currencies.`);
 }
 
@@ -104,7 +115,6 @@ async function seedRbac(): Promise<void> {
       });
     }
   }
-  // eslint-disable-next-line no-console
   console.log(`Seeded ${PERMISSIONS.length} permissions and ${ROLES.length} roles.`);
 }
 
@@ -115,7 +125,6 @@ async function main(): Promise<void> {
 
 main()
   .catch((err) => {
-    // eslint-disable-next-line no-console
     console.error(err);
     process.exitCode = 1;
   })

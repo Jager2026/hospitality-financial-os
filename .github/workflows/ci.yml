@@ -10,6 +10,14 @@ jobs:
   lint-typecheck-test-build:
     runs-on: ubuntu-latest
 
+    env:
+      # Present for every step, not just Test — Prisma's own `generate` and `validate` commands
+      # both require DATABASE_URL to be a resolvable string even when they never open a real
+      # connection to it (confirmed directly earlier in this project: `prisma validate` with no
+      # DATABASE_URL fails with "Environment variable not found: DATABASE_URL", not a soft skip).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hospitality_os_test
+      REDIS_URL: redis://localhost:6379
+
     services:
       postgres:
         image: postgres:16
@@ -51,6 +59,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # @prisma/client's own postinstall hook cannot find schema.prisma automatically (it lives
+      # at apps/backend/prisma/schema.prisma, not a default root location — the same
+      # "could not find your Prisma schema in the default locations" warning showed up the very
+      # first time this repo's dependencies were installed, confirming this isn't automatic).
+      # Everything after this step — typecheck, test, build — imports generated types from
+      # @prisma/client and fails without this running first.
+      - name: Generate Prisma Client
+        run: pnpm run prisma:generate
+
       - name: Lint
         run: pnpm run lint
 
@@ -65,9 +82,6 @@ jobs:
 
       - name: Test
         run: pnpm run test
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hospitality_os_test
-          REDIS_URL: redis://localhost:6379
 
       - name: Build
         run: pnpm run build

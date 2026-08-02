@@ -1,0 +1,10 @@
+# Hand-authored prose documents with their own formatting conventions (the docs/*.md
+# "############ / # ENTITY / Name" delimiter blocks, specific emphasis style) — Prettier's
+# markdown formatter rewrites these in ways that change visual structure, not just whitespace.
+# Discovered when `prettier --write .` (run while chasing an unrelated CI formatting failure)
+# reformatted nearly every file in docs/ as a side effect. Code and config still get formatted
+# normally; only prose content is excluded here.
+docs/**/*.md
+CLAUDE.md
+README.md
+pnpm-lock.yaml
