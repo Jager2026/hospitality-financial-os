@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.0.0
+version: 2.1.0
 status: Active
 classification: Critical
 priority: Highest
@@ -135,6 +135,14 @@ If one review fails, the Pull Request is incomplete.
 
 ---
 
+# Review Depth Scales With Risk
+
+Not every change earns the same scrutiny before the Founder accepts it. Code that moves money, or that governs authentication and access, is reviewed line-by-line, by request, before it is accepted — full file contents, not a summary of what the code does. Everything else — infrastructure, logging, health checks, scaffolding, config — is accepted on the strength of the session's own report and its tests passing, unless something in that report itself raises a concern.
+
+This is not a lower bar for the rest of the codebase; it is where the Founder's limited review time goes first, deliberately, rather than spread evenly. It only works if session reports are honest about what was actually run and verified versus merely written and expected to work — see `IMPLEMENTATION_PLAN.md`'s Definition of Done rule on this exact point.
+
+---
+
 # Performance Rules
 
 Measure. Never assume. Benchmark. Never guess. Optimize only after identifying bottlenecks.
@@ -166,6 +174,8 @@ Never log: Passwords. Secrets. Tokens. Card Numbers. Personal financial informat
 If it is important, test it: Financial Logic. Authorization. Authentication. Payments. Wallet. Transactions. Analytics. Critical UX. Regression.
 
 Never merge critical financial code without tests. This is not aspirational — `IMPLEMENTATION_PLAN.md` now makes Tests an explicit, mandatory task on every sprint that touches money, not something deferred to a later sprint.
+
+A test only counts if it would fail against a plausible wrong implementation. If a naive or incorrect version of the code would still pass the test, the test proves nothing — it is decoration, not protection. Check this deliberately anywhere correct behavior depends on grouping, splitting, or aggregating by some key (currency, restaurant, membership, allocation strategy, time period): construct a case where the naive ungrouped version and the correct grouped version would disagree, not only a case where both happen to agree by coincidence. (A real example: an early test claiming to prove per-currency ledger balancing used numbers where a naive implementation that summed every currency together would have failed the test too, for the wrong reason — passing, but proving nothing about the grouping logic it claimed to protect.)
 
 ---
 
