@@ -39,6 +39,15 @@ ALTER TABLE journal_entry
 -- multi-line JournalEntry before its balancing line(s) exist in the same transaction. A deferred
 -- constraint trigger instead runs once at COMMIT, after every line in the transaction has been
 -- written.
+--
+-- LIMITATION: this only re-checks the journal_entry_id of the row that was actually touched
+-- (NEW on INSERT/UPDATE, OLD on DELETE). If a line were ever moved between JournalEntries via
+-- UPDATE ledger_line SET journal_entry_id = ... — which should never happen; LedgerLine is
+-- immutable by DATABASE.md's own rule — only the *new* owning entry gets re-validated in that
+-- statement. The entry that lost the line is not automatically re-checked unless something else
+-- in the same transaction also touches one of its other lines. Not a gap worth closing today
+-- (the immutability rule already forbids the scenario that would trigger it), but worth knowing
+-- this trigger is not an unconditional guarantee against every possible write pattern.
 
 CREATE OR REPLACE FUNCTION check_journal_entry_balanced() RETURNS trigger AS $$
 DECLARE

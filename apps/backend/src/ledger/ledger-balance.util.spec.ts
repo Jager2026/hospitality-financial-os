@@ -3,6 +3,7 @@ import {
   assertBalanced,
   assertCompensatingEntityMatchesType,
   LedgerCompensatingEntityMismatchError,
+  LedgerEmptyPostingError,
   LedgerUnbalancedError,
 } from "./ledger-balance.util";
 import type { LedgerLineInput, PostJournalEntryInput } from "./ledger.types";
@@ -29,7 +30,7 @@ describe("assertBalanced", () => {
     expect(() => assertBalanced(lines)).toThrow(LedgerUnbalancedError);
   });
 
-  it("balances each currency independently", () => {
+  it("rejects a posting where one currency is unbalanced, even if another in the same batch is fine", () => {
     const lines: LedgerLineInput[] = [
       { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 10000n, currency: "EUR" },
       { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 10000n, currency: "EUR" },
@@ -37,6 +38,26 @@ describe("assertBalanced", () => {
       { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 4999n, currency: "USD" },
     ];
     expect(() => assertBalanced(lines)).toThrow(LedgerUnbalancedError);
+  });
+
+  // The test above doesn't actually prove per-currency grouping works — a naive implementation
+  // that just sums every line together regardless of currency (debit 15000 vs credit 14999)
+  // would fail this exact test too, for the wrong reason. This one is the real proof: EUR alone
+  // is unbalanced (debit 10000 / credit 5000) and USD alone is unbalanced the opposite way
+  // (debit 5000 / credit 10000), but a naive flat sum across both currencies is 15000 = 15000 —
+  // falsely "balanced." Only a correct per-currency grouping catches this.
+  it("rejects when currencies are individually unbalanced but a flat sum across them would look balanced", () => {
+    const lines: LedgerLineInput[] = [
+      { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 10000n, currency: "EUR" },
+      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 5000n, currency: "EUR" },
+      { account: "PROCESSOR_CLEARING", direction: "DEBIT", amount: 5000n, currency: "USD" },
+      { account: "RESTAURANT_REVENUE_PAYABLE", direction: "CREDIT", amount: 10000n, currency: "USD" },
+    ];
+    expect(() => assertBalanced(lines)).toThrow(LedgerUnbalancedError);
+  });
+
+  it("rejects an empty posting", () => {
+    expect(() => assertBalanced([])).toThrow(LedgerEmptyPostingError);
   });
 });
 

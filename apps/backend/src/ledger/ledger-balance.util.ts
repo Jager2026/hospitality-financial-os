@@ -18,6 +18,13 @@ export class LedgerUnbalancedError extends Error {
   }
 }
 
+export class LedgerEmptyPostingError extends Error {
+  constructor() {
+    super("A JournalEntry must have at least one LedgerLine — an empty posting has no event to record.");
+    this.name = "LedgerEmptyPostingError";
+  }
+}
+
 export class LedgerCompensatingEntityMismatchError extends Error {
   constructor(message: string) {
     super(message);
@@ -31,11 +38,18 @@ export class LedgerCompensatingEntityMismatchError extends Error {
  * Ledger Module's transaction at all. The deferred Postgres trigger
  * (prisma/sql/ledger_integrity.sql) is Layer 2, defense in depth in case this is ever bypassed.
  *
+ * Rejects an empty posting outright — zero lines "balances" trivially (0=0) but represents no
+ * actual financial event, which is meaningless for a JournalEntry.
+ *
  * Lines are grouped by currency: DATABASE.md doesn't state that a single JournalEntry must be
  * single-currency, so each currency present must balance independently rather than assuming only
  * one currency ever appears.
  */
 export function assertBalanced(lines: LedgerLineInput[]): void {
+  if (lines.length === 0) {
+    throw new LedgerEmptyPostingError();
+  }
+
   const totals = new Map<string, { debit: bigint; credit: bigint }>();
 
   for (const line of lines) {
