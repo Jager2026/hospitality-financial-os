@@ -71,10 +71,12 @@ export class AuthService {
     }
 
     // Rotate: the old refresh token is revoked the moment a new pair is issued, so a leaked
-    // refresh token that gets used once is worthless afterward.
+    // refresh token that gets used once is worthless afterward. The new token carries the SAME
+    // familyId forward — this is what lets TokenService detect a later replay of this exact
+    // (now-superseded) token as reuse and revoke the whole family, not just reject one request.
     await this.revokeToken(refreshToken, payload.jti);
 
-    const tokens = await this.tokenService.issueTokenPair(user.id);
+    const tokens = await this.tokenService.issueTokenPair(user.id, payload.familyId);
     return this.toAuthResult(user, tokens);
   }
 
