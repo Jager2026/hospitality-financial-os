@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.0.0
+version: 2.1.0
 status: Active
 classification: Internal
 owner: Founder
@@ -61,7 +61,7 @@ Error:
 # AUTHENTICATION
 
 ## Register
-POST /auth/register — creates the first User + Owner Membership.
+POST /auth/register — creates a User only. No Membership is created at registration: `Membership.organization_id` is required, and an Organization doesn't exist until this person creates their first Restaurant (see RESTAURANTS, `POST /restaurants`; DATABASE.md's Organization entity). A freshly registered User has zero Memberships, which DATABASE.md explicitly allows ("mid-invitation" is the same valid state). Previously said "+ Owner Membership" here, contradicting this document's own ORGANIZATIONS and RESTAURANTS sections — fixed to match the two places that already agreed.
 
 ## Login
 POST /auth/login — returns Access Token, Refresh Token, User, Memberships.

@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.1.0
-status: Active — eighteen ADRs, all Accepted
+version: 1.2.0
+status: Active — nineteen ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -245,6 +245,17 @@ value, `DECLINED`. `DATABASE.md`'s `Payment` entity is updated to state this exp
 than left to silently diverge from the schema. Sprint 5's Stripe webhook handling
 (`payment_intent.succeeded`, `payment_intent.payment_failed`, etc. — `API_Contract.md`'s Incoming
 Webhooks section) writes this one transition; nothing else ever updates a `Payment` row.
+
+---
+
+## ADR-019 — Refresh Token Storage: Stateless JWT + Redis Revocation, No New Postgres Table
+**Status:** Accepted (flagged during implementation, per `CLAUDE_RULES.md`'s "Documentation First" — not decided silently)
+
+**Context:** Found while building Sprint 2 (Authentication). `DATABASE.md`'s Core Domain enumerates exactly twenty entities and never mentions a RefreshToken table — unlike entities deliberately excluded from MVP, which are always named explicitly under "Future Entities" (`Withdrawal`, `Settlement`, etc.). This reads as an oversight, not a deliberate exclusion: `API_Contract.md`'s `POST /auth/login` ("returns Access Token, Refresh Token...") and `IMPLEMENTATION_PLAN.md`'s Sprint 2 ("Refresh Token... JWT refresh works") both treat refresh tokens as real, in-scope functionality, not a Future Entity.
+
+**Decision:** Refresh tokens are stateless signed JWTs — a separate secret and a longer TTL than access tokens — not a persisted Postgres row. Revocation (needed for logout, and for rotate-on-every-refresh) is tracked in Redis, keyed by the token's `jti`, with a TTL matching the token's own remaining lifetime so revocation entries never need separate cleanup. Every `POST /auth/refresh` call revokes the presented refresh token and issues a new access+refresh pair, so a leaked refresh token is worthless the moment it's used once.
+
+**Consequences:** No schema migration was needed for Sprint 2. Revocation state lives only in Redis — consistent with `SYSTEM_ARCHITECTURE.md`'s Caching Strategy, which already treats Redis as appropriate for short-lived, non-financial state and explicitly wrong for anything that must survive as a source of truth (Wallet, Restaurant balance). Accepted risk: a Redis flush would silently un-revoke every outstanding refresh token (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage.
 
 ---
 
