@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.0.0
+version: 2.1.0
 status: Active
 classification: Internal
 owner: Founder
@@ -187,11 +187,13 @@ JournalEntry
 ############################################################
 **Purpose:** One balanced financial event — the header row of a double-entry posting (ADR-002).
 
-**Fields:** id, entry_type (`payment_captured` / `tip_allocated` / `refund_issued` / `chargeback` / `adjustment` / `payout`), transaction_id (nullable), description, created_at
+**Fields:** id, entry_type (`payment_captured` / `tip_allocated` / `refund_issued` / `chargeback` / `adjustment` / `payout`), transaction_id (nullable), refund_id (nullable), chargeback_id (nullable), adjustment_id (nullable), description, created_at
 
-**Relationships:** JournalEntry → zero-or-one Transaction · JournalEntry → many LedgerLine
+**Relationships:** JournalEntry → zero-or-one Transaction · JournalEntry → many LedgerLine · JournalEntry → zero-or-one Refund · JournalEntry → zero-or-one Chargeback · JournalEntry → zero-or-one Adjustment
 
 **Rules:** Never edited or deleted. For every JournalEntry: `SUM(LedgerLine.amount WHERE direction = debit) = SUM(LedgerLine.amount WHERE direction = credit)`. This single invariant is what Smart Reconciliation checks.
+
+**ADR-017:** `JournalEntry` — not `Refund`/`Chargeback`/`Adjustment` — owns the three nullable compensating-entry FKs, mirroring `transaction_id`. This is deliberate, not symmetric-for-its-own-sake: a `Chargeback` can produce more than one compensating `JournalEntry` over its lifetime (a provisional-loss entry immediately, then a reversal entry if the dispute is later won — ADR-016), which is a one-to-many relationship a unique FK *on* `Chargeback` could not express. `Refund` and `Adjustment` take the identical shape for consistency, even though today's flows only ever produce exactly one `JournalEntry` for either. At most one of `refund_id` / `chargeback_id` / `adjustment_id` is ever set on a given row, and whichever is set (or none, for `payment_captured` / `tip_allocated` / `payout`) must agree with `entry_type` — enforced by a database `CHECK` constraint, not just application code.
 
 ---
 
@@ -231,7 +233,7 @@ Refund
 
 **Fields:** id, transaction_id, processor_refund_id, amount, currency, reason, tip_refunded (boolean), requested_by (user_id, nullable), approved_by (user_id, nullable), status, created_at
 
-**Relationships:** Refund → Transaction · Refund → JournalEntry (the compensating entry)
+**Relationships:** Refund → Transaction · one-or-more JournalEntry reference this Refund back via `JournalEntry.refund_id` (ADR-017 — `JournalEntry` owns the FK, not this table; see JournalEntry's own entry for why).
 
 **Rules:** Always produces a new JournalEntry whose LedgerLines reverse the original `restaurant_revenue_payable` / `tip_payable` and post to `refund_contra`. Never edits the original JournalEntry. No self-service UI required for MVP — staff may act through Stripe's dashboard, but the resulting webhook must always write this row and its compensating entry automatically. A single Transaction may have more than one Refund — each partial refund is its own row, its own compensating JournalEntry, independent of any other Refund on the same Transaction.
 
@@ -245,7 +247,7 @@ Chargeback
 
 **Fields:** id, transaction_id, processor_dispute_id, reason, amount, currency, status, evidence_due_by, resolved_at, created_at
 
-**Relationships:** Chargeback → Transaction · Chargeback → JournalEntry (the compensating entry)
+**Relationships:** Chargeback → Transaction · one-or-more JournalEntry reference this Chargeback back via `JournalEntry.chargeback_id` (ADR-017) — genuinely one-to-many, not just symmetric with Refund/Adjustment: the provisional-loss entry and, if the dispute is later won, the reversal entry (ADR-016) are two separate JournalEntry rows against the same Chargeback.
 
 **Rules:** Same compensating-entry rule as Refund. Historical Chargeback data feeds fraud detection (see SYSTEM_ARCHITECTURE).
 
@@ -259,7 +261,7 @@ Adjustment
 
 **Fields:** id, restaurant_id (nullable), membership_id (nullable), amount, currency, reason, created_by (user_id), created_at
 
-**Relationships:** Adjustment → JournalEntry (the compensating entry)
+**Relationships:** Adjustment → Restaurant (nullable) · Adjustment → Membership (nullable) · one-or-more JournalEntry reference this Adjustment back via `JournalEntry.adjustment_id` (ADR-017).
 
 **Rules:** `reason` and `created_by` are both required. No anonymous balance corrections, ever.
 
