@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.2.0
+version: 2.3.0
 status: Active
 classification: Internal
 owner: Founder
@@ -309,7 +309,7 @@ Supplier · Invoice · Withdrawal · Settlement · Notification · Promotion · 
 
 Intentionally excluded from MVP. Architecture should support them; implementation should wait.
 
-**Not a gap:** RefreshToken has no table, deliberately (ADR-019) — refresh tokens are stateless signed JWTs, with revocation tracked in Redis by `jti`, not a Postgres row. This is not the same as the entities above: it isn't excluded from MVP, it's simply never persisted here by design.
+**Not a gap:** RefreshToken has no table, deliberately (ADR-019) — refresh tokens are stateless signed JWTs, with revocation tracked in Redis by `jti` (one token) and by `familyId` (every token descended from one login, revoked together the moment a replay of an already-rotated-out token is detected), not a Postgres row. This is not the same as the entities above: it isn't excluded from MVP, it's simply never persisted here by design.
 
 ---
 

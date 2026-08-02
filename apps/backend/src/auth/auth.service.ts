@@ -5,7 +5,12 @@ import { PrismaService } from "../prisma/prisma.service";
 import type { LoginDto } from "./dto/login.schema";
 import type { RegisterDto } from "./dto/register.schema";
 import { hashPassword, verifyPassword } from "./password.util";
-import { TokenService, type TokenPair } from "./token.service";
+import {
+  RefreshTokenReuseDetectedError,
+  TokenService,
+  type RefreshTokenPayload,
+  type TokenPair,
+} from "./token.service";
 
 export interface AuthResult {
   id: string; // mirrors user.id — lets AuditLogInterceptor (Sprint 1) attribute the event without special-casing auth
@@ -16,6 +21,14 @@ export interface AuthResult {
     email: string;
     locale: string;
   };
+}
+
+/** IP/user-agent for the security-event audit write in verifyRefreshTokenAndAudit — optional
+ * since not every caller (e.g. a future internal/service-to-service refresh) has an HTTP
+ * request to read them from. */
+export interface RequestContext {
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 @Injectable()
@@ -62,8 +75,8 @@ export class AuthService {
     return this.toAuthResult(user, tokens);
   }
 
-  async refresh(refreshToken: string): Promise<AuthResult> {
-    const payload = await this.tokenService.verifyRefreshToken(refreshToken);
+  async refresh(refreshToken: string, context: RequestContext = {}): Promise<AuthResult> {
+    const payload = await this.verifyRefreshTokenAndAudit(refreshToken, context);
 
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user || user.deletedAt || user.status !== "ACTIVE") {
@@ -80,10 +93,41 @@ export class AuthService {
     return this.toAuthResult(user, tokens);
   }
 
-  async logout(refreshToken: string): Promise<{ id: string }> {
-    const payload = await this.tokenService.verifyRefreshToken(refreshToken);
+  async logout(refreshToken: string, context: RequestContext = {}): Promise<{ id: string }> {
+    const payload = await this.verifyRefreshTokenAndAudit(refreshToken, context);
     await this.revokeToken(refreshToken, payload.jti);
     return { id: payload.sub };
+  }
+
+  /** Wraps TokenService.verifyRefreshToken to catch the reuse-detection signal specifically and
+   * write it to AuditLog as its own action, `refresh_token_reuse_detected` — CLAUDE_RULES.md,
+   * Logging Philosophy: "Always log: ... Security Events." Bypasses AuditLogInterceptor
+   * (Sprint 1) on purpose: that interceptor only fires on a *successful* mutation response, and
+   * this is, definitionally, a request that's about to fail with 401 — there is no success path
+   * for it to hook into. Re-throws the same error afterward so client-facing behavior (401,
+   * AUTH_INVALID) is unchanged either way. */
+  private async verifyRefreshTokenAndAudit(
+    refreshToken: string,
+    context: RequestContext,
+  ): Promise<RefreshTokenPayload> {
+    try {
+      return await this.tokenService.verifyRefreshToken(refreshToken);
+    } catch (err) {
+      if (err instanceof RefreshTokenReuseDetectedError) {
+        await this.prisma.auditLog.create({
+          data: {
+            userId: err.userId,
+            entity: "Authentication",
+            entityId: err.userId,
+            action: "refresh_token_reuse_detected",
+            metadata: { familyId: err.familyId },
+            ipAddress: context.ipAddress ?? null,
+            userAgent: context.userAgent ?? null,
+          },
+        });
+      }
+      throw err;
+    }
   }
 
   private async revokeToken(token: string, jti: string): Promise<void> {

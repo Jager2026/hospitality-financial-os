@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.1.0
+version: 2.2.0
 status: Active
 classification: Critical
 priority: Highest
@@ -56,6 +56,8 @@ Deployment
 Every "Definition of Done" line below is a claim that the listed things actually happened, verified by actually running the relevant commands in a real environment against a real database/services — not that the code was written and looks like it should work. "Backend starts" means a session watched it start. "A test posting that doesn't balance is rejected" means the test was actually run and actually failed the bad case. Code review and code execution are different kinds of evidence; a Definition of Done line requires the second kind, not just the first.
 
 If the session's environment cannot run something required for a Definition of Done line — no database, no Node, no network — say so explicitly in the report, rather than reporting the item as done or leaving it ambiguous. An honest "written but not run, here's exactly what's unverified" is a complete report. A Definition of Done line marked satisfied on the strength of the code merely looking correct is not, regardless of how confident the write-up sounds.
+
+A pushed commit ("запушено", a commit hash) is not the same claim as a green CI run, and reporting the first must never stand in for the second. This is not hypothetical: CI failed on every run from the very first commit through Sprint 2, and it went unnoticed for that entire stretch because every session report confirmed the push had happened without separately checking whether GitHub's own CI run for that push actually passed. Any report claiming something is done must state the current CI status on GitHub for that commit, not just the fact that it was pushed.
 
 ---
 
