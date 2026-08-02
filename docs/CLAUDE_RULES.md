@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.1.0
+version: 2.2.0
 status: Active
 classification: Critical
 priority: Highest
@@ -184,6 +184,12 @@ A test only counts if it would fail against a plausible wrong implementation. If
 Leave the codebase better than you found it. Reduce duplication. Improve naming. Simplify architecture. Increase readability.
 
 Never refactor for ego. Refactor because future engineers deserve better.
+
+---
+
+# Workspace Hygiene
+
+Every file in the repository should have an obvious reason to exist — a real name, in a real location, doing a real job. Never leave a stray, unnamed, or unexplained file behind — a debug scratch file, a leftover from testing a command, an accidental redirect. Before ending a session, check for anything you created that isn't part of the actual deliverable, and remove it or explain it. A repository root a new engineer can't parse at a glance is itself a form of technical debt.
 
 ---
 
