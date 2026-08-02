@@ -14,6 +14,7 @@ export interface AccessTokenPayload {
 export interface RefreshTokenPayload {
   sub: string;
   jti: string;
+  familyId: string;
   type: "refresh";
 }
 
@@ -22,7 +23,8 @@ export interface TokenPair {
   refreshToken: string;
 }
 
-const REVOKED_KEY_PREFIX = "auth:revoked-jti:";
+const REVOKED_JTI_PREFIX = "auth:revoked-jti:";
+const REVOKED_FAMILY_PREFIX = "auth:revoked-family:";
 
 /**
  * ADR/DATABASE.md gap, flagged not hidden: DATABASE.md's Core Domain has no RefreshToken entity
@@ -39,6 +41,17 @@ const REVOKED_KEY_PREFIX = "auth:revoked-jti:";
  * state it's meant for, unlike Wallet/Restaurant balance which must never live only in Redis
  * (SYSTEM_ARCHITECTURE.md, Caching Strategy). Flagging this design choice explicitly for the
  * Founder to confirm or override, same as the enum/status assumptions in Sprint 0-1.
+ *
+ * REUSE DETECTION: every refresh token carries a `familyId` — generated once at login/register,
+ * and carried forward unchanged across every rotation descended from that login. Presenting a
+ * refresh token whose *individual* jti is already revoked (i.e., it was already rotated away
+ * once) is not just "an expired credential" — replaying an already-superseded token is the
+ * textbook signature of a stolen token racing the legitimate client. The correct response is not
+ * "reject this one request," it's "assume the whole family may be compromised": the entire
+ * family is revoked, which invalidates the *current, still-valid* token too, forcing the
+ * legitimate user to re-authenticate. A weaker implementation that only rejects the replayed
+ * token leaves the legitimate session (and, if it really was theft, the attacker's stolen current
+ * token) both still valid — this is exactly that gap, closed.
  */
 @Injectable()
 export class TokenService {
@@ -58,13 +71,15 @@ export class TokenService {
     this.refreshTtlSeconds = config.get<number>("JWT_REFRESH_TTL_SECONDS", 604_800);
   }
 
-  async issueTokenPair(userId: string): Promise<TokenPair> {
+  /** `familyId`: omit on a fresh login/register (starts a new family); pass the family of the
+   * token being rotated on `/auth/refresh` (extends the same family — see class doc). */
+  async issueTokenPair(userId: string, familyId: string = randomUUID()): Promise<TokenPair> {
     const accessToken = await this.jwt.signAsync(
       { sub: userId, jti: randomUUID(), type: "access" } satisfies AccessTokenPayload,
       { secret: this.accessSecret, expiresIn: this.accessTtlSeconds },
     );
     const refreshToken = await this.jwt.signAsync(
-      { sub: userId, jti: randomUUID(), type: "refresh" } satisfies RefreshTokenPayload,
+      { sub: userId, jti: randomUUID(), familyId, type: "refresh" } satisfies RefreshTokenPayload,
       { secret: this.refreshSecret, expiresIn: this.refreshTtlSeconds },
     );
     return { accessToken, refreshToken };
@@ -75,7 +90,7 @@ export class TokenService {
     if (payload.type !== "access") {
       throw new AppException("AUTH_INVALID", "Not an access token.", 401);
     }
-    if (await this.isRevoked(payload.jti)) {
+    if (await this.isJtiRevoked(payload.jti)) {
       throw new AppException("AUTH_INVALID", "Token has been revoked.", 401);
     }
     return payload;
@@ -86,23 +101,46 @@ export class TokenService {
     if (payload.type !== "refresh") {
       throw new AppException("AUTH_INVALID", "Not a refresh token.", 401);
     }
-    if (await this.isRevoked(payload.jti)) {
+
+    if (await this.isFamilyRevoked(payload.familyId)) {
       throw new AppException("AUTH_INVALID", "Refresh token has been revoked.", 401);
     }
+
+    if (await this.isJtiRevoked(payload.jti)) {
+      // This exact token was already rotated away once — a replay, not a fresh use. Revoke the
+      // whole family so the token this replay is racing against also stops working.
+      await this.revokeFamily(payload.familyId, this.refreshTtlSeconds);
+      throw new AppException("AUTH_INVALID", "Refresh token has been revoked.", 401);
+    }
+
     return payload;
   }
 
-  /** Revokes one token's jti immediately — used for logout and for rotating out the old refresh
-   * token on every /auth/refresh call. `expSeconds` is the token's own remaining lifetime, so the
-   * Redis key expires at the same moment the JWT itself would have expired naturally — never
-   * revoked-forever bookkeeping for a token that's already unusable anyway. */
+  /** Revokes one token's jti — used for the routine "rotate the old token out" step on every
+   * successful `/auth/refresh`, and for `/auth/logout`. `expSeconds` is the token's own remaining
+   * lifetime, so the Redis key expires at the same moment the JWT itself would have expired
+   * naturally — never revoked-forever bookkeeping for a token that's already unusable anyway. */
   async revoke(jti: string, expSeconds: number): Promise<void> {
     if (expSeconds <= 0) return;
-    await this.redis.getClient().set(`${REVOKED_KEY_PREFIX}${jti}`, "1", "EX", expSeconds);
+    await this.redis.getClient().set(`${REVOKED_JTI_PREFIX}${jti}`, "1", "EX", expSeconds);
   }
 
-  private async isRevoked(jti: string): Promise<boolean> {
-    const value = await this.redis.getClient().get(`${REVOKED_KEY_PREFIX}${jti}`);
+  /** Revokes every token descended from one login, present or future — the reuse-detection
+   * response. `expSeconds` should be at least the full refresh TTL: a family flag that expired
+   * before the newest token in the family does would let that token work again once the flag
+   * lapsed, defeating the point. */
+  async revokeFamily(familyId: string, expSeconds: number): Promise<void> {
+    if (expSeconds <= 0) return;
+    await this.redis.getClient().set(`${REVOKED_FAMILY_PREFIX}${familyId}`, "1", "EX", expSeconds);
+  }
+
+  private async isJtiRevoked(jti: string): Promise<boolean> {
+    const value = await this.redis.getClient().get(`${REVOKED_JTI_PREFIX}${jti}`);
+    return value !== null;
+  }
+
+  private async isFamilyRevoked(familyId: string): Promise<boolean> {
+    const value = await this.redis.getClient().get(`${REVOKED_FAMILY_PREFIX}${familyId}`);
     return value !== null;
   }
 
