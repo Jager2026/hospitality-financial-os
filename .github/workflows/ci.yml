@@ -77,6 +77,13 @@ jobs:
       - name: Validate Prisma schema
         run: pnpm run prisma:validate
 
+      # The Postgres service container above starts empty every run — nothing had applied the
+      # migrations to it before now, because nothing in the test suite touched a real table.
+      # ledger-trigger.integration.spec.ts changes that: it exercises the deferred trigger in
+      # apps/backend/prisma/sql/ledger_integrity.sql directly, which only exists once these run.
+      - name: Apply database migrations
+        run: pnpm run prisma:migrate:deploy
+
       - name: Typecheck
         run: pnpm run typecheck
 
