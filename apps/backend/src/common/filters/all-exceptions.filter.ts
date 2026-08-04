@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Response } from "express";
 import { PinoLogger } from "nestjs-pino";
 import { AppException, ErrorCode } from "../exceptions/app.exception";
+import { AUDIT_ENTITY_RESOLVED_FLAG } from "../http/audit-entity-resolved.flag";
 import { AUDIT_LOG_WRITTEN_FLAG } from "../http/audit-log-written.flag";
 import type { AuthedRequest } from "../http/authed-request";
 import { MUTATING_METHODS } from "../http/mutating-methods";
@@ -76,10 +77,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (!MUTATING_METHODS.has(request.method)) return;
     if ((request as unknown as Record<string, unknown>)[AUDIT_LOG_WRITTEN_FLAG]) return;
 
+    // AuditEntityResolverGuard (registered first, before ThrottlerGuard/JwtAuthGuard) stashes the
+    // route's @AuditEntity value here while an ExecutionContext was still available — this filter
+    // only ever gets ArgumentsHost, which can't resolve it directly. Falls back to the raw route
+    // path only for a route with no @AuditEntity decorator at all.
+    const resolvedEntity = (request as unknown as Record<string, unknown>)[
+      AUDIT_ENTITY_RESOLVED_FLAG
+    ] as string | undefined;
+
     await this.prisma.auditLog.create({
       data: {
         userId: request.user?.id ?? null,
-        entity: request.route?.path ?? request.path,
+        entity: resolvedEntity ?? request.route?.path ?? request.path,
         entityId: request.user?.id ?? randomUUID(),
         action: `${request.method.toLowerCase()}_failed`,
         metadata: { statusCode, code },
