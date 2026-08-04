@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.3.0
+version: 2.4.0
 status: Active
 classification: Internal
 owner: Founder
@@ -63,11 +63,13 @@ Restaurant
 ############################################################
 **Purpose:** One hospitality business location — the legal and tax entity.
 
-**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, charges_enabled, payouts_enabled, requirements_due, created_at, updated_at
+**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, created_at, updated_at
 
 **Relationships:** Restaurant → Organization (parent) · Restaurant → many Membership · Restaurant → many Payment / Transaction
 
-**Rules:** Restaurant carries `vat_number` and `company_number` because it is the tax entity, and for MVP owns its own Stripe Connect account (ADR-009) — connected accounts are attached per location, not per Organization. `country` / `currency` mirror the connected account's fixed values; changing a restaurant's operating country means a new Stripe account, never an edit to this row. `default_customer_locale` is what the payment terminal shows before a customer touches anything — the customer has no account to store a preference in, so this is the only place it can live (ADR-013). Restaurant is never physically deleted. `currency` references `Currency.code`.
+**Rules:** Restaurant carries `vat_number` and `company_number` because it is the tax entity, and for MVP owns its own Stripe Connect account (ADR-009, ADR-014 — Accounts v2, `dashboard: "full"`) — connected accounts are attached per location, not per Organization. `country` / `currency` mirror the connected account's fixed values; changing a restaurant's operating country means a new Stripe account, never an edit to this row. `default_customer_locale` is what the payment terminal shows before a customer touches anything — the customer has no account to store a preference in, so this is the only place it can live (ADR-013). Restaurant is never physically deleted. `currency` references `Currency.code`.
+
+`card_payments_status` and `payouts_status` mirror Stripe's own v2 capability-status strings (`configuration.merchant.capabilities.card_payments.status` and `configuration.merchant.capabilities.stripe_balance.payouts.status` respectively — confirmed against a real API response, ADR-009's revision) — not booleans, and deliberately not a Postgres enum either, since this vocabulary belongs to Stripe and can grow without a migration on our side. `requirements_due` stores Stripe's real `requirements.entries[]` array as-is (JSON) — a list of requirement objects, not requirement-name strings.
 
 ---
 

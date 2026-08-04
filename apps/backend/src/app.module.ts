@@ -11,6 +11,10 @@ import { LedgerModule } from "./ledger/ledger.module";
 import { OutboxModule } from "./outbox/outbox.module";
 import { AuthModule } from "./auth/auth.module";
 import { ProfileModule } from "./profile/profile.module";
+import { OrganizationModule } from "./organization/organization.module";
+import { RestaurantModule } from "./restaurant/restaurant.module";
+import { CurrencyModule } from "./currency/currency.module";
+import { StripeModule } from "./stripe/stripe.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { AuditEntityResolverGuard } from "./common/guards/audit-entity-resolver.guard";
 import { ResponseInterceptor } from "./common/interceptors/response.interceptor";
@@ -42,6 +46,10 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     OutboxModule,
     AuthModule,
     ProfileModule,
+    StripeModule,
+    OrganizationModule,
+    RestaurantModule,
+    CurrencyModule,
   ],
   providers: [
     // Must run before ThrottlerGuard (registration order = execution order among global guards)

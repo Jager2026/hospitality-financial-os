@@ -1,0 +1,204 @@
+import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Prisma, type Restaurant } from "@prisma/client";
+import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import { AppException } from "../common/exceptions/app.exception";
+import { PrismaService } from "../prisma/prisma.service";
+import { StripeService } from "../stripe/stripe.service";
+import type { CreateRestaurantDto } from "./dto/create-restaurant.schema";
+import type { UpdateRestaurantDto } from "./dto/update-restaurant.schema";
+import { deriveOnboardingStatus } from "./onboarding-status.util";
+
+@Injectable()
+export class RestaurantService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stripe: StripeService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /**
+   * POST /restaurants (bootstrap) when organizationId is null: creates a new Organization and
+   * an org-wide Owner Membership for the caller in the same transaction (DATABASE.md,
+   * Organization's Rules — "the creating User receives an org-wide Membership... immediately").
+   * POST /organizations/:id/restaurants when organizationId is given: the caller's permission for
+   * that Organization is checked by the controller/service caller before this runs.
+   */
+  async create(
+    dto: CreateRestaurantDto,
+    userId: string,
+    organizationId: string | null,
+  ): Promise<Restaurant> {
+    const currency = await this.prisma.currency.findUnique({ where: { code: dto.currency } });
+    if (!currency) {
+      throw new AppException("VALIDATION_ERROR", `Unsupported currency: ${dto.currency}`, 400);
+    }
+
+    const stripeAccountId = await this.stripe.createConnectAccount({
+      contactEmail: dto.email,
+      displayName: dto.name,
+      country: dto.country,
+    });
+
+    return this.prisma.$transaction(async (tx) => {
+      let orgId = organizationId;
+      if (!orgId) {
+        const organization = await tx.organization.create({ data: { name: dto.name } });
+        orgId = organization.id;
+
+        const ownerRole = await tx.role.findUniqueOrThrow({ where: { name: "Owner" } });
+        await tx.membership.create({
+          data: {
+            userId,
+            organizationId: orgId,
+            restaurantId: null, // org-wide (DATABASE.md, Membership Rules)
+            roleId: ownerRole.id,
+            status: "ACTIVE",
+          },
+        });
+      }
+
+      return tx.restaurant.create({
+        data: {
+          organizationId: orgId,
+          name: dto.name,
+          legalName: dto.legalName,
+          companyNumber: dto.companyNumber,
+          vatNumber: dto.vatNumber,
+          email: dto.email,
+          phone: dto.phone,
+          country: dto.country,
+          currency: dto.currency,
+          defaultCustomerLocale: dto.defaultCustomerLocale,
+          timezone: dto.timezone,
+          address: dto.address,
+          logoUrl: dto.logoUrl,
+          stripeAccountId,
+          onboardingStatus: "NOT_STARTED",
+        },
+      });
+    });
+  }
+
+  async findAllForUser(user: AuthenticatedUser): Promise<Restaurant[]> {
+    const orgIds = [...new Set(user.memberships.map((m) => m.organizationId))];
+    const restaurantIds = user.memberships
+      .filter((m) => m.restaurantId !== null)
+      .map((m) => m.restaurantId as string);
+
+    return this.prisma.restaurant.findMany({
+      where: {
+        deletedAt: null,
+        OR: [{ organizationId: { in: orgIds } }, { id: { in: restaurantIds } }],
+      },
+    });
+  }
+
+  async findOne(id: string, user: AuthenticatedUser): Promise<Restaurant> {
+    const restaurant = await this.getReachableRestaurantOrThrow(id, user);
+    return this.refreshStripeStatus(restaurant);
+  }
+
+  async update(id: string, dto: UpdateRestaurantDto, user: AuthenticatedUser): Promise<Restaurant> {
+    const restaurant = await this.getReachableRestaurantOrThrow(id, user);
+    this.assertPermission(user, restaurant, "restaurant.edit");
+
+    return this.prisma.restaurant.update({
+      where: { id: restaurant.id },
+      data: dto,
+    });
+  }
+
+  async remove(id: string, user: AuthenticatedUser): Promise<void> {
+    const restaurant = await this.getReachableRestaurantOrThrow(id, user);
+    this.assertPermission(user, restaurant, "restaurant.delete");
+
+    await this.prisma.restaurant.update({
+      where: { id: restaurant.id },
+      data: { deletedAt: new Date(), status: "INACTIVE" },
+    });
+  }
+
+  async createOnboardingLink(id: string, user: AuthenticatedUser): Promise<string> {
+    const restaurant = await this.getReachableRestaurantOrThrow(id, user);
+    if (!restaurant.stripeAccountId) {
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant has no Stripe account.", 404);
+    }
+    const frontendUrl = this.config.getOrThrow<string>("FRONTEND_URL");
+    return this.stripe.createOnboardingLink(
+      restaurant.stripeAccountId,
+      `${frontendUrl}/restaurants/${restaurant.id}/onboarding/refresh`,
+      `${frontendUrl}/restaurants/${restaurant.id}/onboarding/complete`,
+    );
+  }
+
+  private async refreshStripeStatus(restaurant: Restaurant): Promise<Restaurant> {
+    if (!restaurant.stripeAccountId) return restaurant;
+
+    const live = await this.stripe.getAccountStatus(restaurant.stripeAccountId);
+    const requirementsCount = Array.isArray(live.requirementsDue) ? live.requirementsDue.length : 0;
+    const onboardingStatus = deriveOnboardingStatus(
+      live.cardPaymentsStatus,
+      live.payoutsStatus,
+      requirementsCount,
+    );
+
+    return this.prisma.restaurant.update({
+      where: { id: restaurant.id },
+      data: {
+        cardPaymentsStatus: live.cardPaymentsStatus,
+        payoutsStatus: live.payoutsStatus,
+        requirementsDue: live.requirementsDue === null ? Prisma.JsonNull : live.requirementsDue,
+        onboardingStatus,
+      },
+    });
+  }
+
+  private async getReachableRestaurantOrThrow(
+    id: string,
+    user: AuthenticatedUser,
+  ): Promise<Restaurant> {
+    const restaurant = await this.prisma.restaurant.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!restaurant) {
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+    }
+    const reachable = user.memberships.some(
+      (m) =>
+        m.restaurantId === restaurant.id ||
+        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
+    );
+    if (!reachable) {
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+    }
+    return restaurant;
+  }
+
+  /** Fine-grained, per-resource permission check — PermissionsGuard only checks "does the user
+   * hold this permission on ANY Membership," a fast global reject. This is the second layer:
+   * does one of the SPECIFIC Memberships that actually reaches this Restaurant (restaurant-scoped
+   * to it, or org-wide within its Organization) carry the permission. Same defense-in-depth shape
+   * as the Ledger's write-helper + DB trigger (ADR-002/Sprint 1) — deliberately not folded into
+   * PermissionsGuard itself, which has no restaurant/organization param-scoping convention yet and
+   * would need one per resource type to do this generically. */
+  private assertPermission(
+    user: AuthenticatedUser,
+    restaurant: Restaurant,
+    permission: string,
+  ): void {
+    const hasPermission = user.memberships.some(
+      (m) =>
+        (m.restaurantId === restaurant.id ||
+          (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
+        m.role.permissions.includes(permission),
+    );
+    if (!hasPermission) {
+      throw new AppException(
+        "PERMISSION_DENIED",
+        `Missing required permission: ${permission}`,
+        403,
+      );
+    }
+  }
+}

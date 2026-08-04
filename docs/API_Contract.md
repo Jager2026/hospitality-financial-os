@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.1.0
+version: 2.2.0
 status: Active
 classification: Internal
 owner: Founder
@@ -104,13 +104,16 @@ POST /organizations/{id}/restaurants — explicit path for adding a location to 
 GET /restaurants — scoped to every Restaurant the current user's Memberships grant access to. Supports `?organization_id=` to filter to one chain.
 
 ## Restaurant Details
-GET /restaurants/{id} — includes `onboarding_status`, `charges_enabled`, `payouts_enabled`, `requirements_due` so the frontend can surface outstanding Stripe requirements (ADR-009).
+GET /restaurants/{id} — includes `onboarding_status`, `card_payments_status`, `payouts_status`, `requirements_due` so the frontend can surface outstanding Stripe requirements (ADR-009, ADR-014 — Accounts v2 capability-status strings, not v1 booleans).
 
 ## Update Restaurant
 PATCH /restaurants/{id}
 
 ## Delete Restaurant
 DELETE /restaurants/{id} — soft delete only.
+
+## Restaurant Onboarding Link
+POST /restaurants/{id}/onboarding-link — generates a fresh Stripe Account Link (ADR-014) for the restaurant's Connect account and returns `{ url }` for the frontend to redirect the owner to. Short-lived (Stripe expires these links quickly); callers must not cache the URL.
 
 ---
 
