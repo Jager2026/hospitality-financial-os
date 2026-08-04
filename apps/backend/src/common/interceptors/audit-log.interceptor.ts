@@ -1,21 +1,32 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from "@nestjs/common";
+import {
+  CallHandler,
+  ExecutionContext,
+  HttpException,
+  Injectable,
+  NestInterceptor,
+} from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import type { Request } from "express";
+import { randomUUID } from "node:crypto";
 import { PinoLogger } from "nestjs-pino";
-import { Observable, tap } from "rxjs";
+import { Observable, catchError, tap, throwError } from "rxjs";
 import { AUDIT_ENTITY_KEY } from "../decorators/audit-entity.decorator";
+import { AppException } from "../exceptions/app.exception";
+import { AUDIT_LOG_WRITTEN_FLAG } from "../http/audit-log-written.flag";
+import type { AuthedRequest } from "../http/authed-request";
+import { MUTATING_METHODS } from "../http/mutating-methods";
 import { PrismaService } from "../../prisma/prisma.service";
 
-const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-
-interface AuthedRequest extends Request {
-  user?: { id: string };
-}
-
 // ADR-010 / SYSTEM_ARCHITECTURE.md: "a shared interceptor applied to all mutating endpoints —
-// not a utility each feature must remember to call." Applied globally in main.ts. No business
-// module writes to AuditLog directly yet (none exist before Sprint 3) — this is the mechanism,
-// wired up automatically the moment a real mutating controller exists.
+// not a utility each feature must remember to call." Applied globally in main.ts.
+//
+// Covers both channels: `tap` for a successful mutation, `catchError` for one that fails after
+// reaching this far — thrown from a Pipe or from inside the handler/service itself. A failure
+// thrown by a Guard (JwtAuthGuard, PermissionsGuard, ThrottlerGuard) never reaches either
+// operator: NestJS runs Guards before Interceptors, so a Guard rejection short-circuits before
+// `intercept()` is ever called (confirmed against this codebase's own PermissionsGuard comment
+// on the same ordering fact). AllExceptionsFilter is the fallback for exactly that case, and
+// checks AUDIT_LOG_WRITTEN_FLAG below to avoid double-logging a failure this interceptor already
+// recorded.
 @Injectable()
 export class AuditLogInterceptor implements NestInterceptor {
   constructor(
@@ -42,12 +53,20 @@ export class AuditLogInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((data) => {
-        void this.write(request, entity, data);
+        void this.writeSuccess(request, entity, data);
+      }),
+      catchError((err: unknown) => {
+        // Set synchronously, before the (async, unawaited) write below, so it's visible to
+        // AllExceptionsFilter — which runs right after this callback returns — regardless of
+        // whether the write itself has finished yet.
+        (request as unknown as Record<string, unknown>)[AUDIT_LOG_WRITTEN_FLAG] = true;
+        void this.writeFailure(request, entity, err);
+        return throwError(() => err);
       }),
     );
   }
 
-  private async write(request: AuthedRequest, entity: string, data: unknown): Promise<void> {
+  private async writeSuccess(request: AuthedRequest, entity: string, data: unknown): Promise<void> {
     const entityId = this.extractId(data);
     if (!entityId) {
       // No id on the response — nothing to attach this event to yet. Visible in logs during
@@ -67,6 +86,33 @@ export class AuditLogInterceptor implements NestInterceptor {
         userAgent: request.headers["user-agent"] ?? null,
       },
     });
+  }
+
+  /** No response body to pull an id from on a failure, so there's no real target record — the
+   * entityId is the id of this failure event itself (the acting user's id when known, e.g. a
+   * permission check failing after auth succeeded; otherwise a fresh id, e.g. a failed login
+   * where no session exists yet). Never includes the request body: CLAUDE_RULES.md, Logging
+   * Philosophy — passwords must never be logged, and a generic failure handler that doesn't know
+   * per-route DTO shapes has no safe way to redact one field from an arbitrary body anyway. */
+  private async writeFailure(request: AuthedRequest, entity: string, err: unknown): Promise<void> {
+    const { code, statusCode } = this.describeError(err);
+    await this.prisma.auditLog.create({
+      data: {
+        userId: request.user?.id ?? null,
+        entity,
+        entityId: request.user?.id ?? randomUUID(),
+        action: `${request.method.toLowerCase()}_failed`,
+        metadata: { statusCode, code },
+        ipAddress: request.ip,
+        userAgent: request.headers["user-agent"] ?? null,
+      },
+    });
+  }
+
+  private describeError(err: unknown): { code: string | null; statusCode: number | null } {
+    const statusCode = err instanceof HttpException ? err.getStatus() : null;
+    const code = err instanceof AppException ? err.code : null;
+    return { code, statusCode };
   }
 
   private extractId(data: unknown): string | null {
