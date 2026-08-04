@@ -1,8 +1,7 @@
 import { z } from "zod";
 
-// Sprint 2 adds JWT secrets — the first code that actually reads them (Stripe keys are still
-// unused until Sprint 3/5, so still not validated here; CLAUDE.md: "Nothing should be built just
-// in case").
+// Sprint 2 adds JWT secrets. Sprint 3 adds Stripe secrets — the first code that actually reads
+// them (CLAUDE.md: "Nothing should be built just in case").
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3001),
@@ -12,6 +11,13 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32, "JWT_REFRESH_SECRET must be at least 32 characters"),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900), // 15 min
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(604_800), // 7 days
+  STRIPE_SECRET_KEY: z.string().min(1, "STRIPE_SECRET_KEY is required"),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1, "STRIPE_WEBHOOK_SECRET is required"),
+  // Where Stripe redirects the browser after onboarding (Account Links refresh_url/return_url) —
+  // the Restaurant Portal, not this API. No frontend route exists at this path yet (Sprint 3 here
+  // is backend-only); the redirect target is real, the page behind it isn't, same kind of gap as
+  // any other "API ready, UI not built yet" state.
+  FRONTEND_URL: z.string().url().default("http://localhost:3000"),
 });
 
 export type Env = z.infer<typeof envSchema>;

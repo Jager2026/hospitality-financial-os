@@ -17,6 +17,11 @@ jobs:
       # DATABASE_URL fails with "Environment variable not found: DATABASE_URL", not a soft skip).
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hospitality_os_test
       REDIS_URL: redis://localhost:6379
+      # Sprint 3: env.validation.ts requires these to be non-empty strings so the app can start —
+      # nothing in the test suite makes a real Stripe network call (StripeService is faked in
+      # every test that touches it), so these never need to be working credentials, only present.
+      STRIPE_SECRET_KEY: sk_test_ci_placeholder_not_a_real_key
+      STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_real_secret
 
     services:
       postgres:

@@ -194,11 +194,20 @@ model Restaurant {
   logoUrl                String?   @map("logo_url")
   status                 EntityStatus @default(ACTIVE)
 
-  // Stripe Connect (ADR-009, ADR-014 — Express)
+  // Stripe Connect (ADR-009, ADR-014 — Accounts v2, dashboard: "full" — revised in place from the
+  // original v1/Express design; see both ADRs' "Revision" sections for the empirical evidence)
   stripeAccountId        String?          @unique @map("stripe_account_id")
   onboardingStatus       OnboardingStatus @default(NOT_STARTED) @map("onboarding_status")
-  chargesEnabled         Boolean          @default(false) @map("charges_enabled")
-  payoutsEnabled         Boolean          @default(false) @map("payouts_enabled")
+  // Mirror Stripe's own v2 capability-status strings directly (e.g. "active" / "pending" /
+  // "restricted" / "disabled") rather than collapsing to a boolean — confirmed via a real
+  // GET /v2/core/accounts/{id} response, not assumed. Deliberately String, not a Prisma enum:
+  // this vocabulary belongs to Stripe and can grow without a migration on our side.
+  cardPaymentsStatus     String?          @map("card_payments_status")
+  // configuration.merchant.capabilities.stripe_balance.payouts.status — nested under
+  // stripe_balance in v2, not a flat "payouts" capability the way v1's payouts_enabled implied.
+  payoutsStatus          String?          @map("payouts_status")
+  // Stripe's real requirements.entries[] shape (array of requirement objects — description,
+  // impact, minimum_deadline, requested_reasons), stored as-is. Not a flat array of strings.
   requirementsDue        Json?            @map("requirements_due")
 
   createdAt DateTime  @default(now()) @map("created_at")
