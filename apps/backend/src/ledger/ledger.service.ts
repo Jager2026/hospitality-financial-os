@@ -53,6 +53,16 @@ export class LedgerService {
         },
       });
 
+      // Forces the deferred ledger_line_balanced trigger (apps/backend/prisma/sql/
+      // ledger_integrity.sql) to run now, as a query inside this callback, rather than letting
+      // Postgres run it naturally at COMMIT after the callback returns. Confirmed directly
+      // (ledger-trigger.integration.spec.ts) that the difference is not cosmetic: when the
+      // trigger fails at COMMIT instead, Prisma's $transaction() resolves normally even though
+      // the server rolled everything back — the row is correctly never persisted, but the caller
+      // never learns the write failed, which is worse than an error: code downstream would treat
+      // a silently-discarded JournalEntry as successfully posted.
+      await tx.$executeRawUnsafe("SET CONSTRAINTS ledger_line_balanced IMMEDIATE");
+
       return entry;
     });
   }
