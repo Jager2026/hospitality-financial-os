@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.3.0
+version: 1.4.0
 status: Active — nineteen ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -116,13 +116,15 @@ Wallet balance, Restaurant balance, and Analytics figures are **projections** co
 ---
 
 ## ADR-009 — Stripe Connect Account Fields
-**Status:** Accepted
+**Status:** Accepted (revised in place — see "Revision" below; same principle as ADR-017/ADR-019: a correction to an already-accepted decision on new evidence, not a new decision)
 
 **Context:** No money can move until each restaurant's connected account and onboarding state are tracked. Stripe's connected-account country and default currency are fixed at creation and cannot be changed afterward.
 
-**Decision:** `Restaurant` stores `stripe_account_id`, `onboarding_status`, `charges_enabled`, `payouts_enabled`, and `requirements_due`, mirroring Stripe's own Account object. For MVP, the connected account is attached at the Restaurant level — each location has its own payout account — rather than at Organization level, since Restaurant already represents one legal and tax entity (it carries `legal_name`, `vat_number`, `company_number`). Centralized org-level payouts for chains are a distinct, later feature, not a redesign of this decision.
+**Decision (original, Sprint 0):** `Restaurant` stores `stripe_account_id`, `onboarding_status`, `charges_enabled`, `payouts_enabled`, and `requirements_due`, mirroring Stripe's own Account object. For MVP, the connected account is attached at the Restaurant level — each location has its own payout account — rather than at Organization level, since Restaurant already represents one legal and tax entity (it carries `legal_name`, `vat_number`, `company_number`). Centralized org-level payouts for chains are a distinct, later feature, not a redesign of this decision.
 
-**Consequences:** The onboarding flow (Sprint 3) must explicitly handle "restaurant created, Stripe onboarding incomplete" as a real state, not treat restaurant creation and payment-readiness as the same event.
+**Revision — Accounts v2, not v1 (found while starting Sprint 3, confirmed empirically before touching `schema.prisma`, not assumed from documentation):** `charges_enabled` / `payouts_enabled` as flat booleans mirror Stripe's v1 Connect Accounts API (`POST /v1/accounts`). Stripe's current integration guidance states this is deprecated in favor of Accounts v2 (`POST /v2/core/accounts`), which replaces flat booleans with nested, per-payment-method capability statuses. Confirmed directly against a real Stripe test-mode account, not assumed: a `GET /v2/core/accounts/{id}` response has no `charges_enabled` field at all. The live equivalent is `configuration.merchant.capabilities.card_payments.status` — one of Stripe's own status strings (`active` / `pending` / `restricted` / `disabled`, or the capability is simply absent if never requested). Payout status lives at `configuration.merchant.capabilities.stripe_balance.payouts.status` — nested under `stripe_balance`, not a flat `payouts` capability the way v1's `payouts_enabled` implied. `requirements_due` is similarly not a flat array of requirement-name strings in v2: the real shape is `requirements.entries[]`, an array of objects (`description`, `impact.restricts_capabilities[]`, `minimum_deadline`, `requested_reasons[]`) — captured directly from a live response, not guessed.
+
+**Consequences:** `schema.prisma`'s `Restaurant` model drops `charges_enabled` / `payouts_enabled` (`Boolean`) for `card_payments_status` / `payouts_status` (`String?`, mirroring Stripe's own capability-status vocabulary directly). Deliberately not a Prisma enum: this vocabulary belongs to Stripe, not to us, and could grow without warning — constraining it to an enum would force a migration every time Stripe adds a status value. `requirements_due` (`Json?`) keeps its name and type, now holding the real `requirements.entries[]` shape instead of a guessed one. `onboarding_status` (our own derived `NOT_STARTED` / `IN_PROGRESS` / `COMPLETE` / `RESTRICTED` enum, still ours to define) is unchanged in shape — only in how it gets computed, from the v2 capability statuses and requirements rather than the old v1 booleans. The onboarding flow (Sprint 3) still must explicitly handle "restaurant created, Stripe onboarding incomplete" as a real state, not treat restaurant creation and payment-readiness as the same event. See ADR-014's own revision for the account-type change (Express → Standard-equivalent) these fields also had to account for.
 
 ---
 
@@ -172,14 +174,31 @@ Wallet balance, Restaurant balance, and Analytics figures are **projections** co
 
 ---
 
-## ADR-014 — Stripe Connect Account Type: Express
-**Status:** Accepted
+## ADR-014 — Stripe Connect Account Type: Standard-equivalent (`dashboard: "full"`)
+**Status:** Accepted (revised in place — see "Revision" below; same principle as ADR-017/ADR-019: a correction to an already-accepted decision on new evidence, not a new decision)
 
 **Context:** Restaurant Onboarding (ADR-009) established that each Restaurant owns its own Stripe Connect account, but never specified which of Stripe's account types — Standard, Express, or Custom — to use. Custom means building the entire onboarding UI ourselves; Standard gives the restaurant full access to their own Stripe Dashboard; Express sits between the two.
 
-**Decision:** Express. Stripe hosts the KYC and bank-account collection flow directly through Account Links — none of that ever reaches our servers, keeping onboarding-related compliance scope on Stripe rather than us. The Restaurant Portal keeps its own branding for everything else; only the onboarding step itself is Stripe-hosted.
+**Decision (original, Sprint 0):** Express. Stripe hosts the KYC and bank-account collection flow directly through Account Links — none of that ever reaches our servers, keeping onboarding-related compliance scope on Stripe rather than us. The Restaurant Portal keeps its own branding for everything else; only the onboarding step itself is Stripe-hosted.
 
-**Consequences:** Faster to build than Custom, more platform control over branding than Standard. If a restaurant ever needs direct access to Stripe's own dashboard — to issue a manual refund per ADR-008, for instance — Express supports that too.
+**Revision — Standard-equivalent (`dashboard: "full"`), not Express (found while starting Sprint 3, verified empirically against a live Stripe test account, not assumed by symmetry with ADR-009's v1→v2 finding or by reading documentation):** the original decision weighed Express vs Standard as a UX/branding trade-off only. What it missed: **who bears financial liability for a restaurant's fraud and chargebacks is not a UX choice — Stripe's v2 API enforces it at account-creation time, not just as a recommendation.**
+
+Confirmed by real `POST /v2/core/accounts` calls against a live Stripe test-mode account — a full 2×2 matrix, not one data point:
+
+| `dashboard` | `fees_collector` | `losses_collector` | Result |
+|---|---|---|---|
+| `express` | `application` | `stripe` | **HTTP 400** — `account_controller_unsupported_configuration`, `invalid_permutation` echoed back in the response |
+| `express` | `application` | `application` | **HTTP 200** — account created (`acct_1U0oOwB7fPGdeRuB`) |
+| `full` | `stripe` | `stripe` | **HTTP 200** — account created (`acct_1U0oaoB7fPOaqj74`) |
+| `full` | `application` | `application` | **HTTP 400** — `account_controller_unsupported_configuration`, `invalid_permutation` echoed back in the response |
+
+Express *only* accepts `losses_collector: "application"` — the platform absorbs restaurant-side fraud/chargeback losses. Standard-equivalent (`dashboard: "full"`) *only* accepts `losses_collector: "stripe"` — Stripe absorbs them. There is no configuration where Express lets Stripe hold that liability instead of the platform; the API rejects it outright. This settles a question the original ADR never asked.
+
+Onboarding mechanism does **not** change between the two, confirmed by calling it against both a live `dashboard: "express"` and a live `dashboard: "full"` test account: the same `POST /v1/account_links` call (`type: "account_onboarding"`, same `refresh_url` / `return_url` parameters) returns `200` for both. The only observed difference is the URL Stripe hands back — `.../setup/e/...` for Express, `.../setup/s/...` for Standard-equivalent — and presumably the hosted UI/branding behind it. Our backend code for generating and redirecting to the onboarding link is identical either way; nothing about the Restaurant Portal's integration changes.
+
+**Decision (revised):** Standard-equivalent, `dashboard: "full"`, `configuration.merchant` requested (Restaurant is merchant of record for its own sales, consistent with ADR-002's chart of accounts crediting Restaurant Revenue Payable directly). The restaurant — not Hospitality OS — bears its own fraud and chargeback losses, the financially conservative default for a platform whose own margin is a small take rate, not a risk buffer sized to absorb merchant-side fraud.
+
+**Consequences:** Restaurant Portal's onboarding UI code is unaffected (identical Account Links flow). A restaurant now gets full access to its own Stripe Dashboard rather than the lighter Express-branded one — a support/UX trade-off accepted with the liability data in view, not overlooked as before. The specific charge pattern (direct charges on the connected account vs. destination charges from the platform account) is Sprint 5's decision when the Payment/Ledger write path is actually built — this ADR settles the account type and liability question, not the charge pattern.
 
 ---
 
