@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.2.0
+version: 2.3.0
 status: Active
 classification: Critical
 priority: Highest
@@ -132,6 +132,8 @@ Your first solution is rarely your best.
 Business Logic Review. Architecture Review. Security Review. Performance Review. Documentation Review. Testing Review. Naming Review. Maintainability Review.
 
 If one review fails, the Pull Request is incomplete.
+
+Architecture Review, specifically, for any new NestJS module that uses a Guard (`@UseGuards(...)`): confirm the module actually imports whatever module provides that Guard's own constructor dependencies, not just that the Guard is referenced. A Guard compiles and typechecks fine with a missing import — it only fails at runtime, when Nest tries to resolve the Guard's dependencies and can't find them in that module's scope. This is not hypothetical: `OrganizationModule` and `RestaurantModule` (Sprint 3) both used `JwtAuthGuard` without importing `AuthModule`, and the first sign of it was the app refusing to start, not a compile error or a test failure — `pnpm run test` had already passed because no test in either module actually bootstrapped a real Nest application context, only the individual service against a real database with the Guard's dependencies faked out entirely. Caught by starting the real app and hitting a real endpoint, not by the test suite.
 
 ---
 
