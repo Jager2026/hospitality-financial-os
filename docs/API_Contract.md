@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.2.0
+version: 2.2.1
 status: Active
 classification: Internal
 owner: Founder
@@ -343,7 +343,7 @@ Verifies the Stripe signature before any processing. Every event is deduplicated
 - `payment_intent.succeeded` → creates Transaction + JournalEntry + LedgerLines
 - `charge.refunded` → creates Refund + compensating JournalEntry
 - `charge.dispute.created` / `charge.dispute.closed` → creates/updates Chargeback + compensating JournalEntry
-- `account.updated` → updates Restaurant `onboarding_status` / `charges_enabled` / `payouts_enabled` / `requirements_due`
+- `account.updated` → updates Restaurant `onboarding_status` / `card_payments_status` / `payouts_status` / `requirements_due` (ADR-009's revision — Accounts v2 capability-status strings, not v1 booleans)
 
 ---
 
