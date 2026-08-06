@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.5.0
+version: 1.6.0
 status: Active — twenty ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -199,6 +199,8 @@ Onboarding mechanism does **not** change between the two, confirmed by calling i
 **Decision (revised):** Standard-equivalent, `dashboard: "full"`, `configuration.merchant` requested (Restaurant is merchant of record for its own sales, consistent with ADR-002's chart of accounts crediting Restaurant Revenue Payable directly). The restaurant — not Hospitality OS — bears its own fraud and chargeback losses, the financially conservative default for a platform whose own margin is a small take rate, not a risk buffer sized to absorb merchant-side fraud.
 
 **Consequences:** Restaurant Portal's onboarding UI code is unaffected (identical Account Links flow). A restaurant now gets full access to its own Stripe Dashboard rather than the lighter Express-branded one — a support/UX trade-off accepted with the liability data in view, not overlooked as before. The specific charge pattern (direct charges on the connected account vs. destination charges from the platform account) is Sprint 5's decision when the Payment/Ledger write path is actually built — this ADR settles the account type and liability question, not the charge pattern.
+
+**Charge pattern, settled (found while building Sprint 5, confirmed against Stripe's own current platform-classification guidance, not guessed):** Direct charges — the PaymentIntent is created directly on the Restaurant's connected account (`Stripe-Account` request header/param), with the Restaurant as merchant of record. This isn't a fresh decision so much as making explicit what this ADR's own already-accepted configuration already implies: Stripe's current guidance classifies `dashboard: "full"` + `configuration.merchant` + "the seller is merchant of record for their own sales" as the **SaaS** pattern, whose charge mechanism is Direct charges — as distinct from the **Marketplace** pattern (`dashboard: "express"`, platform is merchant of record, Destination charges), which this ADR explicitly rejected above. `application_fee_amount` on the PaymentIntent is the platform-revenue mechanism for Direct charges, exactly as it is for Destination charges — no different fee wiring needed depending on which was chosen. `payment_method_types` is deliberately never set on the PaymentIntent (Stripe's own current guidance: omitting it enables dynamic, Dashboard-configured payment methods); the one documented exception, `card_present` for physical Terminal hardware, doesn't apply here — this is Stripe.js client-side confirmation (ADR-015), not a card reader.
 
 ---
 

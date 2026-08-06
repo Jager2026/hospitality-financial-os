@@ -14,6 +14,25 @@ export interface ConnectAccountStatus {
   requirementsDue: unknown;
 }
 
+/** Direct charge (ADR-014: SaaS pattern — dashboard "full", Restaurant is merchant of record).
+ * The PaymentIntent is created ON the connected account (stripeAccountId), not the platform
+ * account. applicationFeeAmount is the platform's cut — optional and left unset by every caller
+ * today; Sprint 5's platform-fee percentage is still an open founder decision (tracked
+ * separately), and this method only accepts whatever it's given, it never computes a fee. */
+export interface CreatePaymentIntentParams {
+  stripeAccountId: string;
+  amount: bigint; // minor units (ADR-001)
+  currency: string; // ISO 4217
+  applicationFeeAmount?: bigint; // minor units — platform's cut, if any
+}
+
+export interface CreatedPaymentIntent {
+  id: string;
+  clientSecret: string;
+  amount: number;
+  currency: string;
+}
+
 // ADR-009 / ADR-014 (revised): Accounts v2, dashboard: "full" (Standard-equivalent) — the
 // platform bears no fraud/chargeback liability for a restaurant's own payments (confirmed
 // empirically: `losses_collector: "stripe"` is the ONLY accepted value paired with
@@ -22,9 +41,11 @@ export interface ConnectAccountStatus {
 @Injectable()
 export class StripeService {
   private readonly stripe: Stripe;
+  private readonly webhookSecret: string;
 
   constructor(config: ConfigService) {
     this.stripe = new Stripe(config.getOrThrow<string>("STRIPE_SECRET_KEY"));
+    this.webhookSecret = config.getOrThrow<string>("STRIPE_WEBHOOK_SECRET");
   }
 
   async createConnectAccount(params: CreateConnectAccountParams): Promise<string> {
@@ -76,5 +97,40 @@ export class StripeService {
       payoutsStatus: capabilities?.stripe_balance?.payouts?.status ?? null,
       requirementsDue: account.requirements?.entries ?? null,
     };
+  }
+
+  /** Direct charge: the second argument (`{ stripeAccount }`) is Stripe's request-option for
+   * "create this ON the connected account," not a body field — the connected account is the
+   * merchant of record (ADR-014). No `payment_method_types` — deliberately omitted so Stripe
+   * surfaces dynamic, Dashboard-configured payment methods rather than a hardcoded one; the one
+   * exception (Terminal / `card_present`) doesn't apply here, this is Stripe.js client-side
+   * confirmation (ADR-015), not physical card-reader hardware. */
+  async createPaymentIntent(params: CreatePaymentIntentParams): Promise<CreatedPaymentIntent> {
+    const intent = await this.stripe.paymentIntents.create(
+      {
+        amount: Number(params.amount),
+        currency: params.currency.toLowerCase(),
+        ...(params.applicationFeeAmount !== undefined
+          ? { application_fee_amount: Number(params.applicationFeeAmount) }
+          : {}),
+      },
+      { stripeAccount: params.stripeAccountId },
+    );
+    if (!intent.client_secret) {
+      throw new Error("Stripe PaymentIntent created without a client_secret.");
+    }
+    return {
+      id: intent.id,
+      clientSecret: intent.client_secret,
+      amount: intent.amount,
+      currency: intent.currency,
+    };
+  }
+
+  /** ADR-004 / API_Contract.md, Incoming Webhooks: "Verifies the Stripe signature before any
+   * processing." rawBody must be the exact, unparsed request bytes (main.ts's `rawBody: true`) —
+   * constructEvent HMACs the raw bytes, not a re-serialized JSON.stringify of the parsed body. */
+  constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
+    return this.stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
   }
 }

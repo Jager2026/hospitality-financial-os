@@ -8,5 +8,6 @@ import { RestaurantService } from "./restaurant.service";
   imports: [StripeModule, AuthModule], // AuthModule: JwtAuthGuard's own dependencies
   controllers: [RestaurantController],
   providers: [RestaurantService],
+  exports: [RestaurantService], // WebhooksModule: account.updated re-fetches via this service
 })
 export class RestaurantModule {}

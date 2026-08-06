@@ -12,6 +12,7 @@ import { Observable, catchError, tap, throwError } from "rxjs";
 import { AUDIT_ENTITY_KEY } from "../decorators/audit-entity.decorator";
 import { AppException } from "../exceptions/app.exception";
 import { AUDIT_LOG_WRITTEN_FLAG } from "../http/audit-log-written.flag";
+import { IDEMPOTENT_REPLAY_FLAG } from "../http/idempotent-replay.flag";
 import type { AuthedRequest } from "../http/authed-request";
 import { MUTATING_METHODS } from "../http/mutating-methods";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -53,6 +54,10 @@ export class AuditLogInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((data) => {
+        // IdempotencyInterceptor (route-level, wraps INSIDE this one) sets this flag before
+        // emitting a cached response instead of re-invoking the handler — the mutation this row
+        // would describe already happened, and was already logged, on the original request.
+        if ((request as unknown as Record<string, unknown>)[IDEMPOTENT_REPLAY_FLAG]) return;
         void this.writeSuccess(request, entity, data);
       }),
       catchError((err: unknown) => {

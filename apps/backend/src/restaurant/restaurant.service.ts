@@ -143,6 +143,19 @@ export class RestaurantService {
     );
   }
 
+  /** Webhooks entry point (Sprint 5, account.updated): the webhook only tells us WHICH account
+   * changed, never what changed to — we deliberately never parse the webhook payload's embedded
+   * Account object for capability data (Stripe sends account.updated as a v1 snapshot event,
+   * whose data.object is v1-shaped — flat charges_enabled/payouts_enabled booleans — even for a
+   * v2-created account; ADR-009's revision exists precisely because those v1 fields don't reflect
+   * real v2 capability state). Re-fetching via getAccountStatus (the same call findOne/create
+   * already use) sidesteps that shape question entirely rather than guessing at it. */
+  async refreshStripeStatusByAccountId(stripeAccountId: string): Promise<Restaurant | null> {
+    const restaurant = await this.prisma.restaurant.findFirst({ where: { stripeAccountId } });
+    if (!restaurant) return null;
+    return this.refreshStripeStatus(restaurant);
+  }
+
   private async refreshStripeStatus(restaurant: Restaurant): Promise<Restaurant> {
     if (!restaurant.stripeAccountId) return restaurant;
 
