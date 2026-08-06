@@ -195,6 +195,11 @@ export class WebhooksService {
       return; // nothing new — a duplicate or out-of-order delivery
     }
 
+    // Known boundary: under out-of-order delivery, `latestRefund` (Stripe's most-recent-first
+    // list) isn't guaranteed to be the specific refund that produced THIS delta — the Ledger
+    // amount stays correct either way (it's derived from amount_refunded, not from this object),
+    // but processorRefundId/reason on this particular Refund row could end up describing a
+    // different originating event than the amount it's attached to.
     const latestRefund = charge.refunds?.data?.[0];
     const totalRefunded = previouslyRecorded + newRefundAmount;
 
