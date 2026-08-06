@@ -14,20 +14,28 @@ describe("invitation-token.util", () => {
     expect(generateInvitationToken().length).toBeGreaterThanOrEqual(64); // 32 bytes, hex-encoded
   });
 
-  it("verifies the correct token against its own hash", async () => {
+  it("verifies the correct token against its own hash", () => {
     const token = generateInvitationToken();
-    const hash = await hashInvitationToken(token);
-    expect(await verifyInvitationToken(token, hash)).toBe(true);
+    const hash = hashInvitationToken(token);
+    expect(verifyInvitationToken(token, hash)).toBe(true);
   });
 
-  it("rejects an incorrect token against a real hash", async () => {
-    const hash = await hashInvitationToken(generateInvitationToken());
-    expect(await verifyInvitationToken(generateInvitationToken(), hash)).toBe(false);
+  it("rejects an incorrect token against a real hash", () => {
+    const hash = hashInvitationToken(generateInvitationToken());
+    expect(verifyInvitationToken(generateInvitationToken(), hash)).toBe(false);
   });
 
-  it("never stores the plaintext token in the hash output", async () => {
+  it("never stores the plaintext token in the hash output", () => {
     const token = generateInvitationToken();
-    const hash = await hashInvitationToken(token);
+    const hash = hashInvitationToken(token);
     expect(hash).not.toContain(token);
+  });
+
+  it("rejects a malformed/wrong-length stored hash instead of throwing", () => {
+    // timingSafeEqual throws on mismatched buffer lengths — this is the guard that must catch
+    // that case first. A plausible wrong implementation (comparing raw buffers without the
+    // length check) would throw here instead of returning false.
+    expect(() => verifyInvitationToken(generateInvitationToken(), "not-a-real-hash")).not.toThrow();
+    expect(verifyInvitationToken(generateInvitationToken(), "not-a-real-hash")).toBe(false);
   });
 });
