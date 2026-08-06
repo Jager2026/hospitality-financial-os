@@ -15,6 +15,7 @@ import { OrganizationModule } from "./organization/organization.module";
 import { RestaurantModule } from "./restaurant/restaurant.module";
 import { CurrencyModule } from "./currency/currency.module";
 import { StripeModule } from "./stripe/stripe.module";
+import { MembershipModule } from "./membership/membership.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { AuditEntityResolverGuard } from "./common/guards/audit-entity-resolver.guard";
 import { ResponseInterceptor } from "./common/interceptors/response.interceptor";
@@ -50,6 +51,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     OrganizationModule,
     RestaurantModule,
     CurrencyModule,
+    MembershipModule,
   ],
   providers: [
     // Must run before ThrottlerGuard (registration order = execution order among global guards)
