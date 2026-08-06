@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.4.0
+version: 2.5.0
 status: Active
 classification: Internal
 owner: Founder
@@ -37,9 +37,9 @@ Every table that records a financial fact is immutable. Corrections are new rows
 
 # Core Domain
 
-Twenty entities. Ten existed in v1.0. Ten were added directly by `ARCHITECTURE_DECISIONS.md` to close gaps the Sprint 0 review found — this is the schema catching up with already-agreed architecture, not scope creep.
+Twenty-one entities. Ten existed in v1.0. Ten were added directly by `ARCHITECTURE_DECISIONS.md` to close gaps the Sprint 0 review found — this is the schema catching up with already-agreed architecture, not scope creep. `MembershipInvitation` (ADR-020) is the twenty-first, added while starting Sprint 4 to close a gap between `MASTERPLAN.md`'s own user journey and the Sprint 0 schema.
 
-`Organization` · `Restaurant` · `User` · `Membership` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog`
+`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog`
 
 ---
 
@@ -97,7 +97,21 @@ Membership
 
 **Relationships:** Membership → User · Membership → Organization · Membership → Restaurant (nullable) · Membership → one Wallet
 
-**Rules:** `restaurant_id IS NULL` means the role applies across every Restaurant inside `organization_id` (e.g. a chain owner). A restaurant-scoped Membership always carries both `organization_id` and `restaurant_id`. One User may hold many Memberships — including more than one inside the same Organization, as long as each is scoped to a different Restaurant. Inviting an email address that already belongs to a User attaches a new Membership to that existing User — it never creates a duplicate User row.
+**Rules:** `restaurant_id IS NULL` means the role applies across every Restaurant inside `organization_id` (e.g. a chain owner). A restaurant-scoped Membership always carries both `organization_id` and `restaurant_id`. One User may hold many Memberships — including more than one inside the same Organization, as long as each is scoped to a different Restaurant. Inviting an email address that already belongs to a User attaches a new Membership to that existing User at acceptance time (see MembershipInvitation) — it never creates a duplicate User row.
+
+---
+
+############################################################
+# ENTITY
+MembershipInvitation
+############################################################
+**Purpose:** A pending invitation to join an Organization (org-wide) or a specific Restaurant, before the invitee has a `User` row at all. Exists so `User.password_hash` never has to represent "invited, no password yet" (ADR-020) — a real `Membership` is only ever created once an invitation is accepted, never before.
+
+**Fields:** id, email, organization_id, restaurant_id (nullable), role_id, invited_by (user_id), token_hash, expires_at, accepted_at (nullable), created_at, updated_at
+
+**Relationships:** MembershipInvitation → Organization · MembershipInvitation → Restaurant (nullable) · MembershipInvitation → Role · MembershipInvitation → User (`invited_by` — who sent it)
+
+**Rules:** `restaurant_id` follows the same nullable-means-org-wide convention as `Membership` (ADR-005) — an invitation is for one Restaurant or for the whole Organization, mirroring exactly what the resulting Membership will be. `token_hash` is a hash of the invitation token, never the raw token (ADR-020, same principle as `User.password_hash`) — the raw token exists exactly once, returned to the inviter at creation time, never stored anywhere in a comparable-in-plaintext form. Verifying a presented token means looking up candidate rows by `email` (a known, non-secret field) and hash-comparing the token against each candidate's `token_hash` — the same shape as verifying a password, never a lookup keyed on the secret itself. `invited_by` is kept as its own field rather than derived from `AuditLog`, since a pending-invitations screen is a direct, frequent read, not an audit reconstruction. Accepting an invitation creates `User` (only if no `User` already exists for that `email`) and `Membership` together, atomically, and sets `accepted_at`; an already-accepted or expired (`expires_at` passed) invitation can no longer be accepted. Not soft-deleted (see Soft Deletes) — an expired or accepted invitation is operational history, not a financial or identity fact worth recovering.
 
 ---
 
@@ -371,6 +385,7 @@ Every foreign key indexed by default. In addition:
 - `idempotency_keys.key` (unique), `idempotency_keys.expires_at`
 - `transaction.restaurant_id, created_at` (dashboard queries)
 - `membership.user_id`, `membership.organization_id`, `membership.restaurant_id`
+- `membership_invitation.email` (the acceptance lookup — candidate rows by email, then hash-compare the token, ADR-020)
 
 Indexes exist because a query pattern justifies them, never "maybe."
 
@@ -382,7 +397,7 @@ Soft delete where the business needs recovery: `Organization`, `Restaurant`, `Us
 
 Never soft delete — permanent financial history: `Payment`, `Transaction`, `JournalEntry`, `LedgerLine`, `Tip`, `Refund`, `Chargeback`, `Adjustment`, `AuditLog`.
 
-Purge on a retention schedule — operational, not financial history: `OutboxEvent` (after `published_at` + N days), `IdempotencyKey` (after `expires_at`).
+Purge on a retention schedule — operational, not financial history: `OutboxEvent` (after `published_at` + N days), `IdempotencyKey` (after `expires_at`), `MembershipInvitation` (after `expires_at`, once accepted or expired).
 
 ---
 
