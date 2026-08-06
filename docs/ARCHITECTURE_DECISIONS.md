@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.4.0
-status: Active — nineteen ADRs, all Accepted
+version: 1.5.0
+status: Active — twenty ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -281,6 +281,25 @@ Fixed: every refresh token now also carries a `familyId`, generated once at logi
 The detection moment itself is now distinguishable from an ordinary already-revoked-family rejection (`RefreshTokenReuseDetectedError`, not a generic 401), specifically so it can be written to `AuditLog` as its own action — `refresh_token_reuse_detected` — per `CLAUDE_RULES.md`'s Logging Philosophy ("Always log: ... Security Events"). Confirmed live: the row lands with the correct `user_id`, `familyId` in `metadata`, and the requesting IP/user-agent; a subsequent rejection of the same family's other token does not produce a second row, since it isn't a new detection.
 
 **Consequences:** No schema migration was needed for Sprint 2 (still no RefreshToken table — family tracking is a second Redis key, not a new Postgres entity). Revocation and family-revocation state both live only in Redis — consistent with `SYSTEM_ARCHITECTURE.md`'s Caching Strategy, which already treats Redis as appropriate for short-lived, non-financial state and explicitly wrong for anything that must survive as a source of truth (Wallet, Restaurant balance). Accepted risk, unchanged from the original decision: a Redis flush would silently un-revoke every outstanding refresh token and family flag (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage.
+
+---
+
+## ADR-020 — Membership Invitation: Separate Entity, Never a Passwordless User
+**Status:** Accepted (Founder decision)
+
+**Context:** Found while starting Sprint 4 (Membership Module). `MASTERPLAN.md`'s own User Journey states the intended flow explicitly: *"Waiter: Receives Invitation → Creates Password → Logs In → Receives Tips → Views Wallet."* Read literally, an invited person exists — and can be invited, assigned a Role, a Restaurant — before they have a password. But `User.password_hash` is `NOT NULL` (Sprint 0 schema, unchanged since), and `DATABASE.md`'s Core Domain lists exactly twenty entities with no `Invitation` anywhere — not among the twenty, not under Future Entities either. A real contradiction between `MASTERPLAN.md`'s own stated user journey and the schema it's supposed to run on, found before writing any Sprint 4 code, not after — flagged per `CLAUDE_RULES.md` rather than resolved silently or guessed.
+
+Two directions were possible: make `User.password_hash` nullable and add invitation-state fields directly to `User`, or keep `User` exactly as it is and represent "invited, not yet a real account" as an entirely separate entity.
+
+**Decision:** `MembershipInvitation` is a new, standalone entity (`DATABASE.md`'s twenty-first). `User.password_hash` stays `NOT NULL`, untouched. No `User` row is ever created for someone who hasn't set a password — a `MembershipInvitation` row exists in its place until accepted, at which point `User` (if one doesn't already exist for that email) and `Membership` are created together, atomically, in the same transaction as the acceptance itself.
+
+**Why not the nullable-`password_hash` alternative:** `User.password_hash` is read by the single most security-sensitive code path in the system — `AuthService.login()`, `JwtAuthGuard`'s user lookup — both already built, tested, and live-verified across two sprints on the invariant that every `User` row is a fully real, authenticatable account. Making it nullable doesn't just widen a column; it means every future reader of `User.passwordHash` has to remember to ask "or is this one mid-invitation?" — a new edge case injected into exactly the code this project has been most careful about, for the benefit of a feature (invitations) that has nothing to do with login itself. A separate entity keeps that invariant intact and keeps the new, less-hardened invitation logic in its own module, not woven into the one everything else depends on.
+
+**Token handling — hashed, never stored comparably in plaintext, same principle as `password_hash` and ADR-019's Redis-tracked refresh-token state:** `MembershipInvitation` stores `token_hash`, never the raw token. The raw token exists exactly once, at creation, handed back to the inviter in the API response (there is no email-sending infrastructure anywhere in this project yet — undocumented, so not something Sprint 4 invents; the inviter is responsible for relaying the link until a real provider is introduced with its own ADR). Verifying an incoming token against `token_hash` follows the same shape as verifying a password against `password_hash`: look up the candidate row(s) by a known, non-secret field (`email`), then hash-compare the presented token against each candidate's `token_hash` — never a plaintext equality check, and never a query that tries to look a row up *by* the secret itself.
+
+**`invited_by` (FK to `User`):** kept as its own field, not derived by joining through `AuditLog`. `AuditLog` exists for compliance and audit trail (`DATABASE.md`, `AuditLog`'s own Purpose: "Permanent history of who did what") — a UI screen listing pending invitations and who sent each one is a direct, frequent read, not an audit reconstruction, and shouldn't need to join through the audit log to render.
+
+**Consequences:** `schema.prisma` gains a new model (`DATABASE.md`'s twenty-first entity, full definition there). `POST /memberships` (API_Contract.md) now creates a `MembershipInvitation`, not a `Membership` directly — including for an email that already belongs to an existing `User`, uniformly: the existing person still explicitly accepts before a `Membership` is attached to them, rather than one being silently created because someone else typed their email into a form. `DATABASE.md`'s existing Membership Rule — *"Inviting an email address that already belongs to a User attaches a new Membership to that existing User — it never creates a duplicate User row"* — still holds exactly as written; it now happens at acceptance time instead of at invite time, and the "never a duplicate `User` row" half of that sentence is exactly what `MembershipInvitation` existing as a separate entity is *for*.
 
 ---
 

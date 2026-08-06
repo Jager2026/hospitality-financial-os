@@ -173,6 +173,7 @@ model Organization {
 
   restaurants  Restaurant[]
   memberships  Membership[]
+  membershipInvitations MembershipInvitation[]
 
   @@map("organization")
 }
@@ -218,6 +219,7 @@ model Restaurant {
   currencyRef  Currency     @relation(fields: [currency], references: [code])
 
   memberships  Membership[]
+  membershipInvitations MembershipInvitation[]
   payments     Payment[]
   transactions Transaction[]
   ledgerLines  LedgerLine[]
@@ -242,6 +244,7 @@ model User {
   deletedAt         DateTime? @map("deleted_at")
 
   memberships       Membership[]
+  invitationsSent   MembershipInvitation[] @relation("MembershipInvitationInvitedBy")
   auditLogs         AuditLog[]
   refundsRequested  Refund[]     @relation("RefundRequestedBy")
   refundsApproved   Refund[]     @relation("RefundApprovedBy")
@@ -277,6 +280,34 @@ model Membership {
   @@map("membership")
 }
 
+// ADR-020: a pending invitation, never a User row — User.password_hash stays NOT NULL, untouched
+// by this feature. User + Membership are created together, atomically, only at acceptance.
+model MembershipInvitation {
+  id             String    @id @default(uuid()) @db.Uuid
+  email          String
+  organizationId String    @map("organization_id") @db.Uuid
+  restaurantId   String?   @map("restaurant_id") @db.Uuid // nullable = org-wide, mirrors Membership (ADR-005)
+  roleId         String    @map("role_id") @db.Uuid
+  invitedBy      String    @map("invited_by") @db.Uuid
+  // Hash of the invitation token, never the raw token — same principle as User.passwordHash and
+  // ADR-019's Redis-tracked refresh-token state. Verified the same shape as a password: look up
+  // candidate rows by email (a known, non-secret field), then hash-compare the presented token
+  // against each candidate's tokenHash — never a lookup keyed on the secret itself.
+  tokenHash  String    @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  acceptedAt DateTime? @map("accepted_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  organization  Organization @relation(fields: [organizationId], references: [id])
+  restaurant    Restaurant?  @relation(fields: [restaurantId], references: [id])
+  role          Role         @relation(fields: [roleId], references: [id])
+  invitedByUser User         @relation("MembershipInvitationInvitedBy", fields: [invitedBy], references: [id])
+
+  @@index([email]) // the acceptance lookup (ADR-020)
+  @@map("membership_invitation")
+}
+
 /// ASSUMPTION: DATABASE.md gives no field list for Role ("Unchanged from v1.0. Owner · Manager ·
 /// Waiter · Administrator · future Accountant · future Auditor.") — Database Principles applied
 /// in full since no entity-specific list overrides it. Rows are seeded data (IMPLEMENTATION_PLAN
@@ -289,6 +320,7 @@ model Role {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   memberships     Membership[]
+  membershipInvitations MembershipInvitation[]
   rolePermissions RolePermission[]
 
   @@map("role")

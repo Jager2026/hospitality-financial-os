@@ -81,7 +81,18 @@ export class RestaurantService {
   }
 
   async findAllForUser(user: AuthenticatedUser): Promise<Restaurant[]> {
-    const orgIds = [...new Set(user.memberships.map((m) => m.organizationId))];
+    // Bug caught live this session (Sprint 4): the previous version used every membership's
+    // organizationId here, regardless of whether that membership was org-wide or
+    // restaurant-scoped — so a restaurant-scoped Membership (e.g. a Manager, seed.ts) could see
+    // every Restaurant in the Organization, not just its own, the moment a second Restaurant
+    // existed in the same Organization. Only an org-wide Membership (restaurantId === null)
+    // grants "every Restaurant in this Organization" (ADR-005); a restaurant-scoped one must
+    // reach only the exact Restaurant it names.
+    const orgWideOrgIds = [
+      ...new Set(
+        user.memberships.filter((m) => m.restaurantId === null).map((m) => m.organizationId),
+      ),
+    ];
     const restaurantIds = user.memberships
       .filter((m) => m.restaurantId !== null)
       .map((m) => m.restaurantId as string);
@@ -89,7 +100,7 @@ export class RestaurantService {
     return this.prisma.restaurant.findMany({
       where: {
         deletedAt: null,
-        OR: [{ organizationId: { in: orgIds } }, { id: { in: restaurantIds } }],
+        OR: [{ organizationId: { in: orgWideOrgIds } }, { id: { in: restaurantIds } }],
       },
     });
   }

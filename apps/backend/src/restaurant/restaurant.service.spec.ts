@@ -199,6 +199,53 @@ describe("RestaurantService (real database)", () => {
     ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
   });
 
+  it("findAllForUser: a restaurant-scoped Membership sees only its own Restaurant, not every Restaurant in the Organization", async () => {
+    // Real bug, caught live (not by this test first — the other way around): the original
+    // findAllForUser used every Membership's organizationId regardless of whether that
+    // Membership was org-wide or restaurant-scoped, so a restaurant-scoped Membership could see
+    // every Restaurant in the Organization the moment a second one existed. This test only fails
+    // against that buggy version because it requires a SECOND Restaurant in the same
+    // Organization — a single-restaurant Organization can't distinguish the two implementations.
+    const ownerUserId = await createTestUser();
+    const first = await service.create(baseDto({ name: "Scoped First" }), ownerUserId, null);
+    const second = await service.create(
+      baseDto({ name: "Scoped Second" }),
+      ownerUserId,
+      first.organizationId,
+    );
+
+    const managerUserId = await createTestUser();
+    await prisma.membership.create({
+      data: {
+        userId: managerUserId,
+        organizationId: first.organizationId,
+        restaurantId: first.id, // scoped to the FIRST restaurant only
+        roleId: waiterRoleId,
+        status: "ACTIVE",
+      },
+    });
+
+    const managerAsAuthenticatedUser: AuthenticatedUser = {
+      id: managerUserId,
+      email: "manager@example.com",
+      locale: "en",
+      memberships: [
+        {
+          id: "irrelevant",
+          organizationId: first.organizationId,
+          restaurantId: first.id,
+          role: { id: waiterRoleId, name: "Waiter", permissions: [] },
+        },
+      ],
+    };
+
+    const visible = await service.findAllForUser(managerAsAuthenticatedUser);
+    const visibleIds = visible.map((r) => r.id);
+
+    expect(visibleIds).toContain(first.id);
+    expect(visibleIds).not.toContain(second.id);
+  });
+
   it("a user with no Membership at all cannot reach the restaurant (404, not 403 — no enumeration)", async () => {
     const ownerUserId = await createTestUser();
     const restaurant = await service.create(baseDto(), ownerUserId, null);
