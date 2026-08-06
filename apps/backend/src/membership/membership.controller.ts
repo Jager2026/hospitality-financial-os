@@ -9,6 +9,7 @@ import {
   Post,
   UseGuards,
 } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { AuditEntity } from "../common/decorators/audit-entity.decorator";
 import { RequirePermission } from "../auth/decorators/require-permission.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
@@ -67,8 +68,13 @@ export class MembershipController {
 
   // Public, deliberately no JwtAuthGuard: the invitee may not have an account yet
   // (API_Contract.md, Accept Invitation). The invitation token itself is the credential.
+  // Same reasoning as AuthController's own override (API_Contract.md, Rate Limiting: "Public
+  // low"): an unauthenticated endpoint that does a DB lookup by email plus a hash-compare per
+  // candidate is the same cost/risk shape as a login attempt, so it gets the same 10/min rather
+  // than the global 100/min baseline (ADR-010).
   @Post("invitations/accept")
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   acceptInvitation(@Body(new ZodValidationPipe(acceptInvitationSchema)) dto: AcceptInvitationDto) {
     return this.invitationService.accept(dto);
   }

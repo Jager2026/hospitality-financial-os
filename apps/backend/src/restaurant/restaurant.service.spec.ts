@@ -214,10 +214,10 @@ describe("RestaurantService (real database)", () => {
       first.organizationId,
     );
 
-    const managerUserId = await createTestUser();
+    const scopedUserId = await createTestUser();
     await prisma.membership.create({
       data: {
-        userId: managerUserId,
+        userId: scopedUserId,
         organizationId: first.organizationId,
         restaurantId: first.id, // scoped to the FIRST restaurant only
         roleId: waiterRoleId,
@@ -225,9 +225,9 @@ describe("RestaurantService (real database)", () => {
       },
     });
 
-    const managerAsAuthenticatedUser: AuthenticatedUser = {
-      id: managerUserId,
-      email: "manager@example.com",
+    const scopedUser: AuthenticatedUser = {
+      id: scopedUserId,
+      email: "scoped@example.com",
       locale: "en",
       memberships: [
         {
@@ -239,7 +239,7 @@ describe("RestaurantService (real database)", () => {
       ],
     };
 
-    const visible = await service.findAllForUser(managerAsAuthenticatedUser);
+    const visible = await service.findAllForUser(scopedUser);
     const visibleIds = visible.map((r) => r.id);
 
     expect(visibleIds).toContain(first.id);

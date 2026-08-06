@@ -51,7 +51,7 @@ export class MembershipInvitationService {
     }
 
     const token = generateInvitationToken();
-    const tokenHash = await hashInvitationToken(token);
+    const tokenHash = hashInvitationToken(token);
 
     const invitation = await this.prisma.membershipInvitation.create({
       data: {
@@ -120,7 +120,7 @@ export class MembershipInvitationService {
     });
 
     for (const candidate of candidates) {
-      if (await verifyInvitationToken(token, candidate.tokenHash)) {
+      if (verifyInvitationToken(token, candidate.tokenHash)) {
         return candidate;
       }
     }
