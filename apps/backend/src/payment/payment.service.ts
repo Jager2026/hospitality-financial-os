@@ -1,10 +1,12 @@
 import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { Payment, Restaurant } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import type { CreatePaymentDto } from "./dto/create-payment.schema";
+import { splitPlatformFee } from "./platform-fee.util";
 
 export interface CreatedPayment {
   id: string;
@@ -25,6 +27,7 @@ export class PaymentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
+    private readonly config: ConfigService,
   ) {}
 
   /** API_Contract.md, Create Payment. Creates a Stripe PaymentIntent as a direct charge on the
@@ -49,13 +52,20 @@ export class PaymentService {
 
     const amount = BigInt(dto.amount);
 
-    // No applicationFeeAmount: Sprint 5's platform-fee percentage is still an open founder
-    // decision (tracked separately, not guessed) — this creates a $0-platform-fee PaymentIntent
-    // today, an honest "not yet decided" state, not a fabricated split.
+    // Founder decision: DEFAULT_PLATFORM_FEE_BASIS_POINTS (100 = 1.00%), a percentage of
+    // Restaurant Revenue only — the same split computed again from Payment.amount in
+    // WebhooksService's payment_intent.succeeded handler, so the amount actually deducted by
+    // Stripe (application_fee_amount) and the amount posted to PLATFORM_FEE_REVENUE in the
+    // Ledger are computed by the identical function, never two independent numbers that could
+    // drift apart.
+    const basisPoints = this.config.getOrThrow<number>("DEFAULT_PLATFORM_FEE_BASIS_POINTS");
+    const { feeAmount } = splitPlatformFee(amount, basisPoints);
+
     const intent = await this.stripe.createPaymentIntent({
       stripeAccountId: restaurant.stripeAccountId,
       amount,
       currency: restaurant.currency,
+      applicationFeeAmount: feeAmount,
     });
 
     const payment = await this.prisma.payment.create({

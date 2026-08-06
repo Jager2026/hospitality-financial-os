@@ -1,8 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type Stripe from "stripe";
 import { AppException } from "../common/exceptions/app.exception";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { splitPlatformFee } from "../payment/platform-fee.util";
 import { RestaurantService } from "../restaurant/restaurant.service";
 import { StripeService } from "../stripe/stripe.service";
 
@@ -20,6 +22,7 @@ export class WebhooksService {
     private readonly stripe: StripeService,
     private readonly ledger: LedgerService,
     private readonly restaurantService: RestaurantService,
+    private readonly config: ConfigService,
   ) {}
 
   async handleEvent(rawBody: Buffer, signature: string | undefined): Promise<{ received: true }> {
@@ -99,12 +102,14 @@ export class WebhooksService {
   }
 
   /** ADR-015: the Ledger write happens here, asynchronously, driven by this webhook — never
-   * synchronously in POST /payments' response. No platform-fee split yet: Sprint 5's fee
-   * percentage is a separate, still-open founder decision (tracked separately, not guessed) — the
-   * full remitted amount posts to Restaurant Revenue Payable today, an honest "not yet decided"
-   * state, not a fabricated split. Payment.update + Transaction.create + the Ledger write are one
-   * atomic transaction (LedgerService's tx param) — a crash between them would otherwise leave a
-   * Transaction with no financial trail behind it. */
+   * synchronously in POST /payments' response. The platform-fee split (Founder decision,
+   * DEFAULT_PLATFORM_FEE_BASIS_POINTS) is computed by the SAME splitPlatformFee() call as
+   * PaymentService used at PaymentIntent creation time, on the same Payment.amount, so the amount
+   * Stripe actually deducted (application_fee_amount) and the amount posted here to
+   * PLATFORM_FEE_REVENUE are identical by construction, not two numbers that could drift apart.
+   * Payment.update + Transaction.create + the Ledger write are one atomic transaction
+   * (LedgerService's tx param) — a crash between them would otherwise leave a Transaction with no
+   * financial trail behind it. */
   private async handlePaymentIntentSucceeded(event: Stripe.Event): Promise<void> {
     const intent = event.data.object as Stripe.PaymentIntent;
     const payment = await this.prisma.payment.findFirst({
@@ -115,6 +120,9 @@ export class WebhooksService {
       return;
     }
     if (payment.status === "SUCCEEDED") return; // defensive no-op; claimEvent already dedupes the normal case
+
+    const basisPoints = this.config.getOrThrow<number>("DEFAULT_PLATFORM_FEE_BASIS_POINTS");
+    const { feeAmount, restaurantRevenue } = splitPlatformFee(payment.amount, basisPoints);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.payment.update({ where: { id: payment.id }, data: { status: "SUCCEEDED" } });
@@ -144,10 +152,24 @@ export class WebhooksService {
             {
               account: "RESTAURANT_REVENUE_PAYABLE",
               direction: "CREDIT",
-              amount: payment.amount,
+              amount: restaurantRevenue,
               currency: payment.currency,
               restaurantId: payment.restaurantId,
             },
+            // Omitted entirely when feeAmount is 0 (e.g. a gross amount small enough that basis-
+            // point truncation rounds the fee down to nothing) — a zero-amount LedgerLine is
+            // noise, not a fact worth recording, and the entry still balances without it.
+            ...(feeAmount > 0n
+              ? [
+                  {
+                    account: "PLATFORM_FEE_REVENUE" as const,
+                    direction: "CREDIT" as const,
+                    amount: feeAmount,
+                    currency: payment.currency,
+                    restaurantId: payment.restaurantId,
+                  },
+                ]
+              : []),
           ],
         },
         tx,

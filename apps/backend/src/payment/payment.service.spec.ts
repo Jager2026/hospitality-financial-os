@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ConfigService } from "@nestjs/config";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { PrismaService } from "../prisma/prisma.service";
@@ -59,7 +60,8 @@ describe("PaymentService (real database)", () => {
     });
     waiterRoleId = waiterRole.id;
 
-    service = new PaymentService(prisma, fakeStripe);
+    const fakeConfig = { getOrThrow: () => 100 } as unknown as ConfigService; // 1.00%, Founder decision
+    service = new PaymentService(prisma, fakeStripe, fakeConfig);
   });
 
   afterAll(async () => {
@@ -181,7 +183,11 @@ describe("PaymentService (real database)", () => {
     expect(stored?.processor).toBe("stripe");
 
     expect(fakeStripe.createPaymentIntent).toHaveBeenCalledWith(
-      expect.objectContaining({ stripeAccountId: restaurant.stripeAccountId, amount: 1550n }),
+      expect.objectContaining({
+        stripeAccountId: restaurant.stripeAccountId,
+        amount: 1550n,
+        applicationFeeAmount: 15n, // 1% of 1550, Founder decision (100 basis points)
+      }),
     );
   });
 

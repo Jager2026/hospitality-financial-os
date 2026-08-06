@@ -55,7 +55,9 @@ describe("WebhooksService (real database, real signature verification)", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     ledger = new LedgerService(prisma);
-    service = new WebhooksService(prisma, stripe, ledger, fakeRestaurantService);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fakeConfig = { getOrThrow: () => 100 } as any; // 1.00%, Founder decision
+    service = new WebhooksService(prisma, stripe, ledger, fakeRestaurantService, fakeConfig);
   });
 
   afterAll(async () => {
@@ -127,7 +129,7 @@ describe("WebhooksService (real database, real signature verification)", () => {
     });
   });
 
-  it("payment_intent.succeeded: marks Payment SUCCEEDED, creates a Transaction, posts a balanced JournalEntry", async () => {
+  it("payment_intent.succeeded: marks Payment SUCCEEDED, creates a Transaction, posts a balanced 3-line JournalEntry with the platform fee split", async () => {
     const restaurant = await seedOrgRestaurant();
     const piId = `pi_${randomUUID()}`;
     const payment = await seedPayment(restaurant.id, 1550n, piId);
@@ -148,13 +150,20 @@ describe("WebhooksService (real database, real signature verification)", () => {
     const lines = await prisma.ledgerLine.findMany({
       where: { journalEntry: { transactionId: transaction?.id } },
     });
-    expect(lines).toHaveLength(2);
+    // 1550 at 100 basis points (1.00%, Founder decision) = 15 fee, 1535 restaurant revenue.
+    expect(lines).toHaveLength(3);
     const debit = lines.find((l) => l.direction === "DEBIT");
-    const credit = lines.find((l) => l.direction === "CREDIT");
+    const revenue = lines.find((l) => l.account === "RESTAURANT_REVENUE_PAYABLE");
+    const fee = lines.find((l) => l.account === "PLATFORM_FEE_REVENUE");
     expect(debit?.account).toBe("PROCESSOR_CLEARING");
     expect(debit?.amount).toBe(1550n);
-    expect(credit?.account).toBe("RESTAURANT_REVENUE_PAYABLE");
-    expect(credit?.amount).toBe(1550n); // no fee split yet — full amount to Restaurant Revenue
+    expect(revenue?.direction).toBe("CREDIT");
+    expect(revenue?.amount).toBe(1535n);
+    expect(fee?.direction).toBe("CREDIT");
+    expect(fee?.amount).toBe(15n);
+    // Balanced: one debit equals the sum of both credits, exactly (no drift — platform-fee.util's
+    // own subtraction-derived split guarantees this, verified again here at the Ledger-write level).
+    expect((revenue?.amount ?? 0n) + (fee?.amount ?? 0n)).toBe(debit?.amount);
   });
 
   it("deduplicates by Stripe event id: replaying the exact same event does not create a second Transaction", async () => {
