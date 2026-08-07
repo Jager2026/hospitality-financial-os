@@ -262,4 +262,28 @@ describe("RestaurantService (real database)", () => {
       code: "RESTAURANT_NOT_FOUND",
     });
   });
+
+  it("refreshStripeStatusByAccountId: re-derives onboarding_status from a live capability re-fetch, keyed by stripeAccountId (Sprint 5, account.updated webhook entry point)", async () => {
+    const ownerUserId = await createTestUser();
+    const restaurant = await service.create(baseDto(), ownerUserId, null);
+    expect(restaurant.onboardingStatus).toBe("NOT_STARTED"); // fakeStripe's default getAccountStatus mock
+
+    fakeStripe.getAccountStatus.mockResolvedValueOnce({
+      cardPaymentsStatus: "active",
+      payoutsStatus: "active",
+      requirementsDue: [],
+    });
+
+    const updated = await service.refreshStripeStatusByAccountId(
+      restaurant.stripeAccountId as string,
+    );
+
+    expect(updated?.onboardingStatus).toBe("COMPLETE");
+    expect(updated?.cardPaymentsStatus).toBe("active");
+  });
+
+  it("refreshStripeStatusByAccountId: an unknown stripeAccountId returns null rather than throwing", async () => {
+    const result = await service.refreshStripeStatusByAccountId("acct_does_not_exist");
+    expect(result).toBeNull();
+  });
 });

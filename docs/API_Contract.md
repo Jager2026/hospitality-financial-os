@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.3.0
+version: 2.4.0
 status: Active
 classification: Internal
 owner: Founder
@@ -36,6 +36,8 @@ RESTful · JSON Only · HTTPS Only · Stateless · Versioned · Predictable · C
 `/api/v1`
 
 Every future breaking release creates `/api/v2`. Never modify an existing version.
+
+Two routes stay unprefixed, deliberately: `GET /health` (infra-facing — Docker healthcheck, load balancers, not part of the versioned client contract) and `POST /webhooks/stripe` (Sprint 5 — a fixed integration point Stripe itself calls, same reasoning as `/health`, not a client-facing REST resource that evolves under `/api/v1` → `/api/v2`).
 
 ---
 
@@ -144,7 +146,7 @@ PATCH /memberships/{id}/disable
 # PAYMENTS
 
 ## Create Payment
-POST /payments — **requires** `Idempotency-Key` header (ADR-004). Creates a payment session with the processor.
+POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `restaurant_id`, `amount` (minor units, ADR-001). `currency` and `payment_method` are deliberately not client fields — `currency` always mirrors the Restaurant's own fixed Stripe-account currency (DATABASE.md, Restaurant Rules), and `payment_method` is server-set (`"card"`, the only method this MVP scope supports) rather than trusted from the client before Stripe has confirmed anything. Creates a Stripe PaymentIntent as a direct charge on the Restaurant's own connected account (ADR-014's Sprint 5 addendum) and a `PENDING` Payment row. Response: `id`, `restaurant_id`, `amount`, `currency`, `status`, `client_secret` — the frontend confirms via Stripe.js using `client_secret` (ADR-015); this endpoint never confirms the payment itself, and never writes a Ledger entry — that happens later, asynchronously, driven by the `payment_intent.succeeded` webhook (see Incoming Webhooks below).
 
 ## Payment Details
 GET /payments/{id}
@@ -310,9 +312,9 @@ GET /memberships?status=active
 
 # Error Codes
 
-AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · UNKNOWN_ERROR
+AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
 
-Codes never change. Messages may be translated.
+Codes never change. Messages may be translated. (`VALIDATION_ERROR`/`NOT_FOUND` were already live in `ErrorCode` and in active use — e.g. every Zod validation failure — but missing from this list; added here to close that gap, found while adding `PAYMENT_NOT_FOUND` for Sprint 5. `NOT_FOUND` is the generic fallback; prefer a dedicated `_NOT_FOUND` code per resource where one exists.)
 
 ---
 

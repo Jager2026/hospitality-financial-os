@@ -13,6 +13,12 @@ const envSchema = z.object({
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(604_800), // 7 days
   STRIPE_SECRET_KEY: z.string().min(1, "STRIPE_SECRET_KEY is required"),
   STRIPE_WEBHOOK_SECRET: z.string().min(1, "STRIPE_WEBHOOK_SECRET is required"),
+  // Sprint 5, Founder decision: 100 = 1.00%. Basis points (integer), not a percentage float — same
+  // reasoning as ADR-001's BIGINT minor units for money itself. Required, no .default(): a fee
+  // rate is a business decision, never silently assumed. "Default" in the name anticipates a
+  // later per-Restaurant override (ADR-014 addendum) — this is the platform-wide fallback, not
+  // necessarily the last word forever.
+  DEFAULT_PLATFORM_FEE_BASIS_POINTS: z.coerce.number().int().min(0).max(10_000),
   // Where Stripe redirects the browser after onboarding (Account Links refresh_url/return_url) —
   // the Restaurant Portal, not this API. No frontend route exists at this path yet (Sprint 3 here
   // is backend-only); the redirect target is real, the page behind it isn't, same kind of gap as

@@ -22,6 +22,11 @@ jobs:
       # every test that touches it), so these never need to be working credentials, only present.
       STRIPE_SECRET_KEY: sk_test_ci_placeholder_not_a_real_key
       STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_real_secret
+      # Sprint 5, ADR-021: required, no .default() in env.validation.ts (a fee rate is a business
+      # decision, never silently assumed at boot) — CI needs a real value present for the app to
+      # start at all, same reasoning as the Stripe placeholders above. The actual rate (100 = 1.00%)
+      # doesn't matter for CI correctness; platform-fee.util.spec.ts tests the arithmetic directly.
+      DEFAULT_PLATFORM_FEE_BASIS_POINTS: "100"
 
     services:
       postgres:

@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.5.0
+version: 2.6.0
 status: Active
 classification: Internal
 owner: Founder
@@ -303,7 +303,7 @@ IdempotencyKey
 
 **Fields:** key, endpoint_scope, request_fingerprint, status (`in_progress` / `completed` / `failed`), response_snapshot, created_at, expires_at
 
-**Rules:** A request reusing `key` with a matching `request_fingerprint` returns the stored `response_snapshot`. A mismatched fingerprint is rejected as a conflict, not silently processed. Operational table — rows may be purged after `expires_at`.
+**Rules:** A request reusing `key` with a matching `request_fingerprint` returns the stored `response_snapshot`. A mismatched fingerprint is rejected as a conflict, not silently processed. Operational table — rows may be purged after `expires_at`. Two distinct writers share this same table (Sprint 5): client HTTP requests key by the caller-supplied `Idempotency-Key` header, fingerprint-checked as above; incoming Stripe webhooks key by the provider's own event id instead (API_Contract.md, Idempotency) — `request_fingerprint` there is set to the event's `type`, since a fingerprint-mismatch conflict can't meaningfully happen for an id Stripe itself guarantees is unique.
 
 ---
 

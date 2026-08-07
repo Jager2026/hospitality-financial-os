@@ -1,8 +1,9 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from "@nestjs/common";
 import type { Request } from "express";
-import { Observable, from, of } from "rxjs";
-import { switchMap, tap, catchError } from "rxjs/operators";
+import { Observable, from, of, throwError } from "rxjs";
+import { switchMap, map, catchError } from "rxjs/operators";
 import { AppException } from "../exceptions/app.exception";
+import { IDEMPOTENT_REPLAY_FLAG } from "../http/idempotent-replay.flag";
 import { PrismaService } from "../../prisma/prisma.service";
 import { computeFingerprint } from "./fingerprint.util";
 
@@ -14,16 +15,13 @@ const KEY_TTL_MS = 24 * 60 * 60 * 1000; // 24h — API_Contract.md: "Keys expire
 // on any financial endpoint (first real use: Sprint 5's POST /payments). Not applied globally —
 // only financial endpoints require an Idempotency-Key at all.
 //
-// KNOWN ORDERING ISSUE, not yet fixed because nothing uses this interceptor yet — tracked as an
-// explicit Sprint 5 Definition of Done item in IMPLEMENTATION_PLAN.md, not just this comment:
-// global interceptors (AuditLogInterceptor,
-// ResponseInterceptor — app.module.ts APP_INTERCEPTOR) wrap *outside* a method-level
-// @UseInterceptors(IdempotencyInterceptor). That means on a replayed idempotent request (cached
-// response returned, handler never re-invoked), AuditLogInterceptor's `next.handle()` still
-// resolves and still writes an AuditLog row — logging a second "mutation" that didn't actually
-// happen. Before wiring this into a real controller, either have this interceptor mark the
-// request (e.g. a request-scoped flag AuditLogInterceptor checks) when serving a cached replay,
-// or move idempotency resolution ahead of the audit interceptor in the chain.
+// ORDERING FIX (Sprint 5 DoD: "A replayed idempotent request produces exactly one AuditLog row,
+// not two"): global interceptors (AuditLogInterceptor, ResponseInterceptor — app.module.ts
+// APP_INTERCEPTOR) wrap *outside* this method-level interceptor, so AuditLogInterceptor's own
+// tap() still runs on a replayed response. The COMPLETED branch below sets
+// IDEMPOTENT_REPLAY_FLAG on the request, synchronously, before emitting the cached response —
+// AuditLogInterceptor checks that flag in its own tap() and skips writing when it's set. See
+// idempotent-replay.flag.ts for why this is a request-scoped flag rather than a return value.
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
   constructor(private readonly prisma: PrismaService) {}
@@ -68,6 +66,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         }
 
         if (existing.status === "COMPLETED") {
+          (request as unknown as Record<string, unknown>)[IDEMPOTENT_REPLAY_FLAG] = true;
           return of(existing.responseSnapshot);
         }
 
@@ -85,18 +84,25 @@ export class IdempotencyInterceptor implements NestInterceptor {
     );
   }
 
+  /** Both branches AWAIT the status update before the response/error continues up the chain
+   * (switchMap, not a fire-and-forget `tap`/`void`) — a fast legitimate retry arriving right
+   * after this request finishes must see the final COMPLETED/FAILED status, not a stale
+   * IN_PROGRESS row that makes it wrongly hit the concurrent-duplicate 409 branch above. */
   private runHandler(next: CallHandler, key: string): Observable<unknown> {
     return next.handle().pipe(
-      tap((response) => {
-        void this.prisma.idempotencyKey.update({
-          where: { key },
-          data: { status: "COMPLETED", responseSnapshot: response },
-        });
-      }),
-      catchError((err) => {
-        void this.prisma.idempotencyKey.update({ where: { key }, data: { status: "FAILED" } });
-        throw err;
-      }),
+      switchMap((response) =>
+        from(
+          this.prisma.idempotencyKey.update({
+            where: { key },
+            data: { status: "COMPLETED", responseSnapshot: response },
+          }),
+        ).pipe(map(() => response)),
+      ),
+      catchError((err: unknown) =>
+        from(
+          this.prisma.idempotencyKey.update({ where: { key }, data: { status: "FAILED" } }),
+        ).pipe(switchMap(() => throwError(() => err))),
+      ),
     );
   }
 }

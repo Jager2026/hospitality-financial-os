@@ -1,8 +1,10 @@
 import { Injectable } from "@nestjs/common";
-import type { JournalEntry } from "@prisma/client";
+import type { JournalEntry, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { assertBalanced, assertCompensatingEntityMatchesType } from "./ledger-balance.util";
 import type { PostJournalEntryInput } from "./ledger.types";
+
+type LedgerTransactionClient = Prisma.TransactionClient;
 
 /**
  * The only module permitted to write a double-entry posting (SYSTEM_ARCHITECTURE.md, Business
@@ -15,13 +17,21 @@ import type { PostJournalEntryInput } from "./ledger.types";
 export class LedgerService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async postJournalEntry(input: PostJournalEntryInput): Promise<JournalEntry> {
+  /** `tx`, if given, composes this write into a transaction the CALLER already opened (Sprint 5:
+   * a webhook handler needs Payment.update + Transaction.create + this Ledger write to be one
+   * atomic unit — a crash between Transaction and JournalEntry would otherwise leave a Transaction
+   * with no financial trail behind it, exactly what ADR-002/ADR-003 exist to prevent). Omitted,
+   * this opens its own transaction exactly as before — every existing caller/test is unaffected. */
+  async postJournalEntry(
+    input: PostJournalEntryInput,
+    tx?: LedgerTransactionClient,
+  ): Promise<JournalEntry> {
     // Layer 1 (Sprint 0 audit §2): fail fast, before any database write.
     assertBalanced(input.lines);
     assertCompensatingEntityMatchesType(input);
 
-    return this.prisma.$transaction(async (tx) => {
-      const entry = await tx.journalEntry.create({
+    const run = async (client: LedgerTransactionClient): Promise<JournalEntry> => {
+      const entry = await client.journalEntry.create({
         data: {
           entryType: input.entryType,
           transactionId: input.transactionId,
@@ -44,7 +54,7 @@ export class LedgerService {
 
       // ADR-003: the OutboxEvent is written in the SAME transaction as the Ledger write, so a
       // crash between the two is impossible — either both commit or neither does.
-      await tx.outboxEvent.create({
+      await client.outboxEvent.create({
         data: {
           aggregateType: "JournalEntry",
           aggregateId: entry.id,
@@ -61,9 +71,14 @@ export class LedgerService {
       // the server rolled everything back — the row is correctly never persisted, but the caller
       // never learns the write failed, which is worse than an error: code downstream would treat
       // a silently-discarded JournalEntry as successfully posted.
-      await tx.$executeRawUnsafe("SET CONSTRAINTS ledger_line_balanced IMMEDIATE");
+      await client.$executeRawUnsafe("SET CONSTRAINTS ledger_line_balanced IMMEDIATE");
 
       return entry;
-    });
+    };
+
+    if (tx) {
+      return run(tx);
+    }
+    return this.prisma.$transaction(run);
   }
 }
