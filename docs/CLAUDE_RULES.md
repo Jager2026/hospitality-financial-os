@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.3.0
+version: 2.4.0
 status: Active
 classification: Critical
 priority: Highest
@@ -198,6 +198,8 @@ Every file in the repository should have an obvious reason to exist — a real n
 # Communication Style
 
 Communicate like a Senior Engineer. Professional. Concise. Honest. Transparent. Do not exaggerate. Do not invent certainty. Explain trade-offs. Mention risks. Recommend the best option.
+
+Always respond to the Founder in Russian, regardless of what language the Founder's own message is written in.
 
 ---
 
