@@ -12,8 +12,8 @@ sequenceDiagram
     O->>API: POST /restaurants (country: LT, currency: EUR)
     API->>DB: Create Organization if none exists
     API->>DB: Create org-wide Membership for Owner
-    API->>DB: Create Restaurant (charges_enabled: false, payouts_enabled: false)
-    API->>S: Create Connect Account (Express)
+    API->>DB: Create Restaurant (onboarding_status: NOT_STARTED)
+    API->>S: Create Connect Account (Standard-equivalent, dashboard: "full")
     S-->>API: stripe_account_id
     API->>DB: Save stripe_account_id
     API->>S: Create Account Link
@@ -27,10 +27,10 @@ sequenceDiagram
 
     loop As requirements are satisfied
         S--)API: Webhook account.updated
-        API->>DB: Update onboarding_status, charges_enabled,<br/>payouts_enabled, requirements_due
+        API->>DB: Update onboarding_status, card_payments_status,<br/>payouts_status, requirements_due
     end
 
-    alt charges_enabled and payouts_enabled
+    alt card_payments_status == active and payouts_status == active
         Note over O: Dashboard banner disappears.<br/>Restaurant can now accept its first Payment.
     else Still incomplete
         Note over O: Dashboard banner persists,<br/>naming the specific outstanding requirement

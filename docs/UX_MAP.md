@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.0.0
+version: 2.0.1
 status: Active
 classification: Internal
 owner: Founder
@@ -91,7 +91,7 @@ Questions answered: How much revenue today? How many transactions? How many tips
 
 If these questions cannot be answered within five seconds, the dashboard has failed.
 
-**New (ADR-009):** if this Restaurant's Stripe onboarding isn't complete — `charges_enabled` or `payouts_enabled` is false — the Dashboard leads with a single, unmissable banner instead of competing with the sections below: "Finish payment setup to start accepting cards," naming the specific outstanding requirement, with one button to resolve it. Everything else on this screen is secondary until that banner is gone.
+**New (ADR-009):** if this Restaurant's Stripe onboarding isn't complete — `card_payments_status` or `payouts_status` is not `active` — the Dashboard leads with a single, unmissable banner instead of competing with the sections below: "Finish payment setup to start accepting cards," naming the specific outstanding requirement, with one button to resolve it. Everything else on this screen is secondary until that banner is gone.
 
 **Dashboard Sections:** Today's Revenue · Today's Tips · Today's Transactions · Average Bill · Average Tip · Recent Payments · Top Waiters · Alerts · Quick Actions
 
@@ -149,7 +149,7 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 
 Restaurant Information · Business Details · Tax Information · Tip Configuration · Payment Configuration · Users · Permissions · Notifications · Integrations · Security
 
-**What changed (ADR-009):** Payment Configuration now includes the Stripe connection itself — connected account status, `charges_enabled`, `payouts_enabled`, and any outstanding requirements. This is the permanent home for what the Dashboard banner links to.
+**What changed (ADR-009):** Payment Configuration now includes the Stripe connection itself — connected account status, `card_payments_status`, `payouts_status`, and any outstanding requirements. This is the permanent home for what the Dashboard banner links to.
 
 ---
 
