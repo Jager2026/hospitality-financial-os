@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.7.0
+version: 1.7.1
 status: Active — twenty-one ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -318,7 +318,9 @@ Two directions were possible: make `User.password_hash` nullable and add invitat
 
 **Consequences:** No schema migration — the rate lives in config, not a table. `payment_intent.succeeded` now posts a 3-line `JournalEntry` (`PROCESSOR_CLEARING` debit = full amount; `RESTAURANT_REVENUE_PAYABLE` credit = amount minus fee; `PLATFORM_FEE_REVENUE` credit = fee, omitted entirely when it rounds to zero rather than posting a meaningless zero-amount line) instead of Sprint 5's earlier fee-independent 2-line version. Live-verified against a real payment: gross 10,000 minor units → `platform_fee_revenue` credit of exactly 100, `restaurant_revenue_payable` credit of exactly 9,900, summing to the debit exactly.
 
-**Known follow-up, not resolved by this decision, flagged rather than silently assumed:** `charge.refunded` / `charge.dispute.*` compensating entries (ADR-008/ADR-016) still reverse the **full** refunded/disputed amount out of `RESTAURANT_REVENUE_PAYABLE` — unchanged from before this ADR, and now a real question rather than a moot one: a full refund of a fee-bearing Transaction debits more from `RESTAURANT_REVENUE_PAYABLE` than that specific capture ever credited to it (the fee's share went to `PLATFORM_FEE_REVENUE`, not `RESTAURANT_REVENUE_PAYABLE`), which is fine at the level of each individual `JournalEntry` (every entry is still internally balanced, verified by the trigger) but means the *cumulative* `RESTAURANT_REVENUE_PAYABLE` balance for a fully-refunded, fee-bearing Transaction can go negative for that Transaction specifically. Whether the platform fee should be proportionally clawed back on refund (matching Stripe's own optional `refund_application_fee` behavior) is an open business question this ADR does not answer — Sprint 5's own task scope was the capture-side split and the rate itself, not refund/fee interaction. Revisit before this matters in practice (the first real refund against a fee-bearing payment).
+**Known follow-up, not resolved by this decision, flagged rather than silently assumed (tracked in `THREAT_MODEL.md`, "Open, Not Answered"):** `charge.refunded` / `charge.dispute.*` compensating entries (ADR-008/ADR-016) still reverse the **full** refunded/disputed amount out of `RESTAURANT_REVENUE_PAYABLE` — unchanged from before this ADR, and now a real question rather than a moot one: a full refund of a fee-bearing Transaction debits more from `RESTAURANT_REVENUE_PAYABLE` than that specific capture ever credited to it (the fee's share went to `PLATFORM_FEE_REVENUE`, not `RESTAURANT_REVENUE_PAYABLE`), which is fine at the level of each individual `JournalEntry` (every entry is still internally balanced, verified by the trigger) but means the *cumulative* `RESTAURANT_REVENUE_PAYABLE` balance for a fully-refunded, fee-bearing Transaction can go negative for that Transaction specifically.
+
+**Founder's stated direction, not yet implemented:** the platform fee should be proportionally clawed back on refund, matching Stripe's own optional `refund_application_fee` parameter — the eventual answer is known, Sprint 5's own task scope simply didn't include building it (capture-side split and the rate itself only, not refund/fee interaction). Revisit before this matters in practice — the first real refund against a fee-bearing payment.
 
 ---
 
