@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.0.0
+version: 1.1.0
 status: Active
 classification: Critical
 owner: Founder
@@ -105,6 +105,9 @@ Distinct from Stripe itself being down: Stripe is reachable, but the customer's 
 
 ## Webhook and client-side confirmation diverging by more than the expected lag
 ADR-015 already establishes the *normal* case: the customer's receipt shows immediately (client-side), the Ledger write happens asynchronously via webhook a moment later — an intended, short eventual-consistency gap, not a defect. Genuinely open: what happens if that gap grows far past normal (webhook lost, delayed by Stripe, or never arrives at all) — does the customer's receipt ever get contradicted, does staff get an alert, is there a reconciliation sweep. ADR-015 answers the expected case; it does not answer the pathological one, and no code answers it either yet.
+
+## Whether the platform fee is clawed back on refund
+See ADR-021's own "Known follow-up" and "Founder's stated direction" — a real question surfaced by Sprint 5's fee split, not yet answered in code.
 
 ---
 
