@@ -15,7 +15,8 @@
     "prisma:validate": "prisma validate",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:format": "prisma format",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",
