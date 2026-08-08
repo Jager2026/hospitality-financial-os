@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.2.0
+version: 2.2.1
 status: Active
 classification: Critical
 priority: Highest
@@ -105,7 +105,7 @@ Definition of Done: Owner can register. Owner can login. Protected routes work. 
 
 Renamed from Restaurant Module (ADR-005).
 
-Tasks: Create Restaurant (auto-creates an Organization if the user has none), Add Restaurant to Existing Organization, Update Restaurant, Delete Restaurant, Restaurant Settings, Restaurant Profile, Restaurant Validation, Stripe Connect account creation and onboarding flow — `stripe_account_id`, `onboarding_status`, `charges_enabled`, `payouts_enabled`, `requirements_due` (ADR-009), Currency selection at creation, Tests.
+Tasks: Create Restaurant (auto-creates an Organization if the user has none), Add Restaurant to Existing Organization, Update Restaurant, Delete Restaurant, Restaurant Settings, Restaurant Profile, Restaurant Validation, Stripe Connect account creation and onboarding flow — `stripe_account_id`, `onboarding_status`, `card_payments_status`, `payouts_status`, `requirements_due` (ADR-009), Currency selection at creation, Tests.
 
 Definition of Done: Restaurant exists. Restaurant editable. Restaurant displayed. Owner sees Stripe onboarding status and any outstanding requirements.
 
