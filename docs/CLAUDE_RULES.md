@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.4.0
+version: 2.4.1
 status: Active
 classification: Critical
 priority: Highest
@@ -134,6 +134,8 @@ Business Logic Review. Architecture Review. Security Review. Performance Review.
 If one review fails, the Pull Request is incomplete.
 
 Architecture Review, specifically, for any new NestJS module that uses a Guard (`@UseGuards(...)`): confirm the module actually imports whatever module provides that Guard's own constructor dependencies, not just that the Guard is referenced. A Guard compiles and typechecks fine with a missing import — it only fails at runtime, when Nest tries to resolve the Guard's dependencies and can't find them in that module's scope. This is not hypothetical: `OrganizationModule` and `RestaurantModule` (Sprint 3) both used `JwtAuthGuard` without importing `AuthModule`, and the first sign of it was the app refusing to start, not a compile error or a test failure — `pnpm run test` had already passed because no test in either module actually bootstrapped a real Nest application context, only the individual service against a real database with the Guard's dependencies faked out entirely. Caught by starting the real app and hitting a real endpoint, not by the test suite.
+
+Testing Review, specifically, for a CI failure that follows one already diagnosed this sprint: re-derive the cause from the real log or annotations for *this* failure, every time — never from resemblance to the prior incident. Three separate CI failures in one sprint each looked the same from the outside (a red check, a short runtime, a couple of annotations) and had three different root causes: an unawaited write in `AuditLogInterceptor` racing the HTTP response, a non-atomic Prisma `upsert()` racing across parallel test-file workers seeding the same `Currency`/`Role` rows, and a fully deterministic ESLint rule rejecting a Next.js-generated file. The first two were runtime races; the third wasn't a race at all. Assuming "this is probably the same class of bug as last time" would have produced the wrong fix for at least two of the three.
 
 ---
 
