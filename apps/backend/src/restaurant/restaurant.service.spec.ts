@@ -32,45 +32,15 @@ describe("RestaurantService (real database)", () => {
 
   beforeAll(async () => {
     await prisma.$connect();
-    await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
 
-    const restaurantCreate = await prisma.permission.upsert({
-      where: { name: "restaurant.create" },
-      update: {},
-      create: { name: "restaurant.create", description: "Create a new Restaurant" },
-    });
-    const restaurantEdit = await prisma.permission.upsert({
-      where: { name: "restaurant.edit" },
-      update: {},
-      create: { name: "restaurant.edit", description: "Edit Restaurant details and settings" },
-    });
-
-    const ownerRole = await prisma.role.upsert({
-      where: { name: "Owner" },
-      update: {},
-      create: { name: "Owner", description: "Full control" },
-    });
+    // Currency/Role/Permission/RolePermission rows are seeded once, globally, before any spec
+    // file runs — see test/global-setup.ts for why (a real cross-file upsert race, not a
+    // hypothetical). Looked up here, never written, so this file can't race another one seeding
+    // the same rows.
+    const ownerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Owner" } });
     ownerRoleId = ownerRole.id;
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: ownerRole.id, permissionId: restaurantCreate.id } },
-      update: {},
-      create: { roleId: ownerRole.id, permissionId: restaurantCreate.id },
-    });
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: ownerRole.id, permissionId: restaurantEdit.id } },
-      update: {},
-      create: { roleId: ownerRole.id, permissionId: restaurantEdit.id },
-    });
 
-    const waiterRole = await prisma.role.upsert({
-      where: { name: "Waiter" },
-      update: {},
-      create: { name: "Waiter", description: "Restaurant staff member" },
-    });
+    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
     waiterRoleId = waiterRole.id;
 
     const moduleRef = await Test.createTestingModule({

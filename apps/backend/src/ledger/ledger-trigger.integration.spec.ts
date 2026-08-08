@@ -25,11 +25,6 @@ describe("ledger_line_balanced trigger (real database, bypassing LedgerService)"
 
   beforeAll(async () => {
     await prisma.$connect();
-    await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
   });
 
   afterAll(async () => {

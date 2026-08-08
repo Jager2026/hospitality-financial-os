@@ -27,37 +27,15 @@ describe("PaymentService (real database)", () => {
 
   beforeAll(async () => {
     await prisma.$connect();
-    await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
 
-    const paymentsManage = await prisma.permission.upsert({
-      where: { name: "payments.manage" },
-      update: {},
-      create: { name: "payments.manage", description: "View and manage payment activity" },
-    });
-
-    const managerRole = await prisma.role.upsert({
-      where: { name: "Manager" },
-      update: {},
-      create: { name: "Manager", description: "Day-to-day operational control of one Restaurant" },
-    });
+    // Currency/Role/Permission/RolePermission rows are seeded once, globally, before any spec
+    // file runs — see test/global-setup.ts for why (a real cross-file upsert race, not a
+    // hypothetical). Looked up here, never written, so this file can't race another one seeding
+    // the same rows.
+    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
     managerRoleId = managerRole.id;
-    await prisma.rolePermission.upsert({
-      where: {
-        roleId_permissionId: { roleId: managerRoleId, permissionId: paymentsManage.id },
-      },
-      update: {},
-      create: { roleId: managerRoleId, permissionId: paymentsManage.id },
-    });
 
-    const waiterRole = await prisma.role.upsert({
-      where: { name: "Waiter" },
-      update: {},
-      create: { name: "Waiter", description: "Restaurant staff member" },
-    });
+    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
     waiterRoleId = waiterRole.id;
 
     const fakeConfig = { getOrThrow: () => 100 } as unknown as ConfigService; // 1.00%, Founder decision
