@@ -1,6 +1,6 @@
 ---
 title: INDEX
-version: 1.0.0
+version: 1.0.1
 status: Active
 classification: Internal
 owner: Founder
@@ -20,7 +20,7 @@ Regenerate by hand when a doc's version bumps or a new doc is added — it isn't
 | [CLAUDE_RULES.md](CLAUDE_RULES.md) | 2.4.0 | Behavioral and values contract for Claude as AI Technical Co-Founder — engineering culture, review standards, communication rules. Byte-identical to root `CLAUDE.md` per ADR-011. |
 | [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | 1.7.1 | The full ADR log — twenty-one accepted architecture decisions, each with context, decision, and consequences; the canonical record of *why*, including in-place revisions to earlier decisions (e.g. ADR-009, ADR-014). |
 | [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) | 2.0.0 | The system's components, modules, and how they fit together — the technical shape the ADRs decided into. |
-| [DATABASE.md](DATABASE.md) | 2.6.0 | Every entity, field, and relationship in the data model — the source `schema.prisma` is translated from. |
+| [DATABASE.md](DATABASE.md) | 2.6.1 | Every entity, field, and relationship in the data model — the source `schema.prisma` is translated from. |
 | [API_Contract.md](API_Contract.md) (title: API_SPECIFICATION) | 2.4.0 | Every REST endpoint — request/response shape, auth requirements, rate limits — the contract the frontend and backend both build against. |
 | [UX_MAP.md](UX_MAP.md) | 2.0.1 | Every screen, navigation path, and interaction in the product, and what changed on each screen as a result of specific ADRs. |
 | [DOMAIN_GLOSSARY.md](DOMAIN_GLOSSARY.md) | 1.0.0 | One-page dictionary of project-specific terms and confusable pairs, compiled from DATABASE.md/ARCHITECTURE_DECISIONS.md/MASTERPLAN.md — never a new decision of its own. |
