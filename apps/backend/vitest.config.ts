@@ -6,6 +6,7 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.spec.ts"],
     setupFiles: ["./test/setup.ts"],
+    globalSetup: ["./test/global-setup.ts"],
   },
   plugins: [
     // esbuild (vitest's default TS transform) doesn't emit `design:paramtypes` decorator
