@@ -8,7 +8,7 @@ import {
 import { Reflector } from "@nestjs/core";
 import { randomUUID } from "node:crypto";
 import { PinoLogger } from "nestjs-pino";
-import { Observable, catchError, tap, throwError } from "rxjs";
+import { Observable, catchError, from, map, of, switchMap, throwError } from "rxjs";
 import { AUDIT_ENTITY_KEY } from "../decorators/audit-entity.decorator";
 import { AppException } from "../exceptions/app.exception";
 import { AUDIT_LOG_WRITTEN_FLAG } from "../http/audit-log-written.flag";
@@ -20,8 +20,8 @@ import { PrismaService } from "../../prisma/prisma.service";
 // ADR-010 / SYSTEM_ARCHITECTURE.md: "a shared interceptor applied to all mutating endpoints —
 // not a utility each feature must remember to call." Applied globally in main.ts.
 //
-// Covers both channels: `tap` for a successful mutation, `catchError` for one that fails after
-// reaching this far — thrown from a Pipe or from inside the handler/service itself. A failure
+// Covers both channels: `switchMap` for a successful mutation, `catchError` for one that fails
+// after reaching this far — thrown from a Pipe or from inside the handler/service itself. A failure
 // thrown by a Guard (JwtAuthGuard, PermissionsGuard, ThrottlerGuard) never reaches either
 // operator: NestJS runs Guards before Interceptors, so a Guard rejection short-circuits before
 // `intercept()` is ever called (confirmed against this codebase's own PermissionsGuard comment
@@ -53,20 +53,28 @@ export class AuditLogInterceptor implements NestInterceptor {
       request.path;
 
     return next.handle().pipe(
-      tap((data) => {
+      // AWAITS the write (switchMap, not a fire-and-forget `tap`/`void`) — found via a real CI
+      // failure (not a hypothetical): under load, the HTTP response could reach the client before
+      // this write landed, so a test asserting on the row immediately after `await request(...)`
+      // could observe zero rows. Same class of bug, same fix, as IdempotencyInterceptor's own
+      // runHandler() — see that class's doc comment.
+      switchMap((data) => {
         // IdempotencyInterceptor (route-level, wraps INSIDE this one) sets this flag before
         // emitting a cached response instead of re-invoking the handler — the mutation this row
         // would describe already happened, and was already logged, on the original request.
-        if ((request as unknown as Record<string, unknown>)[IDEMPOTENT_REPLAY_FLAG]) return;
-        void this.writeSuccess(request, entity, data);
+        if ((request as unknown as Record<string, unknown>)[IDEMPOTENT_REPLAY_FLAG]) {
+          return of(data);
+        }
+        return from(this.writeSuccess(request, entity, data)).pipe(map(() => data));
       }),
       catchError((err: unknown) => {
-        // Set synchronously, before the (async, unawaited) write below, so it's visible to
-        // AllExceptionsFilter — which runs right after this callback returns — regardless of
-        // whether the write itself has finished yet.
+        // Set synchronously, before the write below, so it's visible to AllExceptionsFilter —
+        // which runs only once this observable actually errors, i.e. after the write below has
+        // already been awaited — regardless of whether it's reading the flag "in time".
         (request as unknown as Record<string, unknown>)[AUDIT_LOG_WRITTEN_FLAG] = true;
-        void this.writeFailure(request, entity, err);
-        return throwError(() => err);
+        return from(this.writeFailure(request, entity, err)).pipe(
+          switchMap(() => throwError(() => err)),
+        );
       }),
     );
   }
