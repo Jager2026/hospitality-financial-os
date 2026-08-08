@@ -13,11 +13,6 @@ describe("LedgerService (real database)", () => {
 
   beforeAll(async () => {
     await prisma.$connect();
-    await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
   });
 
   afterAll(async () => {

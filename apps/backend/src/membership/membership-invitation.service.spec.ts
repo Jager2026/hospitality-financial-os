@@ -16,11 +16,9 @@ describe("MembershipInvitationService (real database)", () => {
   beforeAll(async () => {
     await prisma.$connect();
 
-    const role = await prisma.role.upsert({
-      where: { name: "Waiter" },
-      update: {},
-      create: { name: "Waiter", description: "Restaurant staff member" },
-    });
+    // Role/Permission rows are seeded once, globally, before any spec file runs — see
+    // test/global-setup.ts. Looked up here, never written.
+    const role = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
     roleId = role.id;
 
     const organization = await prisma.organization.create({ data: { name: "Invite Test Org" } });
