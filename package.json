@@ -18,7 +18,8 @@
     "test": "pnpm --recursive run test",
     "prisma:generate": "pnpm --filter backend run prisma:generate",
     "prisma:validate": "pnpm --filter backend run prisma:validate",
-    "prisma:migrate:deploy": "pnpm --filter backend run prisma:migrate:deploy"
+    "prisma:migrate:deploy": "pnpm --filter backend run prisma:migrate:deploy",
+    "db:reset": "pnpm --filter backend run db:reset"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",

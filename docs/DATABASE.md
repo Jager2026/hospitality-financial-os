@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.6.0
+version: 2.6.1
 status: Active
 classification: Internal
 owner: Founder
@@ -398,6 +398,14 @@ Soft delete where the business needs recovery: `Organization`, `Restaurant`, `Us
 Never soft delete — permanent financial history: `Payment`, `Transaction`, `JournalEntry`, `LedgerLine`, `Tip`, `Refund`, `Chargeback`, `Adjustment`, `AuditLog`.
 
 Purge on a retention schedule — operational, not financial history: `OutboxEvent` (after `published_at` + N days), `IdempotencyKey` (after `expires_at`), `MembershipInvitation` (after `expires_at`, once accepted or expired).
+
+---
+
+# Local Development: Resetting to a Clean Seed
+
+`pnpm db:reset` (root) or `pnpm run db:reset` (`apps/backend`) drops the local database, reapplies every migration from scratch, and runs `prisma/seed.ts` — a thin wrapper around Prisma's own `prisma migrate reset --force`. The seed script itself is idempotent (`upsert`, not `create`): it repopulates only reference data — `Currency` (ISO 4217, ADR-001) and the RBAC seed (`Role` / `Permission` / `RolePermission`) — never anything transactional.
+
+This exists because manual verification during development (live HTTP + SQL checks, per this document's own Definition of Done standard) leaves behind test Organizations, Restaurants, Payments, and Ledger entries that accumulate silently across a session and get rediscovered, confusingly, in the next one. Prisma's reset primitive was chosen over a hand-written cleanup script deliberately: an ad hoc `DELETE` script has to get every foreign-key ordering right by hand (`ledger_line` before `journal_entry`, `refund` before `transaction`, and so on) and is one missed dependency away from a `CHECK` constraint violation — dropping and replaying the schema sidesteps that entire class of mistake.
 
 ---
 
