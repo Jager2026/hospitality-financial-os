@@ -1,6 +1,6 @@
 ---
 title: SEQUENCE_DIAGRAMS
-version: 1.0.0
+version: 1.0.1
 status: Active
 classification: Internal
 owner: Founder
@@ -39,7 +39,7 @@ Also resolved in the diagram itself: duplicate webhook delivery, where the idemp
 
 ## Restaurant Onboarding
 
-Settles which Stripe Connect account type to use — Express. Stripe hosts the KYC and bank-details forms directly, so none of that ever touches our servers, and a second location repeats the entire sequence independently (ADR-009 already established the independence; this diagram makes the repetition explicit). See ADR-014.
+Settles which Stripe Connect account type to use — Standard-equivalent (`dashboard: "full"`, revised from the original Express choice once ADR-014's liability finding landed; see that ADR's own revision for why). Stripe hosts the KYC and bank-details forms directly either way, so none of that ever touches our servers, and a second location repeats the entire sequence independently (ADR-009 already established the independence; this diagram makes the repetition explicit). See ADR-014.
 
 ## Refund / Chargeback
 
@@ -51,7 +51,7 @@ Surfaced a real gap: the six-account chart of accounts in `DATABASE.md` (ADR-002
 
 Three genuine architecture decisions came out of walking through the timing, not from re-describing decisions already made:
 
-- **ADR-014** — Stripe Connect account type: Express
+- **ADR-014** — Stripe Connect account type: Standard-equivalent (`dashboard: "full"`)
 - **ADR-015** — Receipt timing: client-side confirmation; Ledger and projections update asynchronously
 - **ADR-016** — Chargeback handling: provisional-loss-then-reverse, no dedicated held-funds account for MVP
 
