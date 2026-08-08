@@ -44,11 +44,6 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
 
   beforeAll(async () => {
     await prisma.$connect();
-    await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
 
     const fakeConfig = {
       getOrThrow: (key: string) => {

@@ -43,11 +43,6 @@ describe("WebhooksService (real database, real signature verification)", () => {
 
   beforeAll(async () => {
     await prisma.$connect();
-    await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
 
     const stripe = new StripeService({
       getOrThrow: (key: string) =>

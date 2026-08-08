@@ -8,37 +8,20 @@ describe("MembershipService (real database)", () => {
   const prisma = new PrismaService();
   const service = new MembershipService(prisma);
   let waiterRoleId: string;
-  let managePermissionId: string;
   let managerRoleId: string;
 
   beforeAll(async () => {
     await prisma.$connect();
 
-    const waiterRole = await prisma.role.upsert({
-      where: { name: "Waiter" },
-      update: {},
-      create: { name: "Waiter", description: "Restaurant staff member" },
-    });
+    // Currency/Role/Permission/RolePermission rows are seeded once, globally, before any spec
+    // file runs — see test/global-setup.ts for why (a real cross-file upsert race, not a
+    // hypothetical). Looked up here, never written, so this file can't race another one seeding
+    // the same rows.
+    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
     waiterRoleId = waiterRole.id;
 
-    const managePermission = await prisma.permission.upsert({
-      where: { name: "membership.manage" },
-      update: {},
-      create: { name: "membership.manage", description: "Edit or disable an existing Membership" },
-    });
-    managePermissionId = managePermission.id;
-
-    const managerRole = await prisma.role.upsert({
-      where: { name: "Manager" },
-      update: {},
-      create: { name: "Manager", description: "Day-to-day operational control of one Restaurant" },
-    });
+    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
     managerRoleId = managerRole.id;
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: managerRoleId, permissionId: managePermissionId } },
-      update: {},
-      create: { roleId: managerRoleId, permissionId: managePermissionId },
-    });
   });
 
   afterAll(async () => {
@@ -49,11 +32,7 @@ describe("MembershipService (real database)", () => {
     const organization = await prisma.organization.create({
       data: { name: "Membership Test Org" },
     });
-    const currency = await prisma.currency.upsert({
-      where: { code: "EUR" },
-      update: {},
-      create: { code: "EUR", exponent: 2, name: "Euro" },
-    });
+    const currency = await prisma.currency.findUniqueOrThrow({ where: { code: "EUR" } });
     async function makeRestaurant(name: string) {
       return prisma.restaurant.create({
         data: {
