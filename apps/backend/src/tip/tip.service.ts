@@ -72,6 +72,7 @@ export class TipService {
         // filter, this query double-counted every tip: once from PAYMENT_CAPTURED's general
         // credit, once from TIP_ALLOCATED's real, person-attributed one. findMine() never had this
         // bug — its own membershipId: { in: ... } filter already excludes null incidentally.
+        // Regression test: tip.service.spec.ts.
         membershipId: { not: null },
         journalEntry: { transaction: { restaurantId } },
       },

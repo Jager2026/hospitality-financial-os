@@ -71,7 +71,7 @@ Restaurant
 
 `card_payments_status` and `payouts_status` mirror Stripe's own v2 capability-status strings (`configuration.merchant.capabilities.card_payments.status` and `configuration.merchant.capabilities.stripe_balance.payouts.status` respectively — confirmed against a real API response, ADR-009's revision) — not booleans, and deliberately not a Postgres enum either, since this vocabulary belongs to Stripe and can grow without a migration on our side. `requirements_due` stores Stripe's real `requirements.entries[]` array as-is (JSON) — a list of requirement objects, not requirement-name strings.
 
-`tip_presets` (Sprint 6, ADR-022): an array of integer percentages (e.g. `[10, 15, 20]`) shown to the customer at Tip Selection (UX_MAP.md) — display configuration only, never a validation rule on `Payment.tip_amount`, which is a plain minor-units amount the terminal computes from whichever preset or Custom value the customer picks. Defaults to `[10, 15, 20]` (`API_Contract.md`'s own example), editable per Restaurant via `PATCH /settings/tips`.
+`tip_presets` (Sprint 6, ADR-022): an array of integer percentages (e.g. `[10, 15, 20]`) shown to the customer at Tip Selection (UX_MAP.md) — display configuration only, never a validation rule on `Payment.tip_amount`, which is a plain minor-units amount the terminal computes from whichever preset or Custom value the customer picks. Defaults to `[10, 15, 20]` (`API_Contract.md`'s own example), editable per Restaurant via `PATCH /restaurants/{id}/settings/tips`.
 
 ---
 
