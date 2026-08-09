@@ -56,7 +56,10 @@ export class TipService {
   }
 
   // API_Contract.md, Restaurant Tips.
-  async findForRestaurant(restaurantId: string, user: AuthenticatedUser): Promise<TipHistoryEntry[]> {
+  async findForRestaurant(
+    restaurantId: string,
+    user: AuthenticatedUser,
+  ): Promise<TipHistoryEntry[]> {
     await this.assertReachable(restaurantId, user);
 
     const lines = await this.prisma.ledgerLine.findMany({

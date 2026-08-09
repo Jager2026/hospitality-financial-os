@@ -232,9 +232,9 @@ describe("WebhooksService (real database, real signature verification)", () => {
     expect(tipLiability?.direction).toBe("CREDIT");
     expect(tipLiability?.amount).toBe(500n);
     expect(tipLiability?.membershipId).toBeNull(); // general liability, not yet attributed
-    expect(
-      (revenue?.amount ?? 0n) + (fee?.amount ?? 0n) + (tipLiability?.amount ?? 0n),
-    ).toBe(debit?.amount); // still balances exactly with the 4th line included
+    expect((revenue?.amount ?? 0n) + (fee?.amount ?? 0n) + (tipLiability?.amount ?? 0n)).toBe(
+      debit?.amount,
+    ); // still balances exactly with the 4th line included
 
     const allocatedLines = await prisma.ledgerLine.findMany({
       where: { journalEntryId: journalEntries[1].id },

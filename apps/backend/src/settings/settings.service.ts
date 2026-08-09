@@ -56,7 +56,11 @@ export class SettingsService {
     return restaurant;
   }
 
-  private assertPermission(user: AuthenticatedUser, restaurant: Restaurant, permission: string): void {
+  private assertPermission(
+    user: AuthenticatedUser,
+    restaurant: Restaurant,
+    permission: string,
+  ): void {
     const hasPermission = user.memberships.some(
       (m) =>
         (m.restaurantId === restaurant.id ||

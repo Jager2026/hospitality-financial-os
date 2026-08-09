@@ -118,9 +118,7 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
   // PaymentService's own in-process check reads come from the AuthenticatedUser object below, not
   // from this Membership row's real RolePermission grants — JwtAuthGuard is fully overridden in
   // this test file, so the two are independent by design.
-  async function ownerUserFor(restaurant: {
-    organizationId: string;
-  }): Promise<AuthenticatedUser> {
+  async function ownerUserFor(restaurant: { organizationId: string }): Promise<AuthenticatedUser> {
     const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
     const user = await prisma.user.create({
       data: {
