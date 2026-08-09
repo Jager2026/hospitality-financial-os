@@ -258,12 +258,12 @@ export class WebhooksService {
     });
   }
 
-  /** ADR-008: always produces a new JournalEntry reversing Restaurant Revenue Payable into
-   * Refund Contra — the original entry is never edited. `charge.amount_refunded` is Stripe's
-   * CUMULATIVE total refunded on this charge so far; the delta against what we've already
-   * recorded (sum of our own Refund rows) is THIS specific refund's amount — derived from our own
-   * data, not assumed from the payload's `refunds` sub-list ordering, so multiple partial refunds
-   * each land as their own correct row (DATABASE.md, Refund Rules). */
+  /** ADR-008 + ADR-023: reverses THREE accounts proportionally, not one unconditionally —
+   * RESTAURANT_REVENUE_PAYABLE, PLATFORM_FEE_REVENUE, and TIP_PAYABLE (at the waiter's own
+   * membershipId) — never the original entry itself, always a new compensating one.
+   * `charge.amount_refunded` is Stripe's CUMULATIVE total refunded on this charge so far; the
+   * delta against what we've already recorded is THIS specific refund's amount, computed the same
+   * way per account as it already is for the total (DATABASE.md, Refund Rules). */
   private async handleChargeRefunded(event: Stripe.Event): Promise<void> {
     const charge = event.data.object as Stripe.Charge;
     const paymentIntentId =
@@ -297,6 +297,49 @@ export class WebhooksService {
     if (newRefundAmount <= 0n) {
       return; // nothing new — a duplicate or out-of-order delivery
     }
+    const cumulativeRefunded = previouslyRecorded + newRefundAmount;
+
+    // ADR-023: the ORIGINAL capture-time fee, read back from PAYMENT_CAPTURED's own LedgerLine —
+    // never re-derived via splitPlatformFee() against the CURRENT basis-point rate, which is a
+    // mutable env var (ADR-021) that could have changed between capture and this refund. Reading
+    // the Ledger's own historical record instead is immune to that drift.
+    const capturedFeeLine = await this.prisma.ledgerLine.findFirst({
+      where: {
+        account: "PLATFORM_FEE_REVENUE",
+        journalEntry: { transactionId: transaction.id, entryType: "PAYMENT_CAPTURED" },
+      },
+    });
+    const originalFeeAmount = capturedFeeLine?.amount ?? 0n;
+    const originalTipAmount = payment.tipAmount; // trusted directly, same as everywhere else
+
+    // Proportional, cumulative amount for each account — RESTAURANT_REVENUE_PAYABLE's share is
+    // always the residual, never its own independent division (ADR-001/ADR-021's largest-
+    // remainder discipline: two independently-floored shares can round down and leave a
+    // remainder; deriving the third by subtraction is what keeps the three shares summing to
+    // exactly cumulativeRefunded, which LedgerService's own balance check requires regardless).
+    const cumulativeTipReversed = (originalTipAmount * cumulativeRefunded) / payment.amount;
+    const cumulativeFeeReversed = (originalFeeAmount * cumulativeRefunded) / payment.amount;
+    const cumulativeRevenueReversed =
+      cumulativeRefunded - cumulativeTipReversed - cumulativeFeeReversed;
+
+    // "Already reversed" per account — read back from prior REFUND_ISSUED LedgerLines for this
+    // Transaction, the same way previouslyRecorded above reads prior Refund rows. No new stored
+    // running total: the Ledger already owns this history (ADR-002).
+    const priorRevenueReversed = await this.sumPriorRefundReversal(
+      transaction.id,
+      "RESTAURANT_REVENUE_PAYABLE",
+    );
+    const priorFeeReversed = await this.sumPriorRefundReversal(
+      transaction.id,
+      "PLATFORM_FEE_REVENUE",
+    );
+    const priorTipReversed = payment.waiterMembershipId
+      ? await this.sumPriorRefundReversal(transaction.id, "TIP_PAYABLE", payment.waiterMembershipId)
+      : 0n;
+
+    const revenueDelta = cumulativeRevenueReversed - priorRevenueReversed;
+    const feeDelta = cumulativeFeeReversed - priorFeeReversed;
+    const tipDelta = cumulativeTipReversed - priorTipReversed;
 
     // Known boundary: under out-of-order delivery, `latestRefund` (Stripe's most-recent-first
     // list) isn't guaranteed to be the specific refund that produced THIS delta — the Ledger
@@ -304,7 +347,6 @@ export class WebhooksService {
     // but processorRefundId/reason on this particular Refund row could end up describing a
     // different originating event than the amount it's attached to.
     const latestRefund = charge.refunds?.data?.[0];
-    const totalRefunded = previouslyRecorded + newRefundAmount;
 
     await this.prisma.$transaction(async (tx) => {
       const refund = await tx.refund.create({
@@ -314,7 +356,7 @@ export class WebhooksService {
           amount: newRefundAmount,
           currency: transaction.currency,
           reason: latestRefund?.reason ?? "unspecified",
-          tipRefunded: false, // no Tip exists yet — Sprint 6
+          tipRefunded: tipDelta > 0n, // ADR-023: computed per event, not hardcoded
           status: "SUCCEEDED",
         },
       });
@@ -322,7 +364,7 @@ export class WebhooksService {
       await tx.transaction.update({
         where: { id: transaction.id },
         data: {
-          status: totalRefunded >= transaction.grossAmount ? "REFUNDED" : "PARTIALLY_REFUNDED",
+          status: cumulativeRefunded >= transaction.grossAmount ? "REFUNDED" : "PARTIALLY_REFUNDED",
         },
       });
 
@@ -332,13 +374,44 @@ export class WebhooksService {
           transactionId: transaction.id,
           refundId: refund.id,
           lines: [
-            {
-              account: "RESTAURANT_REVENUE_PAYABLE",
-              direction: "DEBIT",
-              amount: newRefundAmount,
-              currency: transaction.currency,
-              restaurantId: transaction.restaurantId,
-            },
+            // Each omitted when its delta rounds to exactly zero — same convention
+            // PAYMENT_CAPTURED already uses for PLATFORM_FEE_REVENUE and TIP_PAYABLE.
+            ...(revenueDelta > 0n
+              ? [
+                  {
+                    account: "RESTAURANT_REVENUE_PAYABLE" as const,
+                    direction: "DEBIT" as const,
+                    amount: revenueDelta,
+                    currency: transaction.currency,
+                    restaurantId: transaction.restaurantId,
+                  },
+                ]
+              : []),
+            ...(feeDelta > 0n
+              ? [
+                  {
+                    account: "PLATFORM_FEE_REVENUE" as const,
+                    direction: "DEBIT" as const,
+                    amount: feeDelta,
+                    currency: transaction.currency,
+                    restaurantId: transaction.restaurantId,
+                  },
+                ]
+              : []),
+            // Reverses the waiter's own credited share (ADR-022) — never the general
+            // membershipId: null line, which no longer exists once TIP_ALLOCATED has run.
+            ...(tipDelta > 0n && payment.waiterMembershipId
+              ? [
+                  {
+                    account: "TIP_PAYABLE" as const,
+                    direction: "DEBIT" as const,
+                    amount: tipDelta,
+                    currency: transaction.currency,
+                    restaurantId: transaction.restaurantId,
+                    membershipId: payment.waiterMembershipId,
+                  },
+                ]
+              : []),
             {
               account: "REFUND_CONTRA",
               direction: "CREDIT",
@@ -351,6 +424,25 @@ export class WebhooksService {
         tx,
       );
     });
+  }
+
+  /** Sum of a single account's DEBIT lines across every prior REFUND_ISSUED entry on this
+   * Transaction — the "already reversed" side of handleChargeRefunded's per-account delta. */
+  private async sumPriorRefundReversal(
+    transactionId: string,
+    account: "RESTAURANT_REVENUE_PAYABLE" | "PLATFORM_FEE_REVENUE" | "TIP_PAYABLE",
+    membershipId?: string,
+  ): Promise<bigint> {
+    const result = await this.prisma.ledgerLine.aggregate({
+      where: {
+        account,
+        direction: "DEBIT",
+        membershipId: membershipId ?? null,
+        journalEntry: { transactionId, entryType: "REFUND_ISSUED" },
+      },
+      _sum: { amount: true },
+    });
+    return result._sum.amount ?? 0n;
   }
 
   /** ADR-016: a dispute is a provisional loss the moment it opens — written immediately, the

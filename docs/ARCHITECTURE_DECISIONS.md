@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.8.0
-status: Active — twenty-two ADRs, all Accepted
+version: 1.9.0
+status: Active — twenty-three ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -347,6 +347,33 @@ Ledger posting is two separate `JournalEntry` rows, not one combined entry, both
 A `Tip` row (`DATABASE.md`) is created only when `tipAmount > 0` — `Transaction → zero-or-one Tip` is the schema's own cardinality, so no tip means no row, not a zero-amount one. Written with `status: ALLOCATED` directly, not `PENDING` then transitioned: both `JournalEntry` rows land together, atomically, in the same transaction as the `Tip` row itself, so there is no real window during which the tip exists but isn't yet allocated for MVP's Individual strategy to observe.
 
 **Consequences:** Migration adds `tip_amount` (BIGINT, default 0) and `waiter_membership_id` (nullable UUID FK) to `payment`. `DATABASE.md`'s `Payment` entity and `API_Contract.md`'s Create Payment section both updated to state the new field. The pre-existing fee-computation bug this decision fixes was never shipped to production — Sprint 5 had no tip field yet, so `amount` and `billAmount` were always identical up to this point; still a real defect that a naive Sprint 6 implementation could easily have reintroduced by extending `amount`'s meaning without updating both `splitPlatformFee()` call sites in lockstep, which is exactly why both were fixed together, in the same pass, rather than one now and one "later."
+
+---
+
+## ADR-023 — Refund Proportional Reversal: Fee and Tip Clawed Back with Restaurant Revenue, Not Left Standing
+**Status:** Accepted (Founder decision)
+
+**Context:** ADR-021 already named this gap and explicitly deferred it — its own "Known follow-up" section: *"charge.refunded / charge.dispute.* compensating entries... still reverse the full refunded/disputed amount out of RESTAURANT_REVENUE_PAYABLE... the cumulative RESTAURANT_REVENUE_PAYABLE balance for a fully-refunded, fee-bearing Transaction can go negative for that Transaction specifically,"* and its "Founder's stated direction": *"the platform fee should be proportionally clawed back on refund... revisit... the first real refund against a fee-bearing payment."* ADR-022 (Tip Handling) did **not** itself flag this — it introduced `TIP_PAYABLE`'s per-membership credit without discussing what a refund against a tip-bearing Payment should do to it, a real gap in that ADR, not one it predicted.
+
+The first real refund against a tip-bearing payment, live-verified this session (real Stripe test-mode PaymentIntent, `amount=2000, tipAmount=500` → real signed `payment_intent.succeeded` → real signed `charge.refunded` for the full `2000`), confirmed the gap was not theoretical: `RESTAURANT_REVENUE_PAYABLE` for that Transaction went to **-515** (debited the full `2000` against a `1485` credit it never received more of), `PLATFORM_FEE_REVENUE` kept its `15` fee on a fully-refunded payment, and the waiter's own `TIP_PAYABLE` credit of `500` stood completely untouched — the customer got their tip back in full while the Wallet projection (`TipService.findMine`, reading the Ledger directly, no cache) still showed it as allocated.
+
+**Decision:** `handleChargeRefunded` now reverses three accounts proportionally instead of one unconditionally: `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and `TIP_PAYABLE` (credited back at the specific `waiterMembershipId` the tip was originally allocated to — never the general `membershipId: null` line, which no longer exists once `TIP_ALLOCATED` has run).
+
+The proportion is `cumulativeRefunded / originalGrossAmount`, applied to the ORIGINAL capture-time amounts, then reduced to a per-event delta the same way `newRefundAmount` itself already was in Sprint 5 (`cumulative − previously recorded`) — now for three accounts, not one:
+
+- `cumulativeTipReversed = floor(originalTipAmount × cumulativeRefunded / originalGrossAmount)` — `originalTipAmount` is `payment.tipAmount`, trusted directly, same as `handlePaymentIntentSucceeded` already trusts it.
+- `cumulativeFeeReversed = floor(originalFeeAmount × cumulativeRefunded / originalGrossAmount)` — `originalFeeAmount` is read back from the actual `PLATFORM_FEE_REVENUE` credit line `PAYMENT_CAPTURED` posted for this Transaction, **not** re-derived via `splitPlatformFee()` against the *current* `DEFAULT_PLATFORM_FEE_BASIS_POINTS`. Deliberate: the basis-point rate is a mutable env var (ADR-021), and a refund can land long after capture — recomputing with today's rate would reverse the wrong amount if the rate changed in between, silently reintroducing exactly the kind of imbalance this ADR exists to close. Reading the Ledger's own historical record instead is both simpler and immune to that drift, matching ADR-002 (Ledger as Source of Truth) more literally than recomputation would.
+- `cumulativeRevenueReversed = cumulativeRefunded − cumulativeTipReversed − cumulativeFeeReversed` — the residual, never its own independent division. Same discipline `splitPlatformFee()` itself already established (ADR-021) and now applied a second time: two independently-floored shares can each round down and leave a remainder; deriving the third by subtraction is what keeps the three reversed shares summing to exactly `cumulativeRefunded`, which `LedgerService.postJournalEntry`'s own balance check requires regardless.
+
+"Already reversed per account" (the subtrahend for each delta) is read back from prior `REFUND_ISSUED` `LedgerLine` rows for this Transaction — not a new stored running total. Same reasoning as reading `originalFeeAmount` from the Ledger: the compensating history the deltas need already exists as `LedgerLine` rows; a parallel stored total would be a second, independently-maintainable copy of a fact the Ledger already owns.
+
+Each of the three debit lines is omitted when its delta rounds to exactly zero — same zero-line-omission convention `PAYMENT_CAPTURED` already uses for `PLATFORM_FEE_REVENUE` and `TIP_PAYABLE`. `REFUND_CONTRA`'s credit is always posted at the full `newRefundAmount`, unconditionally — the actual cash Stripe returned to the customer, never split.
+
+`Refund.tipRefunded` is now computed per event — `tipDelta > 0n` for *this specific* refund, not the cumulative total — replacing the Sprint 5 hardcoded `false` that predated `Tip` existing at all.
+
+**Verification case (this ADR's own worked example, and this session's regression test):** `originalGrossAmount=2000, originalTipAmount=500, originalFeeAmount=15` (`billAmount=1500` at 1.00%). A full refund (`cumulativeRefunded=2000`, fraction exactly `1`) gives `cumulativeTipReversed=500`, `cumulativeFeeReversed=15`, `cumulativeRevenueReversed=2000−500−15=1485` — the exact numbers the capture side posted; all three accounts net to zero for this Transaction, nothing left standing on either side. Live re-verified against the same real payment this ADR's Context section describes: after applying this decision, `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and `TIP_PAYABLE` each summed to exactly zero for that Transaction.
+
+**Consequences:** `handleDisputeCreated`/`handleDisputeClosed` (ADR-016, `charge.dispute.*`) have the structurally identical gap — `RESTAURANT_REVENUE_PAYABLE` alone, full amount, no fee or tip involvement — and are **not** touched by this decision. Flagged to the Founder, not silently fixed alongside this one: chargebacks are a distinct trigger (Stripe-initiated, not customer-initiated) with their own open question (does a lost dispute's fee/tip get clawed back the same way, or does the platform eat it as a cost of the dispute itself) that deserves its own decision, not an assumed copy of this one. `PROCESSOR_CLEARING` is reversed by neither refunds nor chargebacks, before or after this decision — a separate, older, not-tip-specific gap, tracked as its own `THREAT_MODEL.md` "Open, Not Answered" entry rather than folded into this ADR. `DATABASE.md`'s `Refund` entity Rules text updated to name all three reversed accounts, not just two. `THREAT_MODEL.md`'s "Whether the platform fee is clawed back on refund" entry moves from Open to Closed, citing this ADR.
 
 ---
 
