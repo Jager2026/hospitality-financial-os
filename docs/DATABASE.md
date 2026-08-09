@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.7.0
+version: 2.7.1
 status: Active
 classification: Internal
 owner: Founder
@@ -255,7 +255,7 @@ Refund
 
 **Relationships:** Refund → Transaction · one-or-more JournalEntry reference this Refund back via `JournalEntry.refund_id` (ADR-017 — `JournalEntry` owns the FK, not this table; see JournalEntry's own entry for why).
 
-**Rules:** Always produces a new JournalEntry whose LedgerLines reverse the original `restaurant_revenue_payable` / `tip_payable` and post to `refund_contra`. Never edits the original JournalEntry. No self-service UI required for MVP — staff may act through Stripe's dashboard, but the resulting webhook must always write this row and its compensating entry automatically. A single Transaction may have more than one Refund — each partial refund is its own row, its own compensating JournalEntry, independent of any other Refund on the same Transaction.
+**Rules:** Always produces a new JournalEntry whose LedgerLines reverse the original `restaurant_revenue_payable`, `platform_fee_revenue`, and `tip_payable` (ADR-023) — each proportionally to the fraction of the original charge this refund covers, never the fee/tip left standing untouched — and post to `refund_contra`. Never edits the original JournalEntry. No self-service UI required for MVP — staff may act through Stripe's dashboard, but the resulting webhook must always write this row and its compensating entry automatically. A single Transaction may have more than one Refund — each partial refund is its own row, its own compensating JournalEntry, independent of any other Refund on the same Transaction. `tip_refunded` reflects whether *this specific* Refund event carried a nonzero tip share, not the cumulative total.
 
 ---
 

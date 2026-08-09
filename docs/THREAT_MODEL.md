@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.1.0
+version: 1.2.0
 status: Active
 classification: Critical
 owner: Founder
@@ -82,6 +82,15 @@ Every entry below cites a real ADR number and a real, already-existing mechanism
 
 ---
 
+## 8. Platform fee and tip left standing on a refunded payment
+**Threat:** A refund reverses `RESTAURANT_REVENUE_PAYABLE` for the full refunded amount but leaves `PLATFORM_FEE_REVENUE` and the waiter's own `TIP_PAYABLE` credit untouched — the platform keeps a fee on money it no longer holds, and a waiter's Wallet still shows a tip the customer got back in full. Found live, not by a test: a real full refund (`amount=2000, tipAmount=500`) against a real tip-bearing payment left `RESTAURANT_REVENUE_PAYABLE` at **-515** for that Transaction, `PLATFORM_FEE_REVENUE` still holding its `15`, and the waiter's `TIP_PAYABLE` credit still standing at `500`.
+
+**Closed by:** ADR-023 — Refund Proportional Reversal. *"handleChargeRefunded now reverses three accounts proportionally instead of one unconditionally... RESTAURANT_REVENUE_PAYABLE's share is always the residual, never its own independent division... keeps the three reversed shares summing to exactly cumulativeRefunded."*
+
+**Mechanism, live-verified:** the same real Transaction from the Threat description, re-run after the fix — `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and `TIP_PAYABLE` each summed to exactly zero for that Transaction after the full refund. Regression-tested with two sequential partial refunds against a tip-bearing payment (`webhooks.service.spec.ts`), confirming the delta-per-account technique doesn't double-count or under-count across multiple events, not just a single full-refund shot.
+
+---
+
 # Accepted Risk (Not Closed — Deliberately Left Open)
 
 ## Redis flush silently un-revokes outstanding refresh tokens and token families
@@ -106,8 +115,8 @@ Distinct from Stripe itself being down: Stripe is reachable, but the customer's 
 ## Webhook and client-side confirmation diverging by more than the expected lag
 ADR-015 already establishes the *normal* case: the customer's receipt shows immediately (client-side), the Ledger write happens asynchronously via webhook a moment later — an intended, short eventual-consistency gap, not a defect. Genuinely open: what happens if that gap grows far past normal (webhook lost, delayed by Stripe, or never arrives at all) — does the customer's receipt ever get contradicted, does staff get an alert, is there a reconciliation sweep. ADR-015 answers the expected case; it does not answer the pathological one, and no code answers it either yet.
 
-## Whether the platform fee is clawed back on refund
-See ADR-021's own "Known follow-up" and "Founder's stated direction" — a real question surfaced by Sprint 5's fee split, not yet answered in code.
+## PROCESSOR_CLEARING is never reversed by a refund or a chargeback
+Neither `handleChargeRefunded` (ADR-008, revised by ADR-023) nor `handleDisputeCreated`/`handleDisputeClosed` (ADR-016) ever posts a compensating line against `PROCESSOR_CLEARING` — only `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and (for refunds, as of ADR-023) `TIP_PAYABLE` are reversed. Older than Sprint 6 and not tip-specific — noticed while fixing ADR-023's fee/tip gap, not caused by it. Not blocking; a separate decision, deliberately not folded into ADR-023.
 
 ---
 
