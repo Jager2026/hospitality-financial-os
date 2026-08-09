@@ -10,8 +10,10 @@ type LedgerTransactionClient = Prisma.TransactionClient;
  * The only module permitted to write a double-entry posting (SYSTEM_ARCHITECTURE.md, Business
  * Layer). No other module writes JournalEntry/LedgerLine rows directly, ever.
  *
- * No real writer calls this yet — Sprint 5 (Payments & Ledger) is the first. Built now, per
- * IMPLEMENTATION_PLAN.md Sprint 1, "so Sprint 5 doesn't have to invent it under pressure."
+ * Real writer since Sprint 5 (Payments & Ledger, shipped): WebhooksService calls this on
+ * payment_intent.succeeded / charge.refunded / charge.dispute.created / charge.dispute.closed.
+ * Built ahead of that, per IMPLEMENTATION_PLAN.md Sprint 1, "so Sprint 5 doesn't have to invent
+ * it under pressure."
  */
 @Injectable()
 export class LedgerService {

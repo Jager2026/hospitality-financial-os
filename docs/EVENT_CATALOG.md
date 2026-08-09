@@ -1,6 +1,6 @@
 ---
 title: EVENT_CATALOG
-version: 1.0.0
+version: 1.1.0
 status: Active
 classification: Internal
 owner: Founder
@@ -55,12 +55,12 @@ Applying that formula to every value of `JournalEntryType` gives the complete, c
 
 | `entry_type` (DB value) | `event_type` produced | Fires when |
 |---|---|---|
-| `payment_captured` | `journal_entry.payment_captured` | A payment is captured and posted to the Ledger (Sprint 5, first real caller) |
-| `tip_allocated` | `journal_entry.tip_allocated` | A tip is allocated to one or more Membership wallets (Sprint 6) |
-| `refund_issued` | `journal_entry.refund_issued` | A refund's compensating entry is posted (Sprint 5) |
-| `chargeback` | `journal_entry.chargeback` | A chargeback's provisional-loss entry is posted (Sprint 5, ADR-016) |
-| `adjustment` | `journal_entry.adjustment` | A manual balance correction is posted |
-| `payout` | `journal_entry.payout` | A payout to a Restaurant's or Membership's external account is posted |
+| `payment_captured` | `journal_entry.payment_captured` | **Real, live** — `WebhooksService`'s `payment_intent.succeeded` handler (Sprint 5, shipped) |
+| `tip_allocated` | `journal_entry.tip_allocated` | Not yet implemented — no code path exists (Sprint 6, Tips) |
+| `refund_issued` | `journal_entry.refund_issued` | **Real, live** — `WebhooksService`'s `charge.refunded` handler (Sprint 5, shipped) |
+| `chargeback` | `journal_entry.chargeback` | **Real, live** — two separate call sites in `WebhooksService`: `charge.dispute.created` (provisional loss) and, if the dispute is later won, `charge.dispute.closed` (reversal) — ADR-016's own documented one-`Chargeback`-to-many-`JournalEntry` shape, not a hypothetical |
+| `adjustment` | `journal_entry.adjustment` | Not yet implemented — no code path exists |
+| `payout` | `journal_entry.payout` | Not yet implemented — no code path exists (`Withdrawal`/`Settlement` are Future Entities, `DATABASE.md`) |
 
 **Payload shape**, identical for all six — deliberately thin:
 
@@ -72,7 +72,7 @@ Applying that formula to every value of `JournalEntryType` gives the complete, c
 
 The payload is intentionally minimal — an id and the entry's own type, not a denormalized copy of the JournalEntry/LedgerLine rows. A consumer that needs the full picture (which LedgerLines, which Restaurant, which Membership) re-reads `JournalEntry`/`LedgerLine` by `journalEntryId` at dispatch time, rather than trusting a payload that could grow stale between write and dispatch. This isn't written down anywhere else — it's the natural reading of the payload actually being this thin, not a separate design decision with its own ADR.
 
-**Nothing has produced one of these rows outside a test yet.** `LedgerService.postJournalEntry` has no real caller in application code today (Sprint 5 is the first) — the six rows above describe what the *mechanism* would write once something calls it, not events that have actually fired in a running system.
+**No longer hypothetical: three of the six rows above are real, live traffic.** Sprint 5 (Payments & Ledger) shipped `WebhooksService` as `LedgerService.postJournalEntry`'s first real caller — confirmed directly in `apps/backend/src/webhooks/webhooks.service.ts`, not assumed from the sprint being marked done. Every real Stripe `payment_intent.succeeded`, `charge.refunded`, `charge.dispute.created`, and `charge.dispute.closed` webhook this system receives today writes a real `JournalEntry`/`LedgerLine`/`OutboxEvent` row through this exact mechanism. `tip_allocated`, `adjustment`, and `payout` remain genuinely unimplemented — no code path produces them yet — and stay accurately described as hypothetical until a real sprint builds one.
 
 ---
 
@@ -87,13 +87,13 @@ The payload is intentionally minimal — an id and the entry's own type, not a d
 
 — but none of these modules exist yet, so none is wired in. `dispatch()`'s body, not its polling shape, is what changes when the first real handler lands.
 
-A row whose `attempts` reaches 5 without `published_at` being set logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag) rather than retrying forever. Since nothing currently ever sets `published_at`, every real event this mechanism produces will eventually cross that threshold and alert — expected and harmless while there are zero consumers, since zero events are being produced in application code either; worth remembering not to be alarmed by it appearing in logs the moment Sprint 5 starts writing real events, before Sprint 7 gives it a consumer to actually satisfy.
+A row whose `attempts` reaches 5 without `published_at` being set logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag) rather than retrying forever. Since nothing currently ever sets `published_at`, this is no longer a future concern to remember — it is happening now: every real `payment_captured`/`refund_issued`/`chargeback` row Sprint 5's live webhook traffic writes today crosses that threshold and logs an error, on a schedule (`MAX_ATTEMPTS_BEFORE_ALERT * POLL_INTERVAL_MS`, currently 5 × 2s = 10s after creation), because Sprint 7 hasn't given the Outbox a consumer yet. Expected, not a bug — but genuinely live log noise in the current system today, not a hypothetical for later, and worth knowing about before treating an `OutboxEvent` error-level log line as a real incident during this gap.
 
 ---
 
 # Not Yet Cataloged
 
-No event types beyond the six above are defined anywhere in code. Per the Founder's explicit instruction: this document does not invent event shapes for Sprint 5+ functionality that doesn't exist yet (a `payment_intent.succeeded` webhook handler, a `RestaurantCreated` event for the Sprint 3 module that just shipped, or anything else). `SYSTEM_ARCHITECTURE.md` names some of these in passing as historical color ("Previous versions of this document referenced domain events (RestaurantCreated, PaymentCompleted, TipCreated, WalletUpdated, TransactionRecorded) without specifying how they were delivered") — none of those are real `event_type` strings today, and none should be treated as planned ones until real code writes them. When Sprint 5 (or any later sprint) adds a real writer with a new shape, extend this table then, from the code that exists at that point — not now, from a guess.
+No event types beyond the six above are defined anywhere in code. Per the Founder's explicit instruction: this document does not invent event shapes for future functionality that doesn't exist yet — a `TipAllocated`-driven Wallet-projection event, a `RestaurantCreated` event, or anything else no current code path writes. `SYSTEM_ARCHITECTURE.md` names some of these in passing as historical color ("Previous versions of this document referenced domain events (RestaurantCreated, PaymentCompleted, TipCreated, WalletUpdated, TransactionRecorded) without specifying how they were delivered") — none of those are real `event_type` strings today, and none should be treated as planned ones until real code writes them. When Sprint 6 (Tips) or any later sprint adds a real writer with a new shape, extend this table then, from the code that exists at that point — not now, from a guess.
 
 ---
 
