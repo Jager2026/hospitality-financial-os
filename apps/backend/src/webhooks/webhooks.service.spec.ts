@@ -5,6 +5,7 @@ import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
 import type { RestaurantService } from "../restaurant/restaurant.service";
 import { StripeService } from "../stripe/stripe.service";
+import { IndividualTipAllocationStrategy } from "../tip/individual-tip-allocation.strategy";
 import { WebhooksService } from "./webhooks.service";
 
 // Real database, real LedgerService, and a REAL StripeService (genuine HMAC signature
@@ -52,7 +53,14 @@ describe("WebhooksService (real database, real signature verification)", () => {
     ledger = new LedgerService(prisma);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeConfig = { getOrThrow: () => 100 } as any; // 1.00%, Founder decision
-    service = new WebhooksService(prisma, stripe, ledger, fakeRestaurantService, fakeConfig);
+    service = new WebhooksService(
+      prisma,
+      stripe,
+      ledger,
+      fakeRestaurantService,
+      fakeConfig,
+      new IndividualTipAllocationStrategy(), // real strategy — MVP's Individual allocation is real code, not a fake, same rigor as everything else money-touching here
+    );
   });
 
   afterAll(async () => {
@@ -81,7 +89,12 @@ describe("WebhooksService (real database, real signature verification)", () => {
     return restaurant;
   }
 
-  async function seedPayment(restaurantId: string, amount: bigint, processorPaymentId: string) {
+  async function seedPayment(
+    restaurantId: string,
+    amount: bigint,
+    processorPaymentId: string,
+    options?: { tipAmount?: bigint; waiterMembershipId?: string },
+  ) {
     const key = `wh-test-key-${randomUUID()}`;
     await prisma.idempotencyKey.create({
       data: {
@@ -98,11 +111,28 @@ describe("WebhooksService (real database, real signature verification)", () => {
         processor: "stripe",
         processorPaymentId,
         amount,
+        tipAmount: options?.tipAmount ?? 0n,
+        waiterMembershipId: options?.waiterMembershipId,
         currency: "EUR",
         status: "PENDING",
         paymentMethod: "card",
         idempotencyKey: key,
       },
+    });
+  }
+
+  // ADR-022: a real Membership row for the waiter a tip gets allocated to.
+  async function seedWaiterMembership(organizationId: string, restaurantId: string) {
+    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
+    const user = await prisma.user.create({
+      data: {
+        email: `waiter-${randomUUID()}@example.com`,
+        passwordHash: "not-a-real-hash",
+        locale: "en",
+      },
+    });
+    return prisma.membership.create({
+      data: { userId: user.id, organizationId, restaurantId, roleId: waiterRole.id },
     });
   }
 
@@ -159,6 +189,96 @@ describe("WebhooksService (real database, real signature verification)", () => {
     // Balanced: one debit equals the sum of both credits, exactly (no drift — platform-fee.util's
     // own subtraction-derived split guarantees this, verified again here at the Ledger-write level).
     expect((revenue?.amount ?? 0n) + (fee?.amount ?? 0n)).toBe(debit?.amount);
+  });
+
+  it("payment_intent.succeeded with a tip (ADR-022): PAYMENT_CAPTURED gains a TIP_PAYABLE line, a separate TIP_ALLOCATED entry credits the waiter's Membership, a Tip row is created ALLOCATED, and the platform fee is computed from billAmount not the full amount — discriminating: a naive amount-based implementation would compute fee=20, not 15", async () => {
+    const restaurant = await seedOrgRestaurant();
+    const waiterMembership = await seedWaiterMembership(restaurant.organizationId, restaurant.id);
+    const piId = `pi_${randomUUID()}`;
+    // amount=2000 (bill+tip combined), tipAmount=500 -> billAmount=1500 -> fee = 1% of 1500 = 15,
+    // restaurantRevenue = 1485. A naive amount-based fee (1% of 2000 = 20) would fail every
+    // assertion below that checks fee/revenue.
+    const payment = await seedPayment(restaurant.id, 2000n, piId, {
+      tipAmount: 500n,
+      waiterMembershipId: waiterMembership.id,
+    });
+
+    const { rawBody, signature } = signEvent(
+      buildEvent("payment_intent.succeeded", { id: piId, amount: 2000, currency: "eur" }),
+    );
+
+    await service.handleEvent(rawBody, signature);
+
+    const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
+    expect(transaction?.grossAmount).toBe(2000n);
+
+    const journalEntries = await prisma.journalEntry.findMany({
+      where: { transactionId: transaction?.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(journalEntries.map((e) => e.entryType)).toEqual(["PAYMENT_CAPTURED", "TIP_ALLOCATED"]);
+
+    const capturedLines = await prisma.ledgerLine.findMany({
+      where: { journalEntryId: journalEntries[0].id },
+    });
+    expect(capturedLines).toHaveLength(4);
+    const debit = capturedLines.find((l) => l.direction === "DEBIT");
+    const revenue = capturedLines.find((l) => l.account === "RESTAURANT_REVENUE_PAYABLE");
+    const fee = capturedLines.find((l) => l.account === "PLATFORM_FEE_REVENUE");
+    const tipLiability = capturedLines.find((l) => l.account === "TIP_PAYABLE");
+    expect(debit?.amount).toBe(2000n); // full charge, bill + tip combined
+    expect(revenue?.amount).toBe(1485n); // NOT 1980 (would be if fee were computed on 2000)
+    expect(fee?.amount).toBe(15n); // NOT 20
+    expect(tipLiability?.direction).toBe("CREDIT");
+    expect(tipLiability?.amount).toBe(500n);
+    expect(tipLiability?.membershipId).toBeNull(); // general liability, not yet attributed
+    expect((revenue?.amount ?? 0n) + (fee?.amount ?? 0n) + (tipLiability?.amount ?? 0n)).toBe(
+      debit?.amount,
+    ); // still balances exactly with the 4th line included
+
+    const allocatedLines = await prisma.ledgerLine.findMany({
+      where: { journalEntryId: journalEntries[1].id },
+    });
+    expect(allocatedLines).toHaveLength(2);
+    const allocDebit = allocatedLines.find((l) => l.direction === "DEBIT");
+    const allocCredit = allocatedLines.find((l) => l.direction === "CREDIT");
+    expect(allocDebit?.account).toBe("TIP_PAYABLE");
+    expect(allocDebit?.amount).toBe(500n);
+    expect(allocDebit?.membershipId).toBeNull();
+    expect(allocCredit?.account).toBe("TIP_PAYABLE"); // same account both sides — membershipId is the only discriminator (ADR-022)
+    expect(allocCredit?.amount).toBe(500n);
+    expect(allocCredit?.membershipId).toBe(waiterMembership.id); // exactly one LedgerLine credits the correct Membership's Wallet (Sprint 6 DoD)
+
+    const tip = await prisma.tip.findUnique({ where: { transactionId: transaction?.id } });
+    expect(tip?.grossTip).toBe(500n);
+    expect(tip?.status).toBe("ALLOCATED");
+  });
+
+  it("payment_intent.succeeded with no tip: still exactly one JournalEntry, no TIP_PAYABLE line, no Tip row created", async () => {
+    const restaurant = await seedOrgRestaurant();
+    const piId = `pi_${randomUUID()}`;
+    const payment = await seedPayment(restaurant.id, 1000n, piId, { tipAmount: 0n });
+
+    const { rawBody, signature } = signEvent(
+      buildEvent("payment_intent.succeeded", { id: piId, amount: 1000, currency: "eur" }),
+    );
+
+    await service.handleEvent(rawBody, signature);
+
+    const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
+    const journalEntries = await prisma.journalEntry.findMany({
+      where: { transactionId: transaction?.id },
+    });
+    expect(journalEntries).toHaveLength(1);
+    expect(journalEntries[0].entryType).toBe("PAYMENT_CAPTURED");
+
+    const lines = await prisma.ledgerLine.findMany({
+      where: { journalEntryId: journalEntries[0].id },
+    });
+    expect(lines.some((l) => l.account === "TIP_PAYABLE")).toBe(false);
+
+    const tip = await prisma.tip.findUnique({ where: { transactionId: transaction?.id } });
+    expect(tip).toBeNull(); // Transaction -> zero-or-one Tip (DATABASE.md) — zero here
   });
 
   it("deduplicates by Stripe event id: replaying the exact same event does not create a second Transaction", async () => {

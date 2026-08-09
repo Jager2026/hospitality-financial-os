@@ -211,6 +211,10 @@ model Restaurant {
   // impact, minimum_deadline, requested_reasons), stored as-is. Not a flat array of strings.
   requirementsDue        Json?            @map("requirements_due")
 
+  // Sprint 6, ADR-022: percentage presets shown to the customer at Tip Selection (UX_MAP.md) —
+  // display configuration only, never a validation rule on Payment.tip_amount.
+  tipPresets Int[] @default([10, 15, 20]) @map("tip_presets")
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
@@ -272,6 +276,7 @@ model Membership {
   wallet       Wallet?
   ledgerLines  LedgerLine[]
   adjustments  Adjustment[]
+  paymentsAsWaiter Payment[] @relation("PaymentWaiterMembership")
 
   @@index([userId])
   @@index([organizationId])
@@ -399,7 +404,16 @@ model Payment {
   restaurantId       String   @map("restaurant_id") @db.Uuid
   processor          String
   processorPaymentId String   @map("processor_payment_id")
-  amount             BigInt   // minor units (ADR-001)
+  amount             BigInt   // minor units (ADR-001) — full card charge, bill + tip combined
+  // Sprint 6, ADR-022: caller-submitted tip portion of `amount` (tipAmount <= amount, validated at
+  // request time). `amount` itself never changes meaning — the bill/tip split lives here, not by
+  // splitting `amount` into two fields.
+  tipAmount          BigInt   @default(0) @map("tip_amount")
+  // Sprint 6, ADR-022: captured from the authenticated caller's own Membership at POST /payments
+  // time — the same Membership that grants them payments.manage reachability to the Restaurant.
+  // No separate terminal/table/waiter-assignment mechanism. Always populated; only read when
+  // tipAmount > 0.
+  waiterMembershipId String?  @map("waiter_membership_id") @db.Uuid
   currency           String   @db.Char(3)
   status             PaymentStatus @default(PENDING)
   paymentMethod      String   @map("payment_method")
@@ -407,20 +421,22 @@ model Payment {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
   // ADR-018 (Accepted), resolving the Sprint 0 audit's open question: "Immutable once created"
-  // (DATABASE.md) describes the payment's identity and economic facts — amount, restaurant_id,
-  // processor, processor_payment_id, currency, payment_method, idempotency_key — none of which
-  // ever change after creation. `status` is the one exception: it transitions exactly once, from
-  // PENDING to a terminal state, recorded here via updatedAt. Without this, failed/declined
-  // attempts would never become visible, which is incompatible with MASTERPLAN.md's Fraud
-  // Prevention requirement to detect "repeated failed payments."
+  // (DATABASE.md) describes the payment's identity and economic facts — amount, tipAmount,
+  // waiterMembershipId, restaurant_id, processor, processor_payment_id, currency, payment_method,
+  // idempotency_key — none of which ever change after creation. `status` is the one exception: it
+  // transitions exactly once, from PENDING to a terminal state, recorded here via updatedAt.
+  // Without this, failed/declined attempts would never become visible, which is incompatible with
+  // MASTERPLAN.md's Fraud Prevention requirement to detect "repeated failed payments."
 
-  restaurant       Restaurant     @relation(fields: [restaurantId], references: [id])
+  restaurant        Restaurant     @relation(fields: [restaurantId], references: [id])
   idempotencyKeyRef IdempotencyKey @relation(fields: [idempotencyKey], references: [key])
-  currencyRef      Currency       @relation(fields: [currency], references: [code])
-  transaction      Transaction?
+  currencyRef       Currency       @relation(fields: [currency], references: [code])
+  waiterMembership  Membership?    @relation("PaymentWaiterMembership", fields: [waiterMembershipId], references: [id])
+  transaction       Transaction?
 
   @@index([restaurantId])
   @@index([currency])
+  @@index([waiterMembershipId])
   @@map("payment")
 }
 

@@ -144,7 +144,7 @@ describe("PaymentService (real database)", () => {
     await seedIdempotencyKey(key, "/payments");
 
     const result = await service.createPaymentIntent(
-      { restaurantId: restaurant.id, amount: 1550 },
+      { restaurantId: restaurant.id, amount: 1550, tipAmount: 0 },
       key,
       authedUser,
     );
@@ -181,7 +181,7 @@ describe("PaymentService (real database)", () => {
 
     await expect(
       service.createPaymentIntent(
-        { restaurantId: restaurant.id, amount: 1000 },
+        { restaurantId: restaurant.id, amount: 1000, tipAmount: 0 },
         `outsider-key-${randomUUID()}`,
         outsider,
       ),
@@ -204,7 +204,7 @@ describe("PaymentService (real database)", () => {
 
     await expect(
       service.createPaymentIntent(
-        { restaurantId: restaurant.id, amount: 1000 },
+        { restaurantId: restaurant.id, amount: 1000, tipAmount: 0 },
         `waiter-key-${randomUUID()}`,
         authedUser,
       ),
@@ -227,7 +227,7 @@ describe("PaymentService (real database)", () => {
 
     await expect(
       service.createPaymentIntent(
-        { restaurantId: restaurant.id, amount: 1000 },
+        { restaurantId: restaurant.id, amount: 1000, tipAmount: 0 },
         `no-stripe-key-${randomUUID()}`,
         authedUser,
       ),
@@ -253,7 +253,7 @@ describe("PaymentService (real database)", () => {
     await seedIdempotencyKey(keySecond, "/payments");
 
     const paymentFirst = await service.createPaymentIntent(
-      { restaurantId: first.id, amount: 500 },
+      { restaurantId: first.id, amount: 500, tipAmount: 0 },
       keyFirst,
       authedUser,
     );

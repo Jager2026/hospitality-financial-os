@@ -110,17 +110,42 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
     });
   }
 
-  function ownerUserFor(restaurant: { organizationId: string }): AuthenticatedUser {
+  // Sprint 6 (ADR-022): Payment.waiterMembershipId is now a real FK, written on every successful
+  // POST /payments — the previous "irrelevant" placeholder membership id (never persisted before
+  // this) fails a real UUID/FK check the moment PaymentService actually writes it. A real User +
+  // Membership row is required; the Role FK reuses the "Manager" role Vitest's own globalSetup
+  // already seeds (test/global-setup.ts) rather than creating a redundant one. The permissions
+  // PaymentService's own in-process check reads come from the AuthenticatedUser object below, not
+  // from this Membership row's real RolePermission grants — JwtAuthGuard is fully overridden in
+  // this test file, so the two are independent by design.
+  async function ownerUserFor(restaurant: { organizationId: string }): Promise<AuthenticatedUser> {
+    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
+    const user = await prisma.user.create({
+      data: {
+        email: `owner-${randomUUID()}@example.com`,
+        passwordHash: "not-a-real-hash",
+        locale: "en",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: {
+        userId: user.id,
+        organizationId: restaurant.organizationId,
+        restaurantId: null, // org-wide — reaches the restaurant per ADR-005
+        roleId: managerRole.id,
+      },
+    });
+
     return {
-      id: randomUUID(),
-      email: "owner@example.com",
-      locale: "en",
+      id: user.id,
+      email: user.email,
+      locale: user.locale,
       memberships: [
         {
-          id: "irrelevant",
+          id: membership.id,
           organizationId: restaurant.organizationId,
-          restaurantId: null, // org-wide — reaches the restaurant per ADR-005
-          role: { id: "irrelevant", name: "Owner", permissions: ["payments.manage"] },
+          restaurantId: null,
+          role: { id: managerRole.id, name: "Owner", permissions: ["payments.manage"] },
         },
       ],
     };
@@ -128,7 +153,7 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
 
   it("POST /payments: the real StripeService.createPaymentIntent runs for real — BigInt->Number conversion, direct-charge stripeAccount param, and application_fee_amount are all correctly wired against the faked SDK", async () => {
     const restaurant = await seedRestaurant();
-    currentUser = ownerUserFor(restaurant);
+    currentUser = await ownerUserFor(restaurant);
 
     stripeMocks.paymentIntentsCreate.mockResolvedValueOnce({
       id: "pi_fake_test",
@@ -160,11 +185,66 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
     const stored = await prisma.payment.findFirst({ where: { restaurantId: restaurant.id } });
     expect(stored?.amount).toBe(1550n);
     expect(stored?.status).toBe("PENDING");
+    expect(stored?.tipAmount).toBe(0n);
+    expect(stored?.waiterMembershipId).toBe(currentUser.memberships[0].id);
+  });
+
+  it("POST /payments: with a tip, the platform fee is computed from billAmount (amount - tipAmount), not the full amount (ADR-022) — discriminating: a naive amount-based implementation would compute 20, not 15", async () => {
+    const restaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(restaurant);
+
+    stripeMocks.paymentIntentsCreate.mockResolvedValueOnce({
+      id: "pi_fake_tip_test",
+      client_secret: "pi_fake_tip_secret",
+      amount: 2000,
+      currency: "eur",
+    });
+
+    // amount=2000 (bill+tip combined), tipAmount=500 -> billAmount=1500 -> fee = 1% of 1500 = 15.
+    // A naive implementation computing the fee from the full amount (2000) would produce 20 —
+    // the exact number this test's application_fee_amount assertion below would need to see for
+    // that wrong implementation to pass, and does not.
+    const res = await request(app.getHttpServer())
+      .post("/payments")
+      .set("Idempotency-Key", `key-tip-${randomUUID()}`)
+      .send({ restaurantId: restaurant.id, amount: 2000, tipAmount: 500 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.amount).toBe("2000");
+    expect(res.body.tipAmount).toBe("500");
+
+    expect(stripeMocks.paymentIntentsCreate).toHaveBeenCalledWith(
+      {
+        amount: 2000,
+        currency: "eur",
+        application_fee_amount: 15, // NOT 20 — see the discriminating comment above
+      },
+      { stripeAccount: restaurant.stripeAccountId },
+    );
+
+    const stored = await prisma.payment.findFirst({ where: { restaurantId: restaurant.id } });
+    expect(stored?.amount).toBe(2000n);
+    expect(stored?.tipAmount).toBe(500n);
+    expect(stored?.waiterMembershipId).toBe(currentUser.memberships[0].id);
+  });
+
+  it("POST /payments: tipAmount exceeding amount is rejected with VALIDATION_ERROR before ever reaching Stripe", async () => {
+    const restaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(restaurant);
+
+    const res = await request(app.getHttpServer())
+      .post("/payments")
+      .set("Idempotency-Key", `key-badtip-${randomUUID()}`)
+      .send({ restaurantId: restaurant.id, amount: 1000, tipAmount: 1001 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(stripeMocks.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
   it("POST /payments: a concurrent duplicate (same Idempotency-Key, still IN_PROGRESS) is rejected with 409 and never reaches Stripe", async () => {
     const restaurant = await seedRestaurant();
-    currentUser = ownerUserFor(restaurant);
+    currentUser = await ownerUserFor(restaurant);
     const key = `key-${randomUUID()}`;
     const body = { restaurantId: restaurant.id, amount: 1000 };
 
@@ -194,7 +274,7 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
 
   it("POST /payments: reusing a key whose prior attempt already FAILED is rejected with a retry-with-new-key message", async () => {
     const restaurant = await seedRestaurant();
-    currentUser = ownerUserFor(restaurant);
+    currentUser = await ownerUserFor(restaurant);
     const key = `key-${randomUUID()}`;
     const body = { restaurantId: restaurant.id, amount: 1000 };
 
@@ -220,7 +300,7 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
 
   it("POST /payments: a genuinely failing Stripe call transitions the Idempotency-Key to FAILED for real, not left stuck IN_PROGRESS", async () => {
     const restaurant = await seedRestaurant();
-    currentUser = ownerUserFor(restaurant);
+    currentUser = await ownerUserFor(restaurant);
     const key = `key-${randomUUID()}`;
 
     stripeMocks.paymentIntentsCreate.mockRejectedValueOnce(new Error("simulated Stripe outage"));
@@ -242,7 +322,7 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
 
   it("POST /payments: missing Idempotency-Key header is rejected with 400 before ever reaching the handler", async () => {
     const restaurant = await seedRestaurant();
-    currentUser = ownerUserFor(restaurant);
+    currentUser = await ownerUserFor(restaurant);
 
     const res = await request(app.getHttpServer())
       .post("/payments")

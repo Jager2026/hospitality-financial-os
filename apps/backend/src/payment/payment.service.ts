@@ -12,6 +12,7 @@ export interface CreatedPayment {
   id: string;
   restaurantId: string;
   amount: string; // bigint -> string at the source; see bigint-json.polyfill for the general case
+  tipAmount: string;
   currency: string;
   status: Payment["status"];
   clientSecret: string;
@@ -40,7 +41,7 @@ export class PaymentService {
     user: AuthenticatedUser,
   ): Promise<CreatedPayment> {
     const restaurant = await this.getReachableRestaurantOrThrow(dto.restaurantId, user);
-    this.assertPermission(user, restaurant, "payments.manage");
+    const waiterMembership = this.getGrantingMembershipOrThrow(user, restaurant, "payments.manage");
 
     if (!restaurant.stripeAccountId) {
       throw new AppException(
@@ -51,15 +52,21 @@ export class PaymentService {
     }
 
     const amount = BigInt(dto.amount);
+    const tipAmount = BigInt(dto.tipAmount);
+    // ADR-021/ADR-022: the platform fee excludes tips. billAmount, never the full amount, is what
+    // every splitPlatformFee() call site must use — this one (Stripe's own application_fee_amount)
+    // and WebhooksService's (what posts to PLATFORM_FEE_REVENUE) compute from the identical
+    // billAmount, so the two numbers can never drift apart.
+    const billAmount = amount - tipAmount;
 
     // Founder decision: DEFAULT_PLATFORM_FEE_BASIS_POINTS (100 = 1.00%), a percentage of
-    // Restaurant Revenue only — the same split computed again from Payment.amount in
+    // Restaurant Revenue only — the same split computed again from billAmount in
     // WebhooksService's payment_intent.succeeded handler, so the amount actually deducted by
     // Stripe (application_fee_amount) and the amount posted to PLATFORM_FEE_REVENUE in the
     // Ledger are computed by the identical function, never two independent numbers that could
     // drift apart.
     const basisPoints = this.config.getOrThrow<number>("DEFAULT_PLATFORM_FEE_BASIS_POINTS");
-    const { feeAmount } = splitPlatformFee(amount, basisPoints);
+    const { feeAmount } = splitPlatformFee(billAmount, basisPoints);
 
     const intent = await this.stripe.createPaymentIntent({
       stripeAccountId: restaurant.stripeAccountId,
@@ -74,6 +81,8 @@ export class PaymentService {
         processor: "stripe",
         processorPaymentId: intent.id,
         amount,
+        tipAmount,
+        waiterMembershipId: waiterMembership.id,
         currency: restaurant.currency,
         status: "PENDING",
         paymentMethod: "card",
@@ -85,6 +94,7 @@ export class PaymentService {
       id: payment.id,
       restaurantId: payment.restaurantId,
       amount: payment.amount.toString(),
+      tipAmount: payment.tipAmount.toString(),
       currency: payment.currency,
       status: payment.status,
       clientSecret: intent.clientSecret,
@@ -200,24 +210,28 @@ export class PaymentService {
   }
 
   // Same defense-in-depth split as restaurant.service.ts/membership.service.ts: PermissionsGuard
-  // is the fast global reject, this is the resource-scoped second layer.
-  private assertPermission(
+  // is the fast global reject, this is the resource-scoped second layer. Returns the specific
+  // granting Membership, not just a boolean (ADR-022) — its id becomes Payment.waiterMembershipId,
+  // the tip recipient, captured from the same reachability check that already authorizes the
+  // request rather than a second, separate lookup.
+  private getGrantingMembershipOrThrow(
     user: AuthenticatedUser,
     restaurant: Restaurant,
     permission: string,
-  ): void {
-    const hasPermission = user.memberships.some(
+  ): AuthenticatedUser["memberships"][number] {
+    const membership = user.memberships.find(
       (m) =>
         (m.restaurantId === restaurant.id ||
           (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
         m.role.permissions.includes(permission),
     );
-    if (!hasPermission) {
+    if (!membership) {
       throw new AppException(
         "PERMISSION_DENIED",
         `Missing required permission: ${permission}`,
         403,
       );
     }
+    return membership;
   }
 }

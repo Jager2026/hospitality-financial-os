@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type Stripe from "stripe";
 import { AppException } from "../common/exceptions/app.exception";
@@ -7,6 +7,10 @@ import { PrismaService } from "../prisma/prisma.service";
 import { splitPlatformFee } from "../payment/platform-fee.util";
 import { RestaurantService } from "../restaurant/restaurant.service";
 import { StripeService } from "../stripe/stripe.service";
+import {
+  TIP_ALLOCATION_STRATEGY,
+  type TipAllocationStrategy,
+} from "../tip/tip-allocation-strategy.interface";
 
 const WEBHOOK_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -23,6 +27,7 @@ export class WebhooksService {
     private readonly ledger: LedgerService,
     private readonly restaurantService: RestaurantService,
     private readonly config: ConfigService,
+    @Inject(TIP_ALLOCATION_STRATEGY) private readonly tipAllocationStrategy: TipAllocationStrategy,
   ) {}
 
   async handleEvent(rawBody: Buffer, signature: string | undefined): Promise<{ received: true }> {
@@ -104,12 +109,14 @@ export class WebhooksService {
   /** ADR-015: the Ledger write happens here, asynchronously, driven by this webhook — never
    * synchronously in POST /payments' response. The platform-fee split (Founder decision,
    * DEFAULT_PLATFORM_FEE_BASIS_POINTS) is computed by the SAME splitPlatformFee() call as
-   * PaymentService used at PaymentIntent creation time, on the same Payment.amount, so the amount
-   * Stripe actually deducted (application_fee_amount) and the amount posted here to
-   * PLATFORM_FEE_REVENUE are identical by construction, not two numbers that could drift apart.
-   * Payment.update + Transaction.create + the Ledger write are one atomic transaction
-   * (LedgerService's tx param) — a crash between them would otherwise leave a Transaction with no
-   * financial trail behind it. */
+   * PaymentService used at PaymentIntent creation time, on the same billAmount (ADR-022:
+   * payment.amount - payment.tipAmount — the fee excludes tips), so the amount Stripe actually
+   * deducted (application_fee_amount) and the amount posted here to PLATFORM_FEE_REVENUE are
+   * identical by construction, not two numbers that could drift apart. Payment.update +
+   * Transaction.create + both Ledger writes (PAYMENT_CAPTURED, and TIP_ALLOCATED when there's a
+   * tip) are one atomic transaction (LedgerService's tx param) — a crash partway through would
+   * otherwise leave a Transaction with no financial trail, or a tip credited to the general
+   * TIP_PAYABLE liability with no entry ever attributing it to anyone. */
   private async handlePaymentIntentSucceeded(event: Stripe.Event): Promise<void> {
     const intent = event.data.object as Stripe.PaymentIntent;
     const payment = await this.prisma.payment.findFirst({
@@ -121,8 +128,19 @@ export class WebhooksService {
     }
     if (payment.status === "SUCCEEDED") return; // defensive no-op; claimEvent already dedupes the normal case
 
+    const billAmount = payment.amount - payment.tipAmount;
     const basisPoints = this.config.getOrThrow<number>("DEFAULT_PLATFORM_FEE_BASIS_POINTS");
-    const { feeAmount, restaurantRevenue } = splitPlatformFee(payment.amount, basisPoints);
+    const { feeAmount, restaurantRevenue } = splitPlatformFee(billAmount, basisPoints);
+
+    if (payment.tipAmount > 0n && !payment.waiterMembershipId) {
+      // Unreachable through PaymentService's own code path (it always sets waiterMembershipId) —
+      // loud failure over a silent one, per CLAUDE_RULES.md's Error Philosophy. Left unhandled
+      // deliberately: the webhook's own catch (handleEvent) already deletes the IdempotencyKey on
+      // any thrown error so Stripe's automatic retry can reprocess once the data is fixed.
+      throw new Error(
+        `Payment ${payment.id} has tipAmount > 0 but no waiterMembershipId — cannot allocate tip`,
+      );
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.payment.update({ where: { id: payment.id }, data: { status: "SUCCEEDED" } });
@@ -170,10 +188,73 @@ export class WebhooksService {
                   },
                 ]
               : []),
+            // ADR-022's 4th line: the general TIP_PAYABLE liability, not yet attributed to anyone
+            // specific — TIP_ALLOCATED (below, same transaction) does the attribution. Omitted
+            // entirely when there's no tip, same reasoning as the fee line above.
+            ...(payment.tipAmount > 0n
+              ? [
+                  {
+                    account: "TIP_PAYABLE" as const,
+                    direction: "CREDIT" as const,
+                    amount: payment.tipAmount,
+                    currency: payment.currency,
+                    restaurantId: payment.restaurantId,
+                  },
+                ]
+              : []),
           ],
         },
         tx,
       );
+
+      // ADR-022: tip attribution — a second, separate JournalEntry, atomic with PAYMENT_CAPTURED
+      // above via the same tx. Transaction -> zero-or-one Tip (DATABASE.md): only when there's
+      // actually a tip.
+      if (payment.tipAmount > 0n && payment.waiterMembershipId) {
+        await tx.tip.create({
+          data: {
+            transactionId: transaction.id,
+            grossTip: payment.tipAmount,
+            currency: payment.currency,
+            // Both JournalEntry rows land together, atomically, in this same transaction — no
+            // real PENDING window for MVP's Individual strategy to ever observe.
+            status: "ALLOCATED",
+          },
+        });
+
+        const allocations = this.tipAllocationStrategy.allocate(
+          payment.tipAmount,
+          payment.waiterMembershipId,
+        );
+
+        await this.ledger.postJournalEntry(
+          {
+            entryType: "TIP_ALLOCATED",
+            transactionId: transaction.id,
+            lines: [
+              // Reverses the general liability PAYMENT_CAPTURED just credited above — no
+              // membershipId. Same account as the credit(s) below; membershipId is the only
+              // discriminator (ADR-022).
+              {
+                account: "TIP_PAYABLE",
+                direction: "DEBIT",
+                amount: payment.tipAmount,
+                currency: payment.currency,
+                restaurantId: payment.restaurantId,
+              },
+              ...allocations.map((allocation) => ({
+                account: "TIP_PAYABLE" as const,
+                direction: "CREDIT" as const,
+                amount: allocation.amount,
+                currency: payment.currency,
+                restaurantId: payment.restaurantId,
+                membershipId: allocation.membershipId,
+              })),
+            ],
+          },
+          tx,
+        );
+      }
     });
   }
 
