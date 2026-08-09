@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.7.1
-status: Active — twenty-one ADRs, all Accepted
+version: 1.8.0
+status: Active — twenty-two ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -321,6 +321,32 @@ Two directions were possible: make `User.password_hash` nullable and add invitat
 **Known follow-up, not resolved by this decision, flagged rather than silently assumed (tracked in `THREAT_MODEL.md`, "Open, Not Answered"):** `charge.refunded` / `charge.dispute.*` compensating entries (ADR-008/ADR-016) still reverse the **full** refunded/disputed amount out of `RESTAURANT_REVENUE_PAYABLE` — unchanged from before this ADR, and now a real question rather than a moot one: a full refund of a fee-bearing Transaction debits more from `RESTAURANT_REVENUE_PAYABLE` than that specific capture ever credited to it (the fee's share went to `PLATFORM_FEE_REVENUE`, not `RESTAURANT_REVENUE_PAYABLE`), which is fine at the level of each individual `JournalEntry` (every entry is still internally balanced, verified by the trigger) but means the *cumulative* `RESTAURANT_REVENUE_PAYABLE` balance for a fully-refunded, fee-bearing Transaction can go negative for that Transaction specifically.
 
 **Founder's stated direction, not yet implemented:** the platform fee should be proportionally clawed back on refund, matching Stripe's own optional `refund_application_fee` parameter — the eventual answer is known, Sprint 5's own task scope simply didn't include building it (capture-side split and the rate itself only, not refund/fee interaction). Revisit before this matters in practice — the first real refund against a fee-bearing payment.
+
+---
+
+## ADR-022 — Tip Handling: Client-Submitted tipAmount, Bill-Only Fee Base, Payer-Attributed Recipient, Two-Entry Posting
+**Status:** Accepted (Founder decision)
+
+**Context:** Sprint 6 (Tips) required resolving four real gaps no prior document answered: how a tip amount enters the system at all (UX_MAP.md's Payment Flow shows one combined "Card Payment" step after "Choose Tip," but `POST /payments` only ever accepted a single `amount`, with no bill/tip split); how ADR-021's "Restaurant Revenue only, excluding tips" rule stays true once a single `Payment.amount` can contain both (the existing fee split ran on the full amount); who the tip's recipient is and when that's known (no terminal/waiter-assignment mechanism exists anywhere); and the Ledger posting mechanics for crediting a specific Membership's Wallet share of `TIP_PAYABLE` (ADR-002's chart of accounts has the liability account; nothing wrote to it). Flagged rather than guessed, per `CLAUDE_RULES.md`'s "Ask Better Questions."
+
+**Decision:**
+
+`Payment` gains `tipAmount` (BigInt, minor units, default 0) — the caller-submitted tip portion of `amount`. `amount` itself is unchanged in meaning: it remains the full amount charged to the card, bill and tip combined, matching what Stripe's PaymentIntent actually processes as one charge and matching UX_MAP.md's single "Card Payment" step. Validated `tipAmount <= amount` at request time (`createPaymentSchema`).
+
+`Payment` gains a nullable `waiterMembershipId` FK to `Membership`, captured from the authenticated caller's own identity at `POST /payments` time — specifically, the Membership that actually grants that caller `payments.manage` reachability to the target Restaurant, the same one `PaymentService` already resolves to authorize the request. No separate terminal-to-waiter or table-to-waiter attribution mechanism is introduced: the person operating the payment terminal for this transaction is the tip's recipient, by construction. Always captured, whether or not `tipAmount` is nonzero — a simpler invariant than conditionally setting it, and harmless since it's only read when a tip exists.
+
+Fee computation everywhere now derives from `billAmount = amount - tipAmount`, never from `amount` directly — both call sites that run `splitPlatformFee()` (`PaymentService.createPaymentIntent`, computing Stripe's own `application_fee_amount`, and `WebhooksService.handlePaymentIntentSucceeded`, computing what posts to `PLATFORM_FEE_REVENUE`) changed identically, preserving ADR-021's own stated invariant — "one function, one rate, two call sites, never two independently-computed numbers that could drift apart" — now with `billAmount` as the shared input instead of `amount`.
+
+Ledger posting is two separate `JournalEntry` rows, not one combined entry, both inside the same database transaction as the existing `payment_intent.succeeded` write (atomic with it — either the whole thing lands or none of it does, same reasoning as the existing `Payment.update` + `Transaction.create` + Ledger-write atomicity):
+
+- `PAYMENT_CAPTURED` gains a fourth line when `tipAmount > 0`: `TIP_PAYABLE` credit for `tipAmount`, alongside the existing `PROCESSOR_CLEARING` debit (unchanged, still the full `payment.amount`), `RESTAURANT_REVENUE_PAYABLE` credit (now derived from `billAmount`), and `PLATFORM_FEE_REVENUE` credit (now derived from `billAmount`, still omitted when it rounds to zero). Balances by construction: debit `amount` = `billAmount + tipAmount`; credits `restaurantRevenue + feeAmount + tipAmount` = `billAmount + tipAmount` (since `restaurantRevenue + feeAmount = billAmount` always, per `splitPlatformFee`'s own subtraction-derived guarantee).
+- A second, immediately following `TIP_ALLOCATED` entry (same `transactionId`, no `refundId`/`chargebackId`/`adjustmentId` — matches `ledger-balance.util.ts`'s existing `TIP_ALLOCATED: null` compensating-entity mapping) debits `TIP_PAYABLE` for `tipAmount` with no `membershipId` — reversing the general liability `PAYMENT_CAPTURED` just created — and credits `TIP_PAYABLE` again for the identical total, this time as one-or-more lines each carrying a specific `membershipId`, sourced from a new `TipAllocationStrategy` interface rather than hardcoded inline. Same account on both sides of this entry; `membershipId` is the only discriminator, matching `DATABASE.md`'s own `LedgerLine` rule that `membershipId` is what makes a line contribute to a specific person's Wallet projection (ADR-007).
+
+`TipAllocationStrategy` is the interface `IMPLEMENTATION_PLAN.md`'s Sprint 6 task list already calls for by name, genuinely load-bearing rather than decorative: `allocate(tipAmount, payingMembershipId): TipAllocationLine[]`. MVP's only implementation, `IndividualTipAllocationStrategy`, always returns exactly one line (the full `tipAmount` to the payer's own `waiterMembershipId`) — matching ADR-007's already-accepted Individual strategy. `Pool`/`Shift`/`Percentage`/`Role-based` strategies (ADR-007, still not implemented) would return more than one line from the same method signature — the `TIP_ALLOCATED` entry's line-construction code doesn't change when one does, only which strategy is selected, which is exactly Sprint 6's own Definition of Done: "Adding a second allocation strategy later requires no schema change."
+
+A `Tip` row (`DATABASE.md`) is created only when `tipAmount > 0` — `Transaction → zero-or-one Tip` is the schema's own cardinality, so no tip means no row, not a zero-amount one. Written with `status: ALLOCATED` directly, not `PENDING` then transitioned: both `JournalEntry` rows land together, atomically, in the same transaction as the `Tip` row itself, so there is no real window during which the tip exists but isn't yet allocated for MVP's Individual strategy to observe.
+
+**Consequences:** Migration adds `tip_amount` (BIGINT, default 0) and `waiter_membership_id` (nullable UUID FK) to `payment`. `DATABASE.md`'s `Payment` entity and `API_Contract.md`'s Create Payment section both updated to state the new field. The pre-existing fee-computation bug this decision fixes was never shipped to production — Sprint 5 had no tip field yet, so `amount` and `billAmount` were always identical up to this point; still a real defect that a naive Sprint 6 implementation could easily have reintroduced by extending `amount`'s meaning without updating both `splitPlatformFee()` call sites in lockstep, which is exactly why both were fixed together, in the same pass, rather than one now and one "later."
 
 ---
 

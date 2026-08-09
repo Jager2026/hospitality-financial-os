@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.4.0
+version: 2.5.0
 status: Active
 classification: Internal
 owner: Founder
@@ -146,7 +146,7 @@ PATCH /memberships/{id}/disable
 # PAYMENTS
 
 ## Create Payment
-POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `restaurant_id`, `amount` (minor units, ADR-001). `currency` and `payment_method` are deliberately not client fields — `currency` always mirrors the Restaurant's own fixed Stripe-account currency (DATABASE.md, Restaurant Rules), and `payment_method` is server-set (`"card"`, the only method this MVP scope supports) rather than trusted from the client before Stripe has confirmed anything. Creates a Stripe PaymentIntent as a direct charge on the Restaurant's own connected account (ADR-014's Sprint 5 addendum) and a `PENDING` Payment row. Response: `id`, `restaurant_id`, `amount`, `currency`, `status`, `client_secret` — the frontend confirms via Stripe.js using `client_secret` (ADR-015); this endpoint never confirms the payment itself, and never writes a Ledger entry — that happens later, asynchronously, driven by the `payment_intent.succeeded` webhook (see Incoming Webhooks below).
+POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `restaurant_id`, `amount` (minor units, ADR-001, the full amount charged to the card — bill and tip combined), `tip_amount` (minor units, optional, defaults to 0, must not exceed `amount` — ADR-022). `currency` and `payment_method` are deliberately not client fields — `currency` always mirrors the Restaurant's own fixed Stripe-account currency (DATABASE.md, Restaurant Rules), and `payment_method` is server-set (`"card"`, the only method this MVP scope supports) rather than trusted from the client before Stripe has confirmed anything. Creates a Stripe PaymentIntent as a direct charge on the Restaurant's own connected account (ADR-014's Sprint 5 addendum) and a `PENDING` Payment row — `waiter_membership_id` is captured automatically from the authenticated caller's own Membership, never a client field (ADR-022). `application_fee_amount` sent to Stripe is computed from `amount - tip_amount`, never the full `amount` — the platform fee excludes tips (ADR-021). Response: `id`, `restaurant_id`, `amount`, `tip_amount`, `currency`, `status`, `client_secret` — the frontend confirms via Stripe.js using `client_secret` (ADR-015); this endpoint never confirms the payment itself, and never writes a Ledger entry — that happens later, asynchronously, driven by the `payment_intent.succeeded` webhook (see Incoming Webhooks below).
 
 ## Payment Details
 GET /payments/{id}
@@ -254,10 +254,10 @@ GET /currencies — returns the Currency reference table: code, exponent, name. 
 # SETTINGS
 
 ## Restaurant Settings
-GET /settings — PATCH /settings
+GET /settings — PATCH /settings — future; not built by Sprint 6 (Business Details, Tax Information, and the other Settings sections in UX_MAP.md belong to their own owning modules, not Tips).
 
 ## Tip Configuration
-PATCH /settings/tips
+GET /restaurants/{id}/settings/tips — PATCH /restaurants/{id}/settings/tips (Sprint 6, ADR-022) — corrected to a restaurant-scoped path (real gap found building this: `/settings/tips` with no restaurant id has no way to know which Restaurant it configures, unlike every other resource-specific endpoint in this document; the fix is the same restaurant-scoping convention already used everywhere else, e.g. `/restaurants/{id}/onboarding-link`). Requires `tips.configure` (seeded, Owner/Administrator/Manager, not Waiter). Percentage presets shown to the customer at Tip Selection (UX_MAP.md), not a validation rule on `POST /payments`'s `tip_amount`: the terminal computes the actual minor-unit amount from whichever preset (or Custom) the customer picks, and the server only ever checks `tip_amount <= amount`.
 ```json
 { "presetTips": [10, 15, 20] }
 ```

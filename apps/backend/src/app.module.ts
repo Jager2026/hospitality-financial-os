@@ -17,6 +17,8 @@ import { CurrencyModule } from "./currency/currency.module";
 import { StripeModule } from "./stripe/stripe.module";
 import { MembershipModule } from "./membership/membership.module";
 import { PaymentModule } from "./payment/payment.module";
+import { SettingsModule } from "./settings/settings.module";
+import { TipModule } from "./tip/tip.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { AuditEntityResolverGuard } from "./common/guards/audit-entity-resolver.guard";
@@ -55,6 +57,8 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     CurrencyModule,
     MembershipModule,
     PaymentModule,
+    TipModule,
+    SettingsModule,
     WebhooksModule,
   ],
   providers: [

@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.6.1
+version: 2.7.0
 status: Active
 classification: Internal
 owner: Founder
@@ -63,13 +63,15 @@ Restaurant
 ############################################################
 **Purpose:** One hospitality business location — the legal and tax entity.
 
-**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, created_at, updated_at
+**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, tip_presets, created_at, updated_at
 
 **Relationships:** Restaurant → Organization (parent) · Restaurant → many Membership · Restaurant → many Payment / Transaction
 
 **Rules:** Restaurant carries `vat_number` and `company_number` because it is the tax entity, and for MVP owns its own Stripe Connect account (ADR-009, ADR-014 — Accounts v2, `dashboard: "full"`) — connected accounts are attached per location, not per Organization. `country` / `currency` mirror the connected account's fixed values; changing a restaurant's operating country means a new Stripe account, never an edit to this row. `default_customer_locale` is what the payment terminal shows before a customer touches anything — the customer has no account to store a preference in, so this is the only place it can live (ADR-013). Restaurant is never physically deleted. `currency` references `Currency.code`.
 
 `card_payments_status` and `payouts_status` mirror Stripe's own v2 capability-status strings (`configuration.merchant.capabilities.card_payments.status` and `configuration.merchant.capabilities.stripe_balance.payouts.status` respectively — confirmed against a real API response, ADR-009's revision) — not booleans, and deliberately not a Postgres enum either, since this vocabulary belongs to Stripe and can grow without a migration on our side. `requirements_due` stores Stripe's real `requirements.entries[]` array as-is (JSON) — a list of requirement objects, not requirement-name strings.
+
+`tip_presets` (Sprint 6, ADR-022): an array of integer percentages (e.g. `[10, 15, 20]`) shown to the customer at Tip Selection (UX_MAP.md) — display configuration only, never a validation rule on `Payment.tip_amount`, which is a plain minor-units amount the terminal computes from whichever preset or Custom value the customer picks. Defaults to `[10, 15, 20]` (`API_Contract.md`'s own example), editable per Restaurant via `PATCH /settings/tips`.
 
 ---
 
@@ -175,11 +177,13 @@ Payment
 ############################################################
 **Purpose:** One attempt to capture money from a customer through the processor.
 
-**Fields:** id, restaurant_id, processor, processor_payment_id, amount, currency, status, payment_method, idempotency_key, created_at, updated_at
+**Fields:** id, restaurant_id, processor, processor_payment_id, amount, tip_amount, waiter_membership_id (nullable), currency, status, payment_method, idempotency_key, created_at, updated_at
 
-**Relationships:** Payment → Restaurant · Payment → one Transaction (on success) · Payment → IdempotencyKey
+**Relationships:** Payment → Restaurant · Payment → one Transaction (on success) · Payment → IdempotencyKey · Payment → Membership (`waiter_membership_id`, nullable — the caller who created this Payment, ADR-022)
 
-**Rules:** Immutable once created, with one exception (ADR-018): `status` transitions exactly once, from `pending` to a terminal state — `succeeded` / `failed` / `canceled` / `declined` — recorded via `updated_at`. `failed` (processing error or timeout) and `declined` (card issuer rejected the charge) are distinct states, since MASTERPLAN.md's Fraud Prevention treats repeated failures as a signal. Every other field — `amount`, `restaurant_id`, `processor`, `processor_payment_id`, `currency`, `payment_method`, `idempotency_key` — never changes after creation. `idempotency_key` must reference a row in `IdempotencyKey` (ADR-004) — every Payment-creating request must supply one.
+**Rules:** Immutable once created, with one exception (ADR-018): `status` transitions exactly once, from `pending` to a terminal state — `succeeded` / `failed` / `canceled` / `declined` — recorded via `updated_at`. `failed` (processing error or timeout) and `declined` (card issuer rejected the charge) are distinct states, since MASTERPLAN.md's Fraud Prevention treats repeated failures as a signal. Every other field — `amount`, `tip_amount`, `waiter_membership_id`, `restaurant_id`, `processor`, `processor_payment_id`, `currency`, `payment_method`, `idempotency_key` — never changes after creation. `idempotency_key` must reference a row in `IdempotencyKey` (ADR-004) — every Payment-creating request must supply one.
+
+**Tip fields (ADR-022):** `amount` is the full amount charged to the card — bill and tip combined, matching the single "Card Payment" step in UX_MAP.md's Payment Flow — never split into two client-facing fields. `tip_amount` is the caller-submitted tip portion of it (`tip_amount <= amount`, validated at request time); `amount - tip_amount` is the bill-only amount every platform-fee computation must use (ADR-021: fee excludes tips). `waiter_membership_id` is captured automatically from the authenticated caller's own Membership at creation time — the same Membership that grants them `payments.manage` reachability to the Restaurant — never a separate terminal/table/waiter-assignment step. Always populated, whether or not `tip_amount` is nonzero; only read when it is.
 
 ---
 
