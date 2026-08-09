@@ -502,12 +502,89 @@ describe("WebhooksService (real database, real signature verification)", () => {
     const chargebackLines = await prisma.ledgerLine.findMany({
       where: { journalEntry: { transactionId: transaction?.id, entryType: "CHARGEBACK" } },
     });
-    // 2 lines for the provisional loss + 2 lines for the reversal = 4, net effect zero.
-    expect(chargebackLines).toHaveLength(4);
+    // ADR-023: 3 lines for the provisional loss (RESTAURANT_REVENUE_PAYABLE + PLATFORM_FEE_REVENUE
+    // + REFUND_CONTRA — this Payment has a fee but no tip) + 3 for the mirrored reversal = 6.
+    expect(chargebackLines).toHaveLength(6);
     const netRestaurantRevenue = chargebackLines
       .filter((l) => l.account === "RESTAURANT_REVENUE_PAYABLE")
       .reduce((sum, l) => sum + (l.direction === "CREDIT" ? l.amount : -l.amount), 0n);
     expect(netRestaurantRevenue).toBe(0n); // debited on open, credited back on WON — net zero
+    const netFee = chargebackLines
+      .filter((l) => l.account === "PLATFORM_FEE_REVENUE")
+      .reduce((sum, l) => sum + (l.direction === "CREDIT" ? l.amount : -l.amount), 0n);
+    expect(netFee).toBe(0n); // ADR-023: the fee is also clawed back and reversed on WON, not left standing
+  });
+
+  it("charge.dispute.created then charge.dispute.closed (won) with a tip (ADR-023): the provisional loss debits RESTAURANT_REVENUE_PAYABLE, PLATFORM_FEE_REVENUE, and the waiter's own TIP_PAYABLE credit proportionally, and WON reverses the exact same three amounts — discriminating: DATABASE.md claims 'Same compensating-entry rule as Refund', which was NOT true before this fix (only RESTAURANT_REVENUE_PAYABLE was ever touched)", async () => {
+    const restaurant = await seedOrgRestaurant();
+    const waiterMembership = await seedWaiterMembership(restaurant.organizationId, restaurant.id);
+    const piId = `pi_${randomUUID()}`;
+    // amount=2000, tipAmount=500 -> billAmount=1500 -> fee=15, revenue=1485 (1.00%).
+    const payment = await seedPayment(restaurant.id, 2000n, piId, {
+      tipAmount: 500n,
+      waiterMembershipId: waiterMembership.id,
+    });
+
+    const { rawBody: succeededRaw, signature: succeededSig } = signEvent(
+      buildEvent("payment_intent.succeeded", { id: piId, amount: 2000, currency: "eur" }),
+    );
+    await service.handleEvent(succeededRaw, succeededSig);
+    const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
+
+    const disputeId = `dp_${randomUUID()}`;
+    const { rawBody: createdRaw, signature: createdSig } = signEvent(
+      buildEvent("charge.dispute.created", {
+        id: disputeId,
+        payment_intent: piId,
+        amount: 2000,
+        reason: "fraudulent",
+        status: "warning_needs_response",
+        evidence_details: { due_by: null },
+      }),
+    );
+    await service.handleEvent(createdRaw, createdSig);
+
+    const chargeback = await prisma.chargeback.findFirst({
+      where: { processorDisputeId: disputeId },
+    });
+    const provisionalEntry = await prisma.journalEntry.findFirst({
+      where: { chargebackId: chargeback?.id, entryType: "CHARGEBACK" },
+      orderBy: { createdAt: "asc" },
+    });
+    const provisionalLines = await prisma.ledgerLine.findMany({
+      where: { journalEntryId: provisionalEntry?.id },
+    });
+    expect(provisionalLines.find((l) => l.account === "RESTAURANT_REVENUE_PAYABLE")?.amount).toBe(
+      1485n,
+    );
+    expect(provisionalLines.find((l) => l.account === "PLATFORM_FEE_REVENUE")?.amount).toBe(15n);
+    const provisionalTipLine = provisionalLines.find((l) => l.account === "TIP_PAYABLE");
+    expect(provisionalTipLine?.amount).toBe(500n);
+    expect(provisionalTipLine?.membershipId).toBe(waiterMembership.id); // never the null general line
+
+    const { rawBody: closedRaw, signature: closedSig } = signEvent(
+      buildEvent("charge.dispute.closed", {
+        id: disputeId,
+        payment_intent: piId,
+        amount: 2000,
+        reason: "fraudulent",
+        status: "won",
+        evidence_details: { due_by: null },
+      }),
+    );
+    await service.handleEvent(closedRaw, closedSig);
+
+    const allChargebackLines = await prisma.ledgerLine.findMany({
+      where: { journalEntry: { transactionId: transaction?.id, entryType: "CHARGEBACK" } },
+    });
+    const netByAccount = (account: string) =>
+      allChargebackLines
+        .filter((l) => l.account === account)
+        .reduce((sum, l) => sum + (l.direction === "CREDIT" ? l.amount : -l.amount), 0n);
+    expect(netByAccount("RESTAURANT_REVENUE_PAYABLE")).toBe(0n);
+    expect(netByAccount("PLATFORM_FEE_REVENUE")).toBe(0n);
+    expect(netByAccount("TIP_PAYABLE")).toBe(0n); // the waiter's own credit is also fully reversed
+    expect(netByAccount("REFUND_CONTRA")).toBe(0n); // opened as a credit, closed as a debit — net zero
   });
 
   it("charge.dispute.closed (lost): no reversal entry is posted, provisional loss stands", async () => {
@@ -554,7 +631,9 @@ describe("WebhooksService (real database, real signature verification)", () => {
     const chargebackLines = await prisma.ledgerLine.findMany({
       where: { journalEntry: { transactionId: transaction?.id, entryType: "CHARGEBACK" } },
     });
-    expect(chargebackLines).toHaveLength(2); // only the original provisional loss, no reversal
+    // ADR-023: 3 lines (RESTAURANT_REVENUE_PAYABLE + PLATFORM_FEE_REVENUE + REFUND_CONTRA — this
+    // Payment has a fee but no tip), only the original provisional loss, no reversal.
+    expect(chargebackLines).toHaveLength(3);
   });
 
   it("account.updated: delegates to RestaurantService.refreshStripeStatusByAccountId with the account id from the event", async () => {

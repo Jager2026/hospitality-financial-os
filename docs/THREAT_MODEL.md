@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.2.0
+version: 1.2.1
 status: Active
 classification: Critical
 owner: Founder
@@ -82,12 +82,12 @@ Every entry below cites a real ADR number and a real, already-existing mechanism
 
 ---
 
-## 8. Platform fee and tip left standing on a refunded payment
-**Threat:** A refund reverses `RESTAURANT_REVENUE_PAYABLE` for the full refunded amount but leaves `PLATFORM_FEE_REVENUE` and the waiter's own `TIP_PAYABLE` credit untouched — the platform keeps a fee on money it no longer holds, and a waiter's Wallet still shows a tip the customer got back in full. Found live, not by a test: a real full refund (`amount=2000, tipAmount=500`) against a real tip-bearing payment left `RESTAURANT_REVENUE_PAYABLE` at **-515** for that Transaction, `PLATFORM_FEE_REVENUE` still holding its `15`, and the waiter's `TIP_PAYABLE` credit still standing at `500`.
+## 8. Platform fee and tip left standing on a refunded payment or a lost dispute
+**Threat:** A refund or a chargeback reverses `RESTAURANT_REVENUE_PAYABLE` for the full amount but leaves `PLATFORM_FEE_REVENUE` and the waiter's own `TIP_PAYABLE` credit untouched — the platform keeps a fee on money it no longer holds, and a waiter's Wallet still shows a tip the customer got back in full. Found live, not by a test, on the refund side first: a real full refund (`amount=2000, tipAmount=500`) against a real tip-bearing payment left `RESTAURANT_REVENUE_PAYABLE` at **-515** for that Transaction, `PLATFORM_FEE_REVENUE` still holding its `15`, and the waiter's `TIP_PAYABLE` credit still standing at `500`. The chargeback path (`charge.dispute.created`/`charge.dispute.closed`) turned out to have the identical gap, found by checking `DATABASE.md`'s own "Same compensating-entry rule as Refund" claim against the actual code rather than assuming it — the claim was already correct in the docs, the code just hadn't caught up.
 
-**Closed by:** ADR-023 — Refund Proportional Reversal. *"handleChargeRefunded now reverses three accounts proportionally instead of one unconditionally... RESTAURANT_REVENUE_PAYABLE's share is always the residual, never its own independent division... keeps the three reversed shares summing to exactly cumulativeRefunded."*
+**Closed by:** ADR-023 — Refund Proportional Reversal (revised in place to cover both triggers). *"handleChargeRefunded now reverses three accounts proportionally instead of one unconditionally... RESTAURANT_REVENUE_PAYABLE's share is always the residual, never its own independent division... keeps the three reversed shares summing to exactly cumulativeRefunded."* Same `splitProportionally()`/`getOriginalCapturedFeeAmount()` helpers now shared by `handleDisputeCreated` and `handleDisputeClosed`.
 
-**Mechanism, live-verified:** the same real Transaction from the Threat description, re-run after the fix — `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and `TIP_PAYABLE` each summed to exactly zero for that Transaction after the full refund. Regression-tested with two sequential partial refunds against a tip-bearing payment (`webhooks.service.spec.ts`), confirming the delta-per-account technique doesn't double-count or under-count across multiple events, not just a single full-refund shot.
+**Mechanism, live-verified:** the same real Transaction from the Threat description, re-run after the fix — `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and `TIP_PAYABLE` each summed to exactly zero for that Transaction after the full refund. Regression-tested with two sequential partial refunds against a tip-bearing payment (`webhooks.service.spec.ts`), confirming the delta-per-account technique doesn't double-count or under-count across multiple events, not just a single full-refund shot. The chargeback side is regression-tested the same way: a dispute opened on a tip-bearing Transaction debits all three accounts proportionally, and a WON closure reverses the exact same three amounts back to net zero.
 
 ---
 

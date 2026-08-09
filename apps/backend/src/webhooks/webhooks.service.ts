@@ -299,28 +299,17 @@ export class WebhooksService {
     }
     const cumulativeRefunded = previouslyRecorded + newRefundAmount;
 
-    // ADR-023: the ORIGINAL capture-time fee, read back from PAYMENT_CAPTURED's own LedgerLine —
-    // never re-derived via splitPlatformFee() against the CURRENT basis-point rate, which is a
-    // mutable env var (ADR-021) that could have changed between capture and this refund. Reading
-    // the Ledger's own historical record instead is immune to that drift.
-    const capturedFeeLine = await this.prisma.ledgerLine.findFirst({
-      where: {
-        account: "PLATFORM_FEE_REVENUE",
-        journalEntry: { transactionId: transaction.id, entryType: "PAYMENT_CAPTURED" },
-      },
-    });
-    const originalFeeAmount = capturedFeeLine?.amount ?? 0n;
-    const originalTipAmount = payment.tipAmount; // trusted directly, same as everywhere else
-
-    // Proportional, cumulative amount for each account — RESTAURANT_REVENUE_PAYABLE's share is
-    // always the residual, never its own independent division (ADR-001/ADR-021's largest-
-    // remainder discipline: two independently-floored shares can round down and leave a
-    // remainder; deriving the third by subtraction is what keeps the three shares summing to
-    // exactly cumulativeRefunded, which LedgerService's own balance check requires regardless).
-    const cumulativeTipReversed = (originalTipAmount * cumulativeRefunded) / payment.amount;
-    const cumulativeFeeReversed = (originalFeeAmount * cumulativeRefunded) / payment.amount;
-    const cumulativeRevenueReversed =
-      cumulativeRefunded - cumulativeTipReversed - cumulativeFeeReversed;
+    const originalFeeAmount = await this.getOriginalCapturedFeeAmount(transaction.id);
+    const {
+      tipShare: cumulativeTipReversed,
+      feeShare: cumulativeFeeReversed,
+      revenueShare: cumulativeRevenueReversed,
+    } = this.splitProportionally(
+      cumulativeRefunded,
+      payment.tipAmount,
+      originalFeeAmount,
+      payment.amount,
+    );
 
     // "Already reversed" per account — read back from prior REFUND_ISSUED LedgerLines for this
     // Transaction, the same way previouslyRecorded above reads prior Refund rows. No new stored
@@ -445,8 +434,44 @@ export class WebhooksService {
     return result._sum.amount ?? 0n;
   }
 
-  /** ADR-016: a dispute is a provisional loss the moment it opens — written immediately, the
-   * same shape as a Refund. Never a held-funds account; if the dispute is later won,
+  /** ADR-023: the ORIGINAL capture-time fee, read back from PAYMENT_CAPTURED's own LedgerLine —
+   * never re-derived via splitPlatformFee() against the CURRENT basis-point rate, which is a
+   * mutable env var (ADR-021) that could have changed since capture. Reading the Ledger's own
+   * historical record instead is immune to that drift. Shared by handleChargeRefunded and
+   * handleDisputeCreated — both need the same original split. */
+  private async getOriginalCapturedFeeAmount(transactionId: string): Promise<bigint> {
+    const capturedFeeLine = await this.prisma.ledgerLine.findFirst({
+      where: {
+        account: "PLATFORM_FEE_REVENUE",
+        journalEntry: { transactionId, entryType: "PAYMENT_CAPTURED" },
+      },
+    });
+    return capturedFeeLine?.amount ?? 0n;
+  }
+
+  /** ADR-023: splits `portionAmount` (a refund delta, or a dispute amount) into the same three
+   * shares PAYMENT_CAPTURED itself split the original charge into. `revenueShare` is always the
+   * residual, never its own independent division (ADR-001/ADR-021's largest-remainder
+   * discipline: two independently-floored shares can round down and leave a remainder; deriving
+   * the third by subtraction is what keeps the three shares summing to exactly `portionAmount`,
+   * which LedgerService's own balance check requires regardless). */
+  private splitProportionally(
+    portionAmount: bigint,
+    originalTipAmount: bigint,
+    originalFeeAmount: bigint,
+    originalGrossAmount: bigint,
+  ): { tipShare: bigint; feeShare: bigint; revenueShare: bigint } {
+    const tipShare = (originalTipAmount * portionAmount) / originalGrossAmount;
+    const feeShare = (originalFeeAmount * portionAmount) / originalGrossAmount;
+    const revenueShare = portionAmount - tipShare - feeShare;
+    return { tipShare, feeShare, revenueShare };
+  }
+
+  /** ADR-016 + ADR-023: a dispute is a provisional loss the moment it opens — written
+   * immediately, "Same compensating-entry rule as Refund" (DATABASE.md, Chargeback Rules):
+   * RESTAURANT_REVENUE_PAYABLE, PLATFORM_FEE_REVENUE, and TIP_PAYABLE (at the waiter's own
+   * membershipId) are all debited proportionally, the same splitProportionally() call
+   * handleChargeRefunded uses. Never a held-funds account; if the dispute is later won,
    * handleDisputeClosed posts a second, reversing JournalEntry rather than editing this one. */
   private async handleDisputeCreated(event: Stripe.Event): Promise<void> {
     const dispute = event.data.object as Stripe.Dispute;
@@ -471,13 +496,22 @@ export class WebhooksService {
     });
     if (!transaction) return;
 
+    const disputeAmount = BigInt(dispute.amount);
+    const originalFeeAmount = await this.getOriginalCapturedFeeAmount(transaction.id);
+    const { tipShare, feeShare, revenueShare } = this.splitProportionally(
+      disputeAmount,
+      payment.tipAmount,
+      originalFeeAmount,
+      payment.amount,
+    );
+
     await this.prisma.$transaction(async (tx) => {
       const chargeback = await tx.chargeback.create({
         data: {
           transactionId: transaction.id,
           processorDisputeId: dispute.id,
           reason: dispute.reason,
-          amount: BigInt(dispute.amount),
+          amount: disputeAmount,
           currency: transaction.currency,
           status: "UNDER_REVIEW",
           evidenceDueBy: dispute.evidence_details?.due_by
@@ -495,17 +529,46 @@ export class WebhooksService {
           chargebackId: chargeback.id,
           description: "Provisional loss — dispute opened",
           lines: [
-            {
-              account: "RESTAURANT_REVENUE_PAYABLE",
-              direction: "DEBIT",
-              amount: BigInt(dispute.amount),
-              currency: transaction.currency,
-              restaurantId: transaction.restaurantId,
-            },
+            // Each omitted when its share rounds to exactly zero — same convention
+            // PAYMENT_CAPTURED and REFUND_ISSUED already use.
+            ...(revenueShare > 0n
+              ? [
+                  {
+                    account: "RESTAURANT_REVENUE_PAYABLE" as const,
+                    direction: "DEBIT" as const,
+                    amount: revenueShare,
+                    currency: transaction.currency,
+                    restaurantId: transaction.restaurantId,
+                  },
+                ]
+              : []),
+            ...(feeShare > 0n
+              ? [
+                  {
+                    account: "PLATFORM_FEE_REVENUE" as const,
+                    direction: "DEBIT" as const,
+                    amount: feeShare,
+                    currency: transaction.currency,
+                    restaurantId: transaction.restaurantId,
+                  },
+                ]
+              : []),
+            ...(tipShare > 0n && payment.waiterMembershipId
+              ? [
+                  {
+                    account: "TIP_PAYABLE" as const,
+                    direction: "DEBIT" as const,
+                    amount: tipShare,
+                    currency: transaction.currency,
+                    restaurantId: transaction.restaurantId,
+                    membershipId: payment.waiterMembershipId,
+                  },
+                ]
+              : []),
             {
               account: "REFUND_CONTRA",
               direction: "CREDIT",
-              amount: BigInt(dispute.amount),
+              amount: disputeAmount,
               currency: transaction.currency,
               restaurantId: transaction.restaurantId,
             },
@@ -516,9 +579,13 @@ export class WebhooksService {
     });
   }
 
-  /** ADR-016: WON reverses the provisional loss with a second JournalEntry. LOST posts nothing
-   * further — the provisional loss already posted at dispute.created stands as the final,
-   * correct state. Either way, the original provisional entry is never edited. */
+  /** ADR-016 + ADR-023: WON reverses the provisional loss with a second JournalEntry — the exact
+   * same per-account amounts the provisional entry debited, read back from its own LedgerLines
+   * rather than recomputed, so a WON reversal can never disagree with what dispute.created
+   * actually posted (same reasoning as reading originalFeeAmount from the Ledger instead of
+   * re-deriving it). LOST posts nothing further — the provisional loss already posted at
+   * dispute.created stands as the final, correct state. Either way, the original provisional
+   * entry is never edited. */
   private async handleDisputeClosed(event: Stripe.Event): Promise<void> {
     const dispute = event.data.object as Stripe.Dispute;
     const chargeback = await this.prisma.chargeback.findFirst({
@@ -537,6 +604,16 @@ export class WebhooksService {
 
     const won = dispute.status === "won";
 
+    const provisionalLines = won
+      ? ((
+          await this.prisma.journalEntry.findFirst({
+            where: { chargebackId: chargeback.id, entryType: "CHARGEBACK" },
+            include: { ledgerLines: true },
+            orderBy: { createdAt: "asc" }, // the provisional-loss entry, posted first
+          })
+        )?.ledgerLines ?? [])
+      : [];
+
     await this.prisma.$transaction(async (tx) => {
       await tx.chargeback.update({
         where: { id: chargeback.id },
@@ -544,6 +621,18 @@ export class WebhooksService {
       });
 
       if (won) {
+        const revenueDebit =
+          provisionalLines.find(
+            (l) => l.account === "RESTAURANT_REVENUE_PAYABLE" && l.direction === "DEBIT",
+          )?.amount ?? 0n;
+        const feeDebit =
+          provisionalLines.find(
+            (l) => l.account === "PLATFORM_FEE_REVENUE" && l.direction === "DEBIT",
+          )?.amount ?? 0n;
+        const tipLine = provisionalLines.find(
+          (l) => l.account === "TIP_PAYABLE" && l.direction === "DEBIT",
+        );
+
         await this.ledger.postJournalEntry(
           {
             entryType: "CHARGEBACK",
@@ -558,13 +647,40 @@ export class WebhooksService {
                 currency: chargeback.currency,
                 restaurantId: transaction.restaurantId,
               },
-              {
-                account: "RESTAURANT_REVENUE_PAYABLE",
-                direction: "CREDIT",
-                amount: chargeback.amount,
-                currency: chargeback.currency,
-                restaurantId: transaction.restaurantId,
-              },
+              ...(revenueDebit > 0n
+                ? [
+                    {
+                      account: "RESTAURANT_REVENUE_PAYABLE" as const,
+                      direction: "CREDIT" as const,
+                      amount: revenueDebit,
+                      currency: chargeback.currency,
+                      restaurantId: transaction.restaurantId,
+                    },
+                  ]
+                : []),
+              ...(feeDebit > 0n
+                ? [
+                    {
+                      account: "PLATFORM_FEE_REVENUE" as const,
+                      direction: "CREDIT" as const,
+                      amount: feeDebit,
+                      currency: chargeback.currency,
+                      restaurantId: transaction.restaurantId,
+                    },
+                  ]
+                : []),
+              ...(tipLine
+                ? [
+                    {
+                      account: "TIP_PAYABLE" as const,
+                      direction: "CREDIT" as const,
+                      amount: tipLine.amount,
+                      currency: chargeback.currency,
+                      restaurantId: transaction.restaurantId,
+                      membershipId: tipLine.membershipId ?? undefined,
+                    },
+                  ]
+                : []),
             ],
           },
           tx,
