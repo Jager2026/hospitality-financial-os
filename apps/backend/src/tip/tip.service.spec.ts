@@ -35,7 +35,7 @@ function buildEvent(type: string, dataObject: Record<string, unknown>) {
   };
 }
 
-describe("TipService.findForRestaurant (real database)", () => {
+describe("TipService (real database)", () => {
   const prisma = new PrismaService();
   let tipService: TipService;
   let webhooks: WebhooksService;
@@ -151,6 +151,20 @@ describe("TipService.findForRestaurant (real database)", () => {
     };
   }
 
+  function waiterUserWithMemberships(
+    memberships: Array<{ id: string; organizationId: string; restaurantId: string | null }>,
+  ): AuthenticatedUser {
+    return {
+      id: randomUUID(),
+      email: "waiter@example.com",
+      locale: "en",
+      memberships: memberships.map((m) => ({
+        ...m,
+        role: { id: randomUUID(), name: "Waiter", permissions: [] },
+      })),
+    };
+  }
+
   it(
     "returns exactly one entry per tip, not two — regression test for the general " +
       "PAYMENT_CAPTURED TIP_PAYABLE credit line (membershipId null) being counted alongside the " +
@@ -182,4 +196,141 @@ describe("TipService.findForRestaurant (real database)", () => {
       expect(results[0].amount).toBe("500"); // the real, person-attributed credit — not the general one
     },
   );
+
+  describe("findMine", () => {
+    it(
+      "returns exactly one entry per tip, not two — proves the code comment's own claim " +
+        "('its own membershipId: { in: ... } filter already excludes null incidentally') by " +
+        "actual test, not by reading the comment and trusting it. Same real bug shape as " +
+        "findForRestaurant's regression test: PAYMENT_CAPTURED's general TIP_PAYABLE credit " +
+        "(membershipId null) must never be counted alongside the real, person-attributed one.",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+        const piId = `pi_${randomUUID()}`;
+        const payment = await seedPayment(restaurant.id, 2000n, 500n, waiterMembership.id, piId);
+
+        const { rawBody, signature } = signEvent(
+          buildEvent("payment_intent.succeeded", { id: piId, amount: 2000, currency: "eur" }),
+        );
+        await webhooks.handleEvent(rawBody, signature);
+
+        const transaction = await prisma.transaction.findUnique({
+          where: { paymentId: payment.id },
+        });
+        const tip = await prisma.tip.findUnique({ where: { transactionId: transaction?.id } });
+
+        const caller = waiterUserWithMemberships([
+          {
+            id: waiterMembership.id,
+            organizationId: org.id,
+            restaurantId: restaurant.id,
+          },
+        ]);
+        const results = await tipService.findMine(caller);
+
+        expect(results).toHaveLength(1); // NOT 2
+        expect(results[0].tipId).toBe(tip?.id);
+        expect(results[0].amount).toBe("500");
+      },
+    );
+
+    it("aggregates across every Membership the caller holds, not just one restaurant", async () => {
+      const { org: orgA, restaurant: restaurantA } = await seedOrgRestaurant();
+      const { org: orgB, restaurant: restaurantB } = await seedOrgRestaurant();
+      const waiterA = await seedWaiterMembership(orgA.id, restaurantA.id);
+      const waiterB = await seedWaiterMembership(orgB.id, restaurantB.id);
+
+      const piA = `pi_${randomUUID()}`;
+      await seedPayment(restaurantA.id, 1500n, 300n, waiterA.id, piA);
+      const { rawBody: rawA, signature: sigA } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piA, amount: 1500, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawA, sigA);
+
+      const piB = `pi_${randomUUID()}`;
+      await seedPayment(restaurantB.id, 2500n, 700n, waiterB.id, piB);
+      const { rawBody: rawB, signature: sigB } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piB, amount: 2500, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawB, sigB);
+
+      // Same person, two employers — same shape as ADR-006's own multi-Membership example.
+      const caller = waiterUserWithMemberships([
+        { id: waiterA.id, organizationId: orgA.id, restaurantId: restaurantA.id },
+        { id: waiterB.id, organizationId: orgB.id, restaurantId: restaurantB.id },
+      ]);
+      const results = await tipService.findMine(caller);
+
+      expect(results).toHaveLength(2);
+      expect(results.map((r) => r.amount).sort()).toEqual(["300", "700"]);
+      expect(
+        results.every(
+          (r) => r.restaurantId === restaurantA.id || r.restaurantId === restaurantB.id,
+        ),
+      ).toBe(true);
+    });
+
+    it("returns an empty array for a caller with zero Memberships, not an error", async () => {
+      const caller = waiterUserWithMemberships([]);
+      const results = await tipService.findMine(caller);
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("findOne", () => {
+    it("returns the Tip for a caller who can reach its Restaurant", async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+      const piId = `pi_${randomUUID()}`;
+      const payment = await seedPayment(restaurant.id, 1000n, 200n, waiterMembership.id, piId);
+      const { rawBody, signature } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piId, amount: 1000, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawBody, signature);
+
+      const transaction = await prisma.transaction.findUnique({
+        where: { paymentId: payment.id },
+      });
+      const tip = await prisma.tip.findUniqueOrThrow({ where: { transactionId: transaction!.id } });
+
+      const found = await tipService.findOne(tip.id, ownerUserReaching(org.id));
+      expect(found.id).toBe(tip.id);
+    });
+
+    it("throws NOT_FOUND for a Tip id that doesn't exist", async () => {
+      const { org } = await seedOrgRestaurant();
+      await expect(
+        tipService.findOne(randomUUID(), ownerUserReaching(org.id)),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it(
+      "throws NOT_FOUND (not a 403) for a caller from an unrelated Organization — reachability " +
+        "failure never leaks that the Tip exists, same convention as every other resource in " +
+        "this codebase",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+        const piId = `pi_${randomUUID()}`;
+        const payment = await seedPayment(restaurant.id, 1000n, 200n, waiterMembership.id, piId);
+        const { rawBody, signature } = signEvent(
+          buildEvent("payment_intent.succeeded", { id: piId, amount: 1000, currency: "eur" }),
+        );
+        await webhooks.handleEvent(rawBody, signature);
+
+        const transaction = await prisma.transaction.findUnique({
+          where: { paymentId: payment.id },
+        });
+        const tip = await prisma.tip.findUniqueOrThrow({
+          where: { transactionId: transaction!.id },
+        });
+
+        const { org: strangerOrg } = await seedOrgRestaurant();
+        await expect(
+          tipService.findOne(tip.id, ownerUserReaching(strangerOrg.id)),
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      },
+    );
+  });
 });
