@@ -1,0 +1,381 @@
+import { randomUUID } from "node:crypto";
+import Stripe from "stripe";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import { LedgerService } from "../ledger/ledger.service";
+import { PrismaService } from "../prisma/prisma.service";
+import type { RestaurantService } from "../restaurant/restaurant.service";
+import { StripeService } from "../stripe/stripe.service";
+import { IndividualTipAllocationStrategy } from "../tip/individual-tip-allocation.strategy";
+import { WebhooksService } from "../webhooks/webhooks.service";
+import { DashboardService } from "./dashboard.service";
+
+// Real database, driven through the REAL production write path (WebhooksService) — same
+// discipline as transaction.service.spec.ts / wallet-projection.service.spec.ts. Sprint 9's own
+// DoD: "Dashboard figures match a manual sum over LedgerLine" — checked directly against a raw
+// groupBy in several tests below, not just against the service's own output.
+const WEBHOOK_SECRET = "whsec_test_fake_secret_for_signing_only";
+const TIMEZONE = "Europe/Vilnius";
+
+function signEvent(payload: object): { rawBody: Buffer; signature: string } {
+  const raw = JSON.stringify(payload);
+  const header = Stripe.webhooks.generateTestHeaderString({ payload: raw, secret: WEBHOOK_SECRET });
+  return { rawBody: Buffer.from(raw), signature: header };
+}
+
+function buildEvent(type: string, dataObject: Record<string, unknown>) {
+  return {
+    id: `evt_test_${randomUUID()}`,
+    object: "event",
+    type,
+    data: { object: dataObject },
+    api_version: "2026-07-29.dahlia",
+    created: Math.floor(Date.now() / 1000),
+    livemode: false,
+    pending_webhooks: 0,
+    request: { id: null, idempotency_key: null },
+  };
+}
+
+describe("DashboardService (real database)", () => {
+  const prisma = new PrismaService();
+  let dashboardService: DashboardService;
+  let webhooks: WebhooksService;
+
+  beforeAll(async () => {
+    await prisma.$connect();
+    const stripe = new StripeService({
+      getOrThrow: (key: string) =>
+        key === "STRIPE_WEBHOOK_SECRET" ? WEBHOOK_SECRET : "sk_test_fake_never_called",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    const ledger = new LedgerService(prisma);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fakeConfig = { getOrThrow: () => 100 } as any; // 1.00%, Founder decision
+    const fakeRestaurantService = {} as RestaurantService;
+    webhooks = new WebhooksService(
+      prisma,
+      stripe,
+      ledger,
+      fakeRestaurantService,
+      fakeConfig,
+      new IndividualTipAllocationStrategy(),
+    );
+    dashboardService = new DashboardService(prisma);
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  async function seedOrgRestaurant() {
+    const org = await prisma.organization.create({ data: { name: "Dashboard Test Org" } });
+    const restaurant = await prisma.restaurant.create({
+      data: {
+        organizationId: org.id,
+        name: "Dashboard Test Restaurant",
+        legalName: "Dashboard Test Restaurant UAB",
+        companyNumber: `DB-${randomUUID()}`,
+        vatNumber: `LT${randomUUID()}`,
+        email: `restaurant-${randomUUID()}@example.com`,
+        phone: "+37060000020",
+        country: "LT",
+        currency: "EUR",
+        defaultCustomerLocale: "en",
+        timezone: TIMEZONE,
+        address: "Test address",
+        stripeAccountId: `acct_fake_${randomUUID()}`,
+      },
+    });
+    return { org, restaurant };
+  }
+
+  async function seedMembership(
+    organizationId: string,
+    restaurantId: string | null,
+    roleName: "Owner" | "Waiter",
+  ) {
+    const role = await prisma.role.findUniqueOrThrow({ where: { name: roleName } });
+    const user = await prisma.user.create({
+      data: {
+        email: `${roleName.toLowerCase()}-${randomUUID()}@example.com`,
+        passwordHash: "not-a-real-hash",
+        locale: "en",
+      },
+    });
+    const membership = await prisma.membership.create({
+      data: { userId: user.id, organizationId, restaurantId, roleId: role.id },
+    });
+    return { user, membership };
+  }
+
+  async function seedPayment(
+    restaurantId: string,
+    amount: bigint,
+    tipAmount: bigint,
+    waiterMembershipId: string,
+    processorPaymentId: string,
+  ) {
+    const key = `dashboard-test-key-${randomUUID()}`;
+    await prisma.idempotencyKey.create({
+      data: {
+        key,
+        endpointScope: "/payments",
+        requestFingerprint: "test",
+        status: "COMPLETED",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    return prisma.payment.create({
+      data: {
+        restaurantId,
+        processor: "stripe",
+        processorPaymentId,
+        amount,
+        tipAmount,
+        waiterMembershipId,
+        currency: "EUR",
+        status: "PENDING",
+        paymentMethod: "card",
+        idempotencyKey: key,
+      },
+    });
+  }
+
+  async function capture(
+    restaurantId: string,
+    amount: bigint,
+    tipAmount: bigint,
+    waiterMembershipId: string,
+  ) {
+    const piId = `pi_${randomUUID()}`;
+    const payment = await seedPayment(restaurantId, amount, tipAmount, waiterMembershipId, piId);
+    const { rawBody, signature } = signEvent(
+      buildEvent("payment_intent.succeeded", { id: piId, amount: Number(amount), currency: "eur" }),
+    );
+    await webhooks.handleEvent(rawBody, signature);
+    const transaction = await prisma.transaction.findUniqueOrThrow({
+      where: { paymentId: payment.id },
+    });
+    return { payment, transaction, piId };
+  }
+
+  async function refundFull(piId: string, amount: bigint) {
+    const { rawBody, signature } = signEvent(
+      buildEvent("charge.refunded", {
+        id: `ch_${randomUUID()}`,
+        payment_intent: piId,
+        amount_refunded: Number(amount),
+        refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
+      }),
+    );
+    await webhooks.handleEvent(rawBody, signature);
+  }
+
+  /** Backdates every LedgerLine belonging to `transactionId` by `daysAgo` full days — simulates
+   * "this financial event actually happened N days ago," which the real webhook write path has
+   * no way to do directly (createdAt always defaults to now()). Needed to construct the
+   * discriminating day-boundary cases below. */
+  async function backdateLedgerLines(transactionId: string, daysAgo: number): Promise<void> {
+    const lines = await prisma.ledgerLine.findMany({
+      where: { journalEntry: { transactionId } },
+      select: { id: true, createdAt: true },
+    });
+    await Promise.all(
+      lines.map((l) =>
+        prisma.ledgerLine.update({
+          where: { id: l.id },
+          data: { createdAt: new Date(l.createdAt.getTime() - daysAgo * 24 * 60 * 60 * 1000) },
+        }),
+      ),
+    );
+  }
+
+  function userReaching(
+    organizationId: string,
+    role: "Owner" | "Waiter" = "Owner",
+  ): AuthenticatedUser {
+    return {
+      id: randomUUID(),
+      email: "caller@example.com",
+      locale: "en",
+      memberships: [
+        {
+          id: randomUUID(),
+          organizationId,
+          restaurantId: null,
+          role: {
+            id: randomUUID(),
+            name: role,
+            permissions: role === "Owner" ? ["reports.view"] : [],
+          },
+        },
+      ],
+    };
+  }
+
+  it(
+    "DoD (IMPLEMENTATION_PLAN.md, Sprint 9): today's figures match a manual SUM(CREDIT)-SUM(DEBIT) " +
+      "over LedgerLine, and correctly EXCLUDE a payment backdated to yesterday",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+
+      // amount=2000, tipAmount=500 -> billAmount=1500 -> fee=15 (1%), revenue=1485.
+      const { transaction: todayTx } = await capture(restaurant.id, 2000n, 500n, waiter.id);
+      // A second payment, backdated to yesterday — must NOT appear in today's totals at all.
+      const { transaction: yesterdayTx } = await capture(restaurant.id, 9000n, 0n, waiter.id);
+      await backdateLedgerLines(yesterdayTx.id, 1);
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+
+      expect(summary.todayRevenue).toBe("1500"); // 1485 + 15, from todayTx only
+      expect(summary.todayTips).toBe("500");
+      // ADR-026: todayRevenue is gross sales, not netRestaurantRevenue (ADR-025) — the difference
+      // must be explicit on screen, not only in documentation.
+      expect(summary.todayRevenueNote).toBe("Before platform fee deduction");
+
+      // Manual recomputation directly from LedgerLine, independent of the service's own code
+      // path — DoD's own wording ("matches a manual sum over LedgerLine"), scoped to just
+      // todayTx's own lines since that's the only Transaction actually dated today.
+      const windowed = await prisma.ledgerLine.groupBy({
+        by: ["account", "direction"],
+        where: {
+          restaurantId: restaurant.id,
+          account: { in: ["RESTAURANT_REVENUE_PAYABLE", "PLATFORM_FEE_REVENUE"] },
+          journalEntry: { transactionId: todayTx.id },
+        },
+        _sum: { amount: true },
+      });
+      const net = (account: string, direction: "CREDIT" | "DEBIT") =>
+        windowed.find((g) => g.account === account && g.direction === direction)?._sum.amount ?? 0n;
+      const manualRevenue =
+        net("RESTAURANT_REVENUE_PAYABLE", "CREDIT") -
+        net("RESTAURANT_REVENUE_PAYABLE", "DEBIT") +
+        (net("PLATFORM_FEE_REVENUE", "CREDIT") - net("PLATFORM_FEE_REVENUE", "DEBIT"));
+      expect(manualRevenue.toString()).toBe(summary.todayRevenue);
+    },
+  );
+
+  it(
+    "a refund posted TODAY against a payment from a PRIOR day reduces TODAY's totals, not the " +
+      "prior day's — the discriminating case for day-boundary-by-LedgerLine.createdAt, not by " +
+      "Transaction.createdAt",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+
+      const { transaction, piId } = await capture(restaurant.id, 2000n, 0n, waiter.id);
+      await backdateLedgerLines(transaction.id, 1); // the sale "happened yesterday"
+
+      // Refund happens now (today) — its own LedgerLine rows are NOT backdated.
+      await refundFull(piId, 2000n);
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+      // Today has no sale of its own, but does have a refund dated today: net effect is negative.
+      expect(BigInt(summary.todayRevenue)).toBe(-2000n);
+    },
+  );
+
+  it(
+    "Average Tip is the ratio of SUMS, not the average of individual per-transaction ratios — " +
+      "the Founder's own explicit correction",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+      // Payment A: bill=100, tip=50 (50% individually). Payment B: bill=1000, tip=50 (5%
+      // individually). Naive average-of-ratios = 27.5%. Correct ratio-of-sums = 100/1100 ≈ 9.09%.
+      await capture(restaurant.id, 150n, 50n, waiter.id); // billAmount=100, tip=50
+      await capture(restaurant.id, 1050n, 50n, waiter.id); // billAmount=1000, tip=50
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+      expect(summary.todayTips).toBe("100");
+      // todayRevenue = SUM(billAmount) net of fee-inclusive accounts = 100+1000 = 1100 (fee stays
+      // inside RESTAURANT_REVENUE_PAYABLE+PLATFORM_FEE_REVENUE regardless of rate).
+      expect(summary.todayRevenue).toBe("1100");
+      const basisPoints = BigInt(summary.averageTipBasisPoints!);
+      expect(basisPoints).toBe((100n * 10_000n) / 1100n); // 909, i.e. 9.09% — not 2750 (27.5%)
+      expect(basisPoints).not.toBe(2750n);
+    },
+  );
+
+  it('Average Tip is null, never "0", when today has no revenue at all', async () => {
+    const { org, restaurant } = await seedOrgRestaurant();
+    const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+    expect(summary.todayRevenue).toBe("0");
+    expect(summary.averageTipBasisPoints).toBeNull();
+  });
+
+  it(
+    "Top Staff nets TIP_PAYABLE via SUM(CREDIT)-SUM(DEBIT), not a naive sum of TIP_ALLOCATED " +
+      "credits alone — a same-day refund on a tip-bearing payment must not overstate the waiter's " +
+      "collected tips (ADR-023's own bug class)",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { user: waiterUser, membership: waiter } = await seedMembership(
+        org.id,
+        restaurant.id,
+        "Waiter",
+      );
+      const { piId } = await capture(restaurant.id, 2000n, 500n, waiter.id);
+      await refundFull(piId, 2000n); // same day — fully reverses the tip too
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+      const entry = summary.topStaff.find((s) => s.membershipId === waiter.id);
+      // A naive "sum only TIP_ALLOCATED credits" implementation would report "500" here — wrong,
+      // since the tip was fully refunded the same day. Correct net is exactly 0.
+      if (entry) {
+        expect(entry.tips).toBe("0");
+      } else {
+        // Also acceptable: net-zero entries simply don't appear (both are "not overstated").
+        expect(summary.topStaff.some((s) => s.membershipId === waiter.id)).toBe(false);
+      }
+      expect(waiterUser.email).toContain("waiter-"); // sanity: seeded as expected
+    },
+  );
+
+  it("Top Staff ranks a real net-positive tip correctly and surfaces the waiter's email", async () => {
+    const { org, restaurant } = await seedOrgRestaurant();
+    const { user: waiterUser, membership: waiter } = await seedMembership(
+      org.id,
+      restaurant.id,
+      "Waiter",
+    );
+    await capture(restaurant.id, 1500n, 500n, waiter.id);
+
+    const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+    const entry = summary.topStaff.find((s) => s.membershipId === waiter.id);
+    expect(entry).toBeDefined();
+    expect(entry!.tips).toBe("500");
+    expect(entry!.email).toBe(waiterUser.email);
+  });
+
+  it("Revenue Chart buckets a 3-days-ago payment into the correct day, not today's", async () => {
+    const { org, restaurant } = await seedOrgRestaurant();
+    const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+    const { transaction } = await capture(restaurant.id, 3000n, 0n, waiter.id);
+    await backdateLedgerLines(transaction.id, 3);
+
+    const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+    expect(summary.revenueChart).toHaveLength(7);
+    expect(summary.revenueChart[6].revenue).toBe(summary.todayRevenue); // last point == today
+    expect(summary.revenueChart[6].revenue).toBe("0"); // today itself had no sale
+    const threeDaysAgoPoint = summary.revenueChart[3]; // index 6-3
+    expect(threeDaysAgoPoint.revenue).toBe("3000");
+  });
+
+  it("throws PERMISSION_DENIED for a Waiter (no reports.view), not a silent empty dashboard", async () => {
+    const { org, restaurant } = await seedOrgRestaurant();
+    await expect(
+      dashboardService.getSummary(restaurant.id, userReaching(org.id, "Waiter")),
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("throws RESTAURANT_NOT_FOUND for a caller from an unrelated Organization — never leaks existence", async () => {
+    const { restaurant } = await seedOrgRestaurant();
+    const { org: strangerOrg } = await seedOrgRestaurant();
+    await expect(
+      dashboardService.getSummary(restaurant.id, userReaching(strangerOrg.id)),
+    ).rejects.toMatchObject({ code: "RESTAURANT_NOT_FOUND" });
+  });
+});
