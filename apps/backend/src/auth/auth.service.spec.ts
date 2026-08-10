@@ -65,7 +65,12 @@ describe("AuthService — refresh token reuse audit logging", () => {
 // curl before now — nothing here failed if a future change broke login, as long as the unrelated
 // TokenService/ledger suites kept passing.
 describe("AuthService — login", () => {
-  it("returns tokens for correct credentials and records lastLogin", async () => {
+  // API_Contract.md, Login: "returns Access Token, Refresh Token, User, Memberships" — real gap
+  // found live-verifying Sprint 9's Dashboard: the response never actually carried Memberships at
+  // all. This test would fail against the pre-fix code (no membership.findMany call existed), and
+  // is discriminating against a naive fix too: a fake membership with a real Role/Permission
+  // attached, asserting the exact nested shape comes through, not just "the array exists."
+  it("returns tokens AND the caller's Memberships (with Role/permissions) for correct credentials, and records lastLogin", async () => {
     const passwordHash = await hashPassword("correct-horse-battery-staple");
     const user = {
       id: "11111111-1111-1111-1111-111111111111",
@@ -75,9 +80,23 @@ describe("AuthService — login", () => {
       status: "ACTIVE",
       deletedAt: null,
     };
+    const membershipRow = {
+      id: "55555555-5555-5555-5555-555555555555",
+      organizationId: "66666666-6666-6666-6666-666666666666",
+      restaurantId: null,
+      role: {
+        id: "77777777-7777-7777-7777-777777777777",
+        name: "Owner",
+        rolePermissions: [{ permission: { name: "reports.view" } }],
+      },
+    };
     const findUnique = vi.fn().mockResolvedValue(user);
     const update = vi.fn().mockResolvedValue(user);
-    const fakePrisma = { user: { findUnique, update } } as unknown as PrismaService;
+    const findMany = vi.fn().mockResolvedValue([membershipRow]);
+    const fakePrisma = {
+      user: { findUnique, update },
+      membership: { findMany },
+    } as unknown as PrismaService;
     const issueTokenPair = vi
       .fn()
       .mockResolvedValue({ accessToken: "access-tok", refreshToken: "refresh-tok" });
@@ -94,6 +113,18 @@ describe("AuthService — login", () => {
       accessToken: "access-tok",
       refreshToken: "refresh-tok",
       user: { id: user.id, email: user.email, locale: user.locale },
+      memberships: [
+        {
+          id: membershipRow.id,
+          organizationId: membershipRow.organizationId,
+          restaurantId: null,
+          role: { id: membershipRow.role.id, name: "Owner", permissions: ["reports.view"] },
+        },
+      ],
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { userId: user.id },
+      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
     });
     expect(update).toHaveBeenCalledWith({
       where: { id: user.id },
@@ -173,7 +204,11 @@ describe("AuthService — register", () => {
         locale: data.locale,
       });
     });
-    const fakePrisma = { user: { findUnique, create } } as unknown as PrismaService;
+    const findMany = vi.fn().mockResolvedValue([]);
+    const fakePrisma = {
+      user: { findUnique, create },
+      membership: { findMany },
+    } as unknown as PrismaService;
     const issueTokenPair = vi.fn().mockResolvedValue({ accessToken: "a", refreshToken: "r" });
     const fakeTokenService = { issueTokenPair } as unknown as TokenService;
 
@@ -192,6 +227,10 @@ describe("AuthService — register", () => {
       email: "new-owner@example.com",
       locale: "en",
     });
+    // DATABASE.md, User Rules: "A User with zero Memberships is valid" — a freshly registered
+    // User genuinely has none yet, and the same unconditional query correctly returns [] here
+    // with no special-casing (see toAuthResult's own doc comment).
+    expect(result.memberships).toEqual([]);
     expect(issueTokenPair).toHaveBeenCalledWith("33333333-3333-3333-3333-333333333333");
   });
 

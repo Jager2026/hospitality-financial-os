@@ -12,6 +12,13 @@ import {
   type TokenPair,
 } from "./token.service";
 
+export interface AuthResultMembership {
+  id: string;
+  organizationId: string;
+  restaurantId: string | null;
+  role: { id: string; name: string; permissions: string[] };
+}
+
 export interface AuthResult {
   id: string; // mirrors user.id — lets AuditLogInterceptor (Sprint 1) attribute the event without special-casing auth
   accessToken: string;
@@ -21,6 +28,11 @@ export interface AuthResult {
     email: string;
     locale: string;
   };
+  // API_Contract.md, Login: "returns Access Token, Refresh Token, User, Memberships" — always
+  // fetched fresh (same query shape as JwtAuthGuard, never trusted from a cached/stale view),
+  // never special-cased per caller: a freshly registered User simply has none yet (DATABASE.md,
+  // "a User with zero Memberships is valid"), so the same query correctly returns [] there too.
+  memberships: AuthResultMembership[];
 }
 
 /** IP/user-agent for the security-event audit write in verifyRefreshTokenAndAudit — optional
@@ -52,7 +64,7 @@ export class AuthService {
     });
 
     const tokens = await this.tokenService.issueTokenPair(user.id);
-    return this.toAuthResult(user, tokens);
+    return await this.toAuthResult(user, tokens);
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
@@ -72,7 +84,7 @@ export class AuthService {
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
 
     const tokens = await this.tokenService.issueTokenPair(user.id);
-    return this.toAuthResult(user, tokens);
+    return await this.toAuthResult(user, tokens);
   }
 
   async refresh(refreshToken: string, context: RequestContext = {}): Promise<AuthResult> {
@@ -90,7 +102,7 @@ export class AuthService {
     await this.revokeToken(refreshToken, payload.jti);
 
     const tokens = await this.tokenService.issueTokenPair(user.id, payload.familyId);
-    return this.toAuthResult(user, tokens);
+    return await this.toAuthResult(user, tokens);
   }
 
   async logout(refreshToken: string, context: RequestContext = {}): Promise<{ id: string }> {
@@ -146,12 +158,31 @@ export class AuthService {
     }
   }
 
-  private toAuthResult(user: User, tokens: TokenPair): AuthResult {
+  // Same query shape as JwtAuthGuard's own — deliberately not read from `user` itself (a plain
+  // Prisma User row never carries memberships unless explicitly included), and always queried
+  // fresh rather than passed in by the caller, so register/login/refresh can't drift out of sync
+  // with each other on what "the current Memberships" means.
+  private async toAuthResult(user: User, tokens: TokenPair): Promise<AuthResult> {
+    const memberships = await this.prisma.membership.findMany({
+      where: { userId: user.id },
+      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
+    });
+
     return {
       id: user.id,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       user: { id: user.id, email: user.email, locale: user.locale },
+      memberships: memberships.map((m) => ({
+        id: m.id,
+        organizationId: m.organizationId,
+        restaurantId: m.restaurantId,
+        role: {
+          id: m.role.id,
+          name: m.role.name,
+          permissions: m.role.rolePermissions.map((rp) => rp.permission.name),
+        },
+      })),
     };
   }
 }
