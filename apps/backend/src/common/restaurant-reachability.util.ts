@@ -1,4 +1,7 @@
+import type { Restaurant } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import { AppException } from "./exceptions/app.exception";
+import type { PrismaService } from "../prisma/prisma.service";
 
 /** ADR-005 reachability rule, byte-identical to the predicate already duplicated in
  * RestaurantService.getReachableRestaurantOrThrow and TransactionService.assertReachable: an
@@ -35,4 +38,34 @@ export function hasPermissionAtRestaurant(
         (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
       m.role.permissions.includes(permission),
   );
+}
+
+/** The combined "reachable + carries the given permission" check, thrown as a wrapper this time —
+ * unlike the three earlier call sites Sprint 9 deliberately left untouched (each had its own
+ * slightly different not-found message/code), Dashboard and Analytics (ADR-026/027) share
+ * byte-identical semantics here, same two exception codes. Sharing the throwing wrapper itself,
+ * not just the boolean predicates, avoids a second copy of logic that would otherwise need to
+ * change in both places every time either module's access rule changes.
+ *
+ * `permission` defaults to `reports.view` (every Dashboard/Analytics read route) but Analytics'
+ * own `/export` routes pass `data.export` instead — the fine-grained check must test the SAME
+ * permission the coarse `PermissionsGuard` already required for that specific route, or a caller
+ * who holds `data.export` at Restaurant A but only `reports.view` (not `data.export`) at
+ * Restaurant B could pass the controller's coarse gate yet be fine-grain-checked against the
+ * wrong permission for B — exactly the kind of two-different-numbers-that-could-drift-apart bug
+ * this project's own precedent (ADR-021) warns against, just for permissions instead of money. */
+export async function getReachableReportingRestaurantOrThrow(
+  prisma: PrismaService,
+  id: string,
+  user: AuthenticatedUser,
+  permission: string = "reports.view",
+): Promise<Restaurant> {
+  const restaurant = await prisma.restaurant.findFirst({ where: { id, deletedAt: null } });
+  if (!restaurant || !isRestaurantReachable(user, restaurant)) {
+    throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+  }
+  if (!hasPermissionAtRestaurant(user, restaurant, permission)) {
+    throw new AppException("PERMISSION_DENIED", `Missing required permission: ${permission}`, 403);
+  }
+  return restaurant;
 }

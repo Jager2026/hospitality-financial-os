@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.8.1
+version: 2.9.0
 status: Active
 classification: Internal
 owner: Founder
@@ -247,17 +247,46 @@ Response: `{ restaurantId, date, todayRevenue, todayRevenueNote, todayTips, aver
 - `recentPayments` — the 10 most recent Transactions for this Restaurant, all-time (not "today"-scoped) — `{ id, grossAmount, currency, status, createdAt }`.
 - `topStaff` — up to 5 Memberships, ranked by today's net `TIP_PAYABLE` (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of `TIP_ALLOCATED` credits alone — ADR-026, Decision 6, avoiding ADR-023's own bug class from the start) — `{ membershipId, email, tips }`. `email` is the only identifier available: `User` has no display-name field anywhere in the schema (a known, flagged limitation, ADR-026).
 
-## Revenue
-GET /analytics/revenue
+## Revenue, Tips, Staff, Performance, Reports (Sprint 10, ADR-027)
 
-## Tips
-GET /analytics/tips
+Every route below requires `restaurantId`, `from`, `to` (plain `"YYYY-MM-DD"`, interpreted in the Restaurant's own `timezone` — never UTC, same as Dashboard's own day-boundary rule, ADR-026 Decision 2) — `from` must not be after `to`, and the range must not exceed 366 days (a deliberate MVP-scale cap, `analytics-query.schema.ts`). Every money figure is the same live `SUM(CREDIT) - SUM(DEBIT)` `LedgerLine` aggregation Dashboard already uses (`restaurant-ledger-window.util.ts`, reused unmodified, not reimplemented — ADR-027 Decision 1), generalized from Dashboard's fixed "today"/"last 7 days" windows to the caller's own date range.
 
-## Staff
-GET /analytics/staff — renamed from `/analytics/employees`; backed by Membership performance data.
+Gated by `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — same as Dashboard), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant actually carries the permission. The five `/export` routes below require `data.export` instead, at both layers — a caller holding only `reports.view` can read every JSON route here but gets `403 PERMISSION_DENIED` from every export; a caller holding only `data.export` gets the reverse. Checked independently at the service layer, not by the export routes internally reusing the read routes' own permission check (ADR-027 Decision 4 — a real bug caught and fixed by self-review before this Sprint shipped).
 
-## Reports
-GET /analytics/reports
+### Revenue
+GET /analytics/revenue?restaurantId={id}&from={date}&to={date}
+
+Response: `{ restaurantId, from, to, total, totalNote, series }`. `total` is `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)` across the whole range — the identical bill-only definition as Dashboard's `todayRevenue` (ADR-026 Decision 1), not `netRestaurantRevenue`. `totalNote` is always `"Before platform fee deduction"`, same fixed caption as Dashboard's `todayRevenueNote`. `series` is one `{ date, amount }` point per calendar day in the range, oldest first.
+
+GET /analytics/revenue/export — same query, CSV. Columns: `date, amount`. No pagination — every day in the range.
+
+### Tips
+GET /analytics/tips?restaurantId={id}&from={date}&to={date}
+
+Response: `{ restaurantId, from, to, total, series }`. `total` is `net(TIP_PAYABLE)` across the range, unfiltered by `membershipId` — same definition as Dashboard's `todayTips`. `series` is one `{ date, amount }` point per day.
+
+GET /analytics/tips/export — same query, CSV. Columns: `date, amount`.
+
+### Staff
+GET /analytics/staff?restaurantId={id}&from={date}&to={date}&page={n}&limit={n} — renamed from `/analytics/employees`. The full ranked list for the range, paginated (`page`/`limit`, default `1`/`20`, max `limit` 100) — unlike Dashboard's Top Staff, not capped to a fixed N.
+
+Response: `{ restaurantId, from, to, data, meta }`. `data` is `{ membershipId, email, tips }[]`, ranked by net `TIP_PAYABLE` descending (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of credits alone — same ADR-023 bug class Dashboard's own Top Staff already avoids). `meta` is `{ page, limit, total, pages }`, `total`/`pages` reflecting the full unpaginated ranked list.
+
+GET /analytics/staff/export — same query (restaurantId/from/to only — export ignores pagination), CSV. Columns: `membershipId, email, tips`. Every ranked Membership, one row each.
+
+### Performance
+GET /analytics/performance?restaurantId={id}&from={date}&to={date} — trend/period-over-period comparison (`UX_MAP.md`'s "Growth" and "Time Analysis" made concrete as one thing, ADR-027 Decision 2 — not a fourth thing duplicating Staff).
+
+Response: `{ restaurantId, currentPeriod, previousPeriod, changeBasisPoints }`. `currentPeriod`/`previousPeriod` are each `{ from, to, revenue, tips, transactionCount }`. `previousPeriod` is the immediately preceding period of the SAME length as `currentPeriod`, ending the day before `from` begins (e.g. a 31-day current period compares against the 31 days immediately before it, not a fixed "previous calendar month"). `changeBasisPoints` is `{ revenue, tips, transactionCount }`, each a basis-points string (ADR-021's vocabulary) or `null` — never a fabricated `"0"` — when the corresponding `previousPeriod` figure is exactly zero.
+
+GET /analytics/performance/export — same query, CSV. Columns: `metric, currentPeriod, previousPeriod, changeBasisPoints`. Three rows: `revenue`, `tips`, `transactionCount`.
+
+### Reports
+GET /analytics/reports?restaurantId={id}&from={date}&to={date}&type={type} — a small, fixed set of named reports, not a report-builder (ADR-027 Decision 3, the same "flexibility on demand of the first real case" precedent as `TipAllocationStrategy`/ADR-007 and `PlatformFeePolicy`/ADR-021). `type` defaults to, and today only accepts, `"period-summary"` — a second report type is a second enum value and a second branch, not a redesign.
+
+`period-summary` response: `{ restaurantId, from, to, type, revenue, revenueNote, tips, averageTipBasisPoints, transactionCount, topStaff }` — Revenue, Tips, Average Tip, transaction count, and Top Staff for the range, in one round trip. `revenue`/`revenueNote`/`tips`/`averageTipBasisPoints` reuse Dashboard's own definitions and ratio-of-sums formula (ADR-026 Decision 4) verbatim, computed over the whole range instead of just today. `topStaff` is up to 5 Memberships, same rank-and-cap shape as Dashboard's own Top Staff.
+
+GET /analytics/reports/export — same query, CSV. Columns: `restaurantId, from, to, type, revenue, tips, averageTipBasisPoints, transactionCount` — flat scalar fields only; `topStaff` is not a CSV column (nested lists get their own export, same precedent as Transaction export omitting `refunds`/`chargebacks` — use `/analytics/staff/export` instead).
 
 ---
 

@@ -1,12 +1,13 @@
 import { Injectable } from "@nestjs/common";
-import type { LedgerAccount, Restaurant, Transaction } from "@prisma/client";
+import type { Restaurant, Transaction } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
-import { AppException } from "../common/exceptions/app.exception";
-import {
-  hasPermissionAtRestaurant,
-  isRestaurantReachable,
-} from "../common/restaurant-reachability.util";
+import { getReachableReportingRestaurantOrThrow } from "../common/restaurant-reachability.util";
 import { getLocalDayWindow } from "../common/timezone-day.util";
+import {
+  BILL_REVENUE_ACCOUNTS,
+  netForRestaurantWindow,
+  netTipsByMembershipForRestaurantWindow,
+} from "../ledger/restaurant-ledger-window.util";
 import { PrismaService } from "../prisma/prisma.service";
 
 const RECENT_PAYMENTS_LIMIT = 10;
@@ -72,7 +73,11 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getSummary(restaurantId: string, user: AuthenticatedUser): Promise<DashboardSummary> {
-    const restaurant = await this.getReachableRestaurantOrThrow(restaurantId, user);
+    const restaurant = await getReachableReportingRestaurantOrThrow(
+      this.prisma,
+      restaurantId,
+      user,
+    );
 
     const today = getLocalDayWindow(restaurant.timezone, 0);
     const [todayRevenue, todayTips, revenueChart, recentPayments, topStaff] = await Promise.all([
@@ -101,40 +106,19 @@ export class DashboardService {
    * not a bug — a refund posted today correctly reduces today's total, not the original sale
    * day's, matching how every other day's own already-posted LedgerLine activity stays fixed
    * once that day has passed). Computed as net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_
-   * REVENUE): together these always equal billAmount net of refunds — ADR-023's proportional
-   * reversal splits exactly along these two accounts for the non-tip share of any refund, so the
-   * sum is provably billAmount's own net effect, not an approximation. */
+   * REVENUE) (`restaurant-ledger-window.util.ts`): together these always equal billAmount net of
+   * refunds — ADR-023's proportional reversal splits exactly along these two accounts for the
+   * non-tip share of any refund, so the sum is provably billAmount's own net effect, not an
+   * approximation. */
   private async netBillRevenue(restaurantId: string, start: Date, end: Date): Promise<bigint> {
-    const net = await this.netForAccounts(
-      restaurantId,
-      ["RESTAURANT_REVENUE_PAYABLE", "PLATFORM_FEE_REVENUE"],
-      start,
-      end,
-    );
-    return net;
+    return netForRestaurantWindow(this.prisma, restaurantId, BILL_REVENUE_ACCOUNTS, start, end);
   }
 
   /** net(TIP_PAYABLE), unfiltered by membershipId — PAYMENT_CAPTURED's general, not-yet-attributed
    * credit and TIP_ALLOCATED's own reversal of it cancel to zero by construction (ADR-022/025),
    * leaving only the real, person-attributed tip total minus anything refunded today. */
   private async netTips(restaurantId: string, start: Date, end: Date): Promise<bigint> {
-    return this.netForAccounts(restaurantId, ["TIP_PAYABLE"], start, end);
-  }
-
-  private async netForAccounts(
-    restaurantId: string,
-    accounts: LedgerAccount[],
-    start: Date,
-    end: Date,
-  ): Promise<bigint> {
-    const groups = await this.prisma.ledgerLine.groupBy({
-      by: ["direction"],
-      where: { restaurantId, account: { in: accounts }, createdAt: { gte: start, lt: end } },
-      _sum: { amount: true },
-    });
-    const credit = groups.find((g) => g.direction === "CREDIT")?._sum.amount ?? 0n;
-    const debit = groups.find((g) => g.direction === "DEBIT")?._sum.amount ?? 0n;
-    return credit - debit;
+    return netForRestaurantWindow(this.prisma, restaurantId, ["TIP_PAYABLE"], start, end);
   }
 
   /** Ratio of the two SUMS already computed above, not an average of each transaction's own
@@ -187,23 +171,12 @@ export class DashboardService {
     start: Date,
     end: Date,
   ): Promise<DashboardTopStaffEntry[]> {
-    const groups = await this.prisma.ledgerLine.groupBy({
-      by: ["membershipId", "direction"],
-      where: {
-        restaurantId,
-        account: "TIP_PAYABLE",
-        membershipId: { not: null },
-        createdAt: { gte: start, lt: end },
-      },
-      _sum: { amount: true },
-    });
-
-    const netByMembership = new Map<string, bigint>();
-    for (const g of groups) {
-      const membershipId = g.membershipId as string;
-      const signed = g.direction === "CREDIT" ? (g._sum.amount ?? 0n) : -(g._sum.amount ?? 0n);
-      netByMembership.set(membershipId, (netByMembership.get(membershipId) ?? 0n) + signed);
-    }
+    const netByMembership = await netTipsByMembershipForRestaurantWindow(
+      this.prisma,
+      restaurantId,
+      start,
+      end,
+    );
 
     const ranked = [...netByMembership.entries()]
       .sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0))
@@ -222,22 +195,5 @@ export class DashboardService {
       email: emailByMembership.get(membershipId) ?? "",
       tips: tips.toString(),
     }));
-  }
-
-  // Same shape as RestaurantService.getReachableRestaurantOrThrow — kept local rather than
-  // sharing a throwing wrapper across modules (each module's own not-found message/code differs
-  // slightly), while the underlying boolean predicates are shared (restaurant-reachability.util).
-  private async getReachableRestaurantOrThrow(
-    id: string,
-    user: AuthenticatedUser,
-  ): Promise<Restaurant> {
-    const restaurant = await this.prisma.restaurant.findFirst({ where: { id, deletedAt: null } });
-    if (!restaurant || !isRestaurantReachable(user, restaurant)) {
-      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
-    }
-    if (!hasPermissionAtRestaurant(user, restaurant, "reports.view")) {
-      throw new AppException("PERMISSION_DENIED", "Missing required permission: reports.view", 403);
-    }
-    return restaurant;
   }
 }

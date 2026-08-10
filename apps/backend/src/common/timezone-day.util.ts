@@ -37,6 +37,37 @@ export function getLocalDayWindow(
   return { date, start, end };
 }
 
+/** Sprint 10 (Analytics): every calendar date from `from` to `to`, inclusive, as "YYYY-MM-DD"
+ * strings — pure calendar arithmetic, no timezone involved (same reasoning as `addCalendarDays`
+ * itself). The caller's own Zod schema is responsible for capping the range before this runs. */
+export function enumerateDates(from: string, to: string): string[] {
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm, td] = to.split("-").map(Number);
+  const dates: string[] = [];
+  let cursor: DateParts = { year: fy, month: fm, day: fd };
+  const end: DateParts = { year: ty, month: tm, day: td };
+  while (Date.UTC(cursor.year, cursor.month - 1, cursor.day) <= Date.UTC(end.year, end.month - 1, end.day)) {
+    dates.push(`${cursor.year}-${pad(cursor.month)}-${pad(cursor.day)}`);
+    cursor = addCalendarDays(cursor, 1);
+  }
+  return dates;
+}
+
+/** Sprint 10 (Analytics): the window for an EXPLICIT calendar date (not relative to "today") —
+ * `dateStr` a plain "YYYY-MM-DD", already validated by the caller's own Zod schema. Shares the
+ * exact same offset/DST reasoning as `getLocalDayWindow` above (see this module's own doc
+ * comment) — a date range query is just this function called once per day in the range. */
+export function getDayWindowForDate(timezone: string, dateStr: string): DayWindow {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const target: DateParts = { year, month, day };
+  const next = addCalendarDays(target, 1);
+
+  const start = localMidnightUtc(timezone, target);
+  const end = localMidnightUtc(timezone, next);
+
+  return { date: dateStr, start, end };
+}
+
 interface DateParts {
   year: number;
   month: number; // 1-12
