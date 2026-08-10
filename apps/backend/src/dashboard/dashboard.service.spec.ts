@@ -231,6 +231,9 @@ describe("DashboardService (real database)", () => {
 
       expect(summary.todayRevenue).toBe("1500"); // 1485 + 15, from todayTx only
       expect(summary.todayTips).toBe("500");
+      // ADR-026: todayRevenue is gross sales, not netRestaurantRevenue (ADR-025) — the difference
+      // must be explicit on screen, not only in documentation.
+      expect(summary.todayRevenueNote).toBe("Before platform fee deduction");
 
       // Manual recomputation directly from LedgerLine, independent of the service's own code
       // path — DoD's own wording ("matches a manual sum over LedgerLine"), scoped to just

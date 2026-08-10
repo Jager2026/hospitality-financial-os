@@ -32,10 +32,21 @@ export interface DashboardRevenueChartPoint {
   revenue: string;
 }
 
+// ADR-026: todayRevenue is gross sales, before the platform fee is deducted — a different
+// figure from Transaction Details' netRestaurantRevenue (ADR-025), which nets the fee out. The
+// two screens can show two different, both-correct numbers for what looks like the same word,
+// "revenue" — the Founder's own instruction, once that's true, is that the difference must be
+// explicit on screen, not only in documentation. This exact string is what a future frontend
+// renders as the field's caption/tooltip — fixed and versioned here, not invented client-side.
+const TODAY_REVENUE_NOTE = "Before platform fee deduction";
+
 export interface DashboardSummary {
   restaurantId: string;
   date: string;
   todayRevenue: string;
+  /** Always this exact caption (ADR-026) — a constant, not computed, so a future frontend never
+   * has to invent or duplicate the explanation of what todayRevenue does and doesn't include. */
+  todayRevenueNote: string;
   todayTips: string;
   /** Basis points (e.g. "3333" = 33.33%), ADR-021's own vocabulary for percentage-as-integer —
    * never a float. `null`, not "0", when todayRevenue is exactly 0: there is no meaningful ratio
@@ -76,6 +87,7 @@ export class DashboardService {
       restaurantId,
       date: today.date,
       todayRevenue: todayRevenue.toString(),
+      todayRevenueNote: TODAY_REVENUE_NOTE,
       todayTips: todayTips.toString(),
       averageTipBasisPoints: this.averageTipBasisPoints(todayTips, todayRevenue),
       revenueChart,
