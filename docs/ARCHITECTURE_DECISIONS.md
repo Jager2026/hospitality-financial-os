@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.12.0
+version: 1.12.1
 status: Active — twenty-six ADRs, all Accepted
 classification: Internal
 owner: Founder
