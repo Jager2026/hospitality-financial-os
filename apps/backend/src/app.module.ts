@@ -21,6 +21,7 @@ import { SettingsModule } from "./settings/settings.module";
 import { TipModule } from "./tip/tip.module";
 import { TransactionModule } from "./transaction/transaction.module";
 import { WalletModule } from "./wallet/wallet.module";
+import { DashboardModule } from "./dashboard/dashboard.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { AuditEntityResolverGuard } from "./common/guards/audit-entity-resolver.guard";
@@ -63,6 +64,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     SettingsModule,
     WalletModule,
     TransactionModule,
+    DashboardModule,
     WebhooksModule,
   ],
   providers: [

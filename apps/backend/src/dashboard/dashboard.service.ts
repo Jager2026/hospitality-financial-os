@@ -1,0 +1,243 @@
+import { Injectable } from "@nestjs/common";
+import type { LedgerAccount, Restaurant, Transaction } from "@prisma/client";
+import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import { AppException } from "../common/exceptions/app.exception";
+import {
+  hasPermissionAtRestaurant,
+  isRestaurantReachable,
+} from "../common/restaurant-reachability.util";
+import { getLocalDayWindow } from "../common/timezone-day.util";
+import { PrismaService } from "../prisma/prisma.service";
+
+const RECENT_PAYMENTS_LIMIT = 10;
+const TOP_STAFF_LIMIT = 5;
+const REVENUE_CHART_DAYS = 7;
+
+export interface DashboardRecentPayment {
+  id: string;
+  grossAmount: string;
+  currency: string;
+  status: Transaction["status"];
+  createdAt: Date;
+}
+
+export interface DashboardTopStaffEntry {
+  membershipId: string;
+  email: string;
+  tips: string;
+}
+
+export interface DashboardRevenueChartPoint {
+  date: string;
+  revenue: string;
+}
+
+// ADR-026: todayRevenue is gross sales, before the platform fee is deducted — a different
+// figure from Transaction Details' netRestaurantRevenue (ADR-025), which nets the fee out. The
+// two screens can show two different, both-correct numbers for what looks like the same word,
+// "revenue" — the Founder's own instruction, once that's true, is that the difference must be
+// explicit on screen, not only in documentation. This exact string is what a future frontend
+// renders as the field's caption/tooltip — fixed and versioned here, not invented client-side.
+const TODAY_REVENUE_NOTE = "Before platform fee deduction";
+
+export interface DashboardSummary {
+  restaurantId: string;
+  date: string;
+  todayRevenue: string;
+  /** Always this exact caption (ADR-026) — a constant, not computed, so a future frontend never
+   * has to invent or duplicate the explanation of what todayRevenue does and doesn't include. */
+  todayRevenueNote: string;
+  todayTips: string;
+  /** Basis points (e.g. "3333" = 33.33%), ADR-021's own vocabulary for percentage-as-integer —
+   * never a float. `null`, not "0", when todayRevenue is exactly 0: there is no meaningful ratio
+   * yet, and "0" would misrepresent "no data" as "a real 0% tip rate" (ADR-025's null-not-0
+   * precedent). */
+  averageTipBasisPoints: string | null;
+  revenueChart: DashboardRevenueChartPoint[];
+  recentPayments: DashboardRecentPayment[];
+  topStaff: DashboardTopStaffEntry[];
+}
+
+/** IMPLEMENTATION_PLAN.md, Sprint 9 (Dashboard). DoD: "Dashboard figures match a manual sum over
+ * LedgerLine" — every money figure here is a live SUM(CREDIT)-SUM(DEBIT) aggregation, the same
+ * pattern already used by WalletProjectionService.recomputeBalance (ADR-024) and
+ * TransactionService.computeBreakdown (ADR-025), never a read of Payment/Transaction fields
+ * directly. See ADR-026 for the full reasoning this module implements, in particular why
+ * "Today's Revenue" here is deliberately NOT the same quantity as ADR-025's `netRestaurantRevenue`
+ * (that one nets out the platform fee; this one is bill-only sales, before either the platform
+ * fee's or the tip's split — the SUM(billAmount) an owner means by "how much business did we do
+ * today"). */
+@Injectable()
+export class DashboardService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async getSummary(restaurantId: string, user: AuthenticatedUser): Promise<DashboardSummary> {
+    const restaurant = await this.getReachableRestaurantOrThrow(restaurantId, user);
+
+    const today = getLocalDayWindow(restaurant.timezone, 0);
+    const [todayRevenue, todayTips, revenueChart, recentPayments, topStaff] = await Promise.all([
+      this.netBillRevenue(restaurantId, today.start, today.end),
+      this.netTips(restaurantId, today.start, today.end),
+      this.buildRevenueChart(restaurant),
+      this.recentPayments(restaurantId),
+      this.topStaff(restaurantId, today.start, today.end),
+    ]);
+
+    return {
+      restaurantId,
+      date: today.date,
+      todayRevenue: todayRevenue.toString(),
+      todayRevenueNote: TODAY_REVENUE_NOTE,
+      todayTips: todayTips.toString(),
+      averageTipBasisPoints: this.averageTipBasisPoints(todayTips, todayRevenue),
+      revenueChart,
+      recentPayments,
+      topStaff,
+    };
+  }
+
+  /** "Today's Revenue" = bill-only sales, net of any refund/chargeback activity dated today,
+   * regardless of which day the original sale happened on (see ADR-026 for why this is correct,
+   * not a bug — a refund posted today correctly reduces today's total, not the original sale
+   * day's, matching how every other day's own already-posted LedgerLine activity stays fixed
+   * once that day has passed). Computed as net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_
+   * REVENUE): together these always equal billAmount net of refunds — ADR-023's proportional
+   * reversal splits exactly along these two accounts for the non-tip share of any refund, so the
+   * sum is provably billAmount's own net effect, not an approximation. */
+  private async netBillRevenue(restaurantId: string, start: Date, end: Date): Promise<bigint> {
+    const net = await this.netForAccounts(
+      restaurantId,
+      ["RESTAURANT_REVENUE_PAYABLE", "PLATFORM_FEE_REVENUE"],
+      start,
+      end,
+    );
+    return net;
+  }
+
+  /** net(TIP_PAYABLE), unfiltered by membershipId — PAYMENT_CAPTURED's general, not-yet-attributed
+   * credit and TIP_ALLOCATED's own reversal of it cancel to zero by construction (ADR-022/025),
+   * leaving only the real, person-attributed tip total minus anything refunded today. */
+  private async netTips(restaurantId: string, start: Date, end: Date): Promise<bigint> {
+    return this.netForAccounts(restaurantId, ["TIP_PAYABLE"], start, end);
+  }
+
+  private async netForAccounts(
+    restaurantId: string,
+    accounts: LedgerAccount[],
+    start: Date,
+    end: Date,
+  ): Promise<bigint> {
+    const groups = await this.prisma.ledgerLine.groupBy({
+      by: ["direction"],
+      where: { restaurantId, account: { in: accounts }, createdAt: { gte: start, lt: end } },
+      _sum: { amount: true },
+    });
+    const credit = groups.find((g) => g.direction === "CREDIT")?._sum.amount ?? 0n;
+    const debit = groups.find((g) => g.direction === "DEBIT")?._sum.amount ?? 0n;
+    return credit - debit;
+  }
+
+  /** Ratio of the two SUMS already computed above, not an average of each transaction's own
+   * tip% — the Founder's explicit correction: a customer who tips 50% on a €2 coffee should not
+   * pull the average toward 50% as heavily as a €2 tip on a €200 dinner bill would, if both were
+   * weighted equally as "one transaction" instead of by the money actually involved. */
+  private averageTipBasisPoints(todayTips: bigint, todayRevenue: bigint): string | null {
+    if (todayRevenue === 0n) return null;
+    return ((todayTips * 10_000n) / todayRevenue).toString();
+  }
+
+  /** Last 7 local calendar days including today, oldest first — same netBillRevenue definition
+   * as the single Today's Revenue figure, one call per day (7 is small and fixed; no raw SQL
+   * date_trunc needed for this scale — same "explicit over implicit, O(n) is fine at this size"
+   * reasoning as WalletProjectionService's full recompute, ADR-024). */
+  private async buildRevenueChart(restaurant: Restaurant): Promise<DashboardRevenueChartPoint[]> {
+    const points: DashboardRevenueChartPoint[] = [];
+    for (let daysAgo = REVENUE_CHART_DAYS - 1; daysAgo >= 0; daysAgo--) {
+      const window = getLocalDayWindow(restaurant.timezone, daysAgo);
+      const revenue = await this.netBillRevenue(restaurant.id, window.start, window.end);
+      points.push({ date: window.date, revenue: revenue.toString() });
+    }
+    return points;
+  }
+
+  private async recentPayments(restaurantId: string): Promise<DashboardRecentPayment[]> {
+    const rows = await this.prisma.transaction.findMany({
+      where: { restaurantId },
+      orderBy: { createdAt: "desc" },
+      take: RECENT_PAYMENTS_LIMIT,
+    });
+    return rows.map((t) => ({
+      id: t.id,
+      grossAmount: t.grossAmount.toString(),
+      currency: t.currency,
+      status: t.status,
+      createdAt: t.createdAt,
+    }));
+  }
+
+  /** Ranked by today's net TIP_PAYABLE per membershipId — same SUM(CREDIT)-SUM(DEBIT) pattern as
+   * WalletProjectionService.recomputeBalance, scoped to today and this Restaurant instead of a
+   * Membership's whole history. A refund posted today against an older tip-bearing payment can
+   * make one membership's net lower (even negative) — correct, not a bug, same day-boundary
+   * reasoning as netBillRevenue above; "top" ordering handles it without a special case. Displays
+   * User.email — `User` has no name field anywhere in the schema (checked directly, not assumed);
+   * a real, known limitation, flagged in ADR-026 rather than silently working around it. */
+  private async topStaff(
+    restaurantId: string,
+    start: Date,
+    end: Date,
+  ): Promise<DashboardTopStaffEntry[]> {
+    const groups = await this.prisma.ledgerLine.groupBy({
+      by: ["membershipId", "direction"],
+      where: {
+        restaurantId,
+        account: "TIP_PAYABLE",
+        membershipId: { not: null },
+        createdAt: { gte: start, lt: end },
+      },
+      _sum: { amount: true },
+    });
+
+    const netByMembership = new Map<string, bigint>();
+    for (const g of groups) {
+      const membershipId = g.membershipId as string;
+      const signed = g.direction === "CREDIT" ? (g._sum.amount ?? 0n) : -(g._sum.amount ?? 0n);
+      netByMembership.set(membershipId, (netByMembership.get(membershipId) ?? 0n) + signed);
+    }
+
+    const ranked = [...netByMembership.entries()]
+      .sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0))
+      .slice(0, TOP_STAFF_LIMIT);
+
+    if (ranked.length === 0) return [];
+
+    const memberships = await this.prisma.membership.findMany({
+      where: { id: { in: ranked.map(([id]) => id) } },
+      include: { user: { select: { email: true } } },
+    });
+    const emailByMembership = new Map(memberships.map((m) => [m.id, m.user.email]));
+
+    return ranked.map(([membershipId, tips]) => ({
+      membershipId,
+      email: emailByMembership.get(membershipId) ?? "",
+      tips: tips.toString(),
+    }));
+  }
+
+  // Same shape as RestaurantService.getReachableRestaurantOrThrow — kept local rather than
+  // sharing a throwing wrapper across modules (each module's own not-found message/code differs
+  // slightly), while the underlying boolean predicates are shared (restaurant-reachability.util).
+  private async getReachableRestaurantOrThrow(
+    id: string,
+    user: AuthenticatedUser,
+  ): Promise<Restaurant> {
+    const restaurant = await this.prisma.restaurant.findFirst({ where: { id, deletedAt: null } });
+    if (!restaurant || !isRestaurantReachable(user, restaurant)) {
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+    }
+    if (!hasPermissionAtRestaurant(user, restaurant, "reports.view")) {
+      throw new AppException("PERMISSION_DENIED", "Missing required permission: reports.view", 403);
+    }
+    return restaurant;
+  }
+}
