@@ -236,6 +236,15 @@ describe("WalletProjectionService (real database)", () => {
     const { org, restaurant } = await seedOrgRestaurant();
     const membership = await seedWaiterMembership(org.id, restaurant.id);
 
+    // test/global-setup.ts only seeds EUR (the one currency every other spec file needs) — USD
+    // exists nowhere else in this suite, so upserting it here can't race with another file the
+    // way global-setup.ts's own comment describes for EUR/Role.
+    await prisma.currency.upsert({
+      where: { code: "USD" },
+      update: {},
+      create: { code: "USD", exponent: 2, name: "US Dollar" },
+    });
+
     // Hand-crafted only for this one adversarial case — ADR-012 confines real traffic to EUR, so
     // this shape is otherwise unreachable through the real write path.
     const transaction = await prisma.transaction.create({
