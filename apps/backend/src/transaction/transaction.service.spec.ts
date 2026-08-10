@@ -313,4 +313,128 @@ describe("TransactionService (real database)", () => {
     expect(lines[0]).not.toContain("processingFee");
     expect(lines.some((l) => l.includes("400"))).toBe(true);
   });
+
+  describe("findAllForUser: buildWhere filters actually narrow the result set", () => {
+    it(
+      "status filter: a REFUNDED Transaction appears when filtering status=REFUNDED, a " +
+        "COMPLETED sibling in the same reachable scope does not — proves the filter is applied, " +
+        "not merely present in the code",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const waiter = await seedWaiterMembership(org.id, restaurant.id);
+        const user = ownerUserReaching(org.id);
+
+        const piCompleted = `pi_${randomUUID()}`;
+        await seedPayment(restaurant.id, 900n, 0n, waiter.id, piCompleted);
+        const { rawBody: rawCompleted, signature: sigCompleted } = signEvent(
+          buildEvent("payment_intent.succeeded", { id: piCompleted, amount: 900, currency: "eur" }),
+        );
+        await webhooks.handleEvent(rawCompleted, sigCompleted);
+
+        const piRefunded = `pi_${randomUUID()}`;
+        await seedPayment(restaurant.id, 1100n, 0n, waiter.id, piRefunded);
+        const { rawBody: rawRefunded, signature: sigRefunded } = signEvent(
+          buildEvent("payment_intent.succeeded", { id: piRefunded, amount: 1100, currency: "eur" }),
+        );
+        await webhooks.handleEvent(rawRefunded, sigRefunded);
+        const { rawBody: rawRefund, signature: sigRefund } = signEvent(
+          buildEvent("charge.refunded", {
+            id: `ch_${randomUUID()}`,
+            payment_intent: piRefunded,
+            amount_refunded: 1100,
+            refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
+          }),
+        );
+        await webhooks.handleEvent(rawRefund, sigRefund);
+
+        const filtered = await transactionService.findAllForUser(user, {
+          status: "REFUNDED",
+          page: 1,
+          limit: 20,
+        });
+
+        expect(filtered.data.every((t) => t.grossAmount !== "900")).toBe(true); // COMPLETED one excluded
+        expect(filtered.data.some((t) => t.grossAmount === "1100")).toBe(true); // REFUNDED one included
+        expect(filtered.data.every((t) => t.status === "REFUNDED")).toBe(true);
+      },
+    );
+
+    it(
+      "membership filter: a waiter's own Transaction appears when filtering by their " +
+        "membershipId, a colleague's does not — proves ?membership= actually scopes to that " +
+        "one person, not just accepted as a query param",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const waiterA = await seedWaiterMembership(org.id, restaurant.id);
+        const waiterB = await seedWaiterMembership(org.id, restaurant.id);
+        const user = ownerUserReaching(org.id);
+
+        const piA = `pi_${randomUUID()}`;
+        await seedPayment(restaurant.id, 600n, 0n, waiterA.id, piA);
+        const { rawBody: rawA, signature: sigA } = signEvent(
+          buildEvent("payment_intent.succeeded", { id: piA, amount: 600, currency: "eur" }),
+        );
+        await webhooks.handleEvent(rawA, sigA);
+
+        const piB = `pi_${randomUUID()}`;
+        await seedPayment(restaurant.id, 800n, 0n, waiterB.id, piB);
+        const { rawBody: rawB, signature: sigB } = signEvent(
+          buildEvent("payment_intent.succeeded", { id: piB, amount: 800, currency: "eur" }),
+        );
+        await webhooks.handleEvent(rawB, sigB);
+
+        const filtered = await transactionService.findAllForUser(user, {
+          membership: waiterA.id,
+          page: 1,
+          limit: 20,
+        });
+
+        expect(filtered.data.some((t) => t.grossAmount === "600")).toBe(true); // waiterA's own
+        expect(filtered.data.every((t) => t.grossAmount !== "800")).toBe(true); // waiterB's excluded
+      },
+    );
+  });
+
+  it(
+    "findOne: a Chargeback on the Transaction appears in the response with the correct shape " +
+      "(id, amount, reason, status, resolvedAt, createdAt) — the mapping itself, distinct from " +
+      "the breakdown arithmetic already proven in webhooks.service.spec.ts",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiter = await seedWaiterMembership(org.id, restaurant.id);
+      const piId = `pi_${randomUUID()}`;
+      await seedPayment(restaurant.id, 3000n, 0n, waiter.id, piId);
+      const { rawBody: succeededRaw, signature: succeededSig } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piId, amount: 3000, currency: "eur" }),
+      );
+      await webhooks.handleEvent(succeededRaw, succeededSig);
+      const transaction = await prisma.transaction.findFirstOrThrow({
+        where: { payment: { processorPaymentId: piId } },
+      });
+
+      const disputeId = `dp_${randomUUID()}`;
+      const { rawBody: disputeRaw, signature: disputeSig } = signEvent(
+        buildEvent("charge.dispute.created", {
+          id: disputeId,
+          payment_intent: piId,
+          amount: 3000,
+          reason: "fraudulent",
+          status: "warning_needs_response",
+          evidence_details: { due_by: null },
+        }),
+      );
+      await webhooks.handleEvent(disputeRaw, disputeSig);
+
+      const details = await transactionService.findOne(transaction.id, ownerUserReaching(org.id));
+
+      expect(details.chargebacks).toHaveLength(1);
+      const chargeback = details.chargebacks[0];
+      expect(chargeback.amount).toBe("3000");
+      expect(chargeback.reason).toBe("fraudulent");
+      expect(chargeback.status).toBe("UNDER_REVIEW");
+      expect(chargeback.resolvedAt).toBeNull(); // still under review — not resolved yet
+      expect(chargeback.id).toEqual(expect.any(String));
+      expect(chargeback.createdAt).toBeInstanceOf(Date);
+    },
+  );
 });

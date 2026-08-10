@@ -215,6 +215,26 @@ describe("WalletService (real database)", () => {
     expect(entries.some((e) => e.direction === "CREDIT")).toBe(true);
   });
 
+  it(
+    "findMine: an org-wide Membership's own Wallet reports restaurantName as null, not a " +
+      "crash or a stray value — toSummary's own `wallet.membership.restaurant?.name ?? null` " +
+      "branch, exercised for real: existing org-wide coverage only ever went through findOne, " +
+      "which returns the raw Wallet and never calls toSummary at all",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant("Org Wide Summary Test");
+      const orgWideEarner = await seedMembership(org.id, null, "Owner"); // restaurantId null
+      await giveEarnings(orgWideEarner.id, restaurant.id, 700n);
+
+      const results = await walletService.findMine(asUser(orgWideEarner));
+
+      expect(results).toHaveLength(1);
+      expect(results[0].membershipId).toBe(orgWideEarner.id);
+      expect(results[0].restaurantId).toBeNull();
+      expect(results[0].restaurantName).toBeNull();
+      expect(results[0].availableBalance).toBe("700");
+    },
+  );
+
   it("findOne throws WALLET_NOT_FOUND for a nonexistent id", async () => {
     const { org, restaurant } = await seedOrgRestaurant("Not Found Test");
     const waiter = await seedMembership(org.id, restaurant.id, "Waiter");
