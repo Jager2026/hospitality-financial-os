@@ -38,7 +38,9 @@ describe("getLocalDayWindow", () => {
 
   it("7 consecutive daysAgo values produce 7 distinct, contiguous, oldest-first days with no gap or overlap", () => {
     const referenceUtc = new Date("2026-08-10T12:00:00Z");
-    const windows = Array.from({ length: 7 }, (_, i) => getLocalDayWindow(VILNIUS, 6 - i, referenceUtc));
+    const windows = Array.from({ length: 7 }, (_, i) =>
+      getLocalDayWindow(VILNIUS, 6 - i, referenceUtc),
+    );
     for (let i = 0; i < windows.length; i++) {
       expect(windows[i].start.getTime()).toBeLessThan(windows[i].end.getTime());
       if (i > 0) {

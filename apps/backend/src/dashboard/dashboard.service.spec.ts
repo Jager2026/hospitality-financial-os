@@ -191,7 +191,10 @@ describe("DashboardService (real database)", () => {
     );
   }
 
-  function userReaching(organizationId: string, role: "Owner" | "Waiter" = "Owner"): AuthenticatedUser {
+  function userReaching(
+    organizationId: string,
+    role: "Owner" | "Waiter" = "Owner",
+  ): AuthenticatedUser {
     return {
       id: randomUUID(),
       email: "caller@example.com",
@@ -293,7 +296,7 @@ describe("DashboardService (real database)", () => {
     },
   );
 
-  it("Average Tip is null, never \"0\", when today has no revenue at all", async () => {
+  it('Average Tip is null, never "0", when today has no revenue at all', async () => {
     const { org, restaurant } = await seedOrgRestaurant();
     const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
     expect(summary.todayRevenue).toBe("0");

@@ -2,7 +2,10 @@ import { Injectable } from "@nestjs/common";
 import type { LedgerAccount, Restaurant, Transaction } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
-import { hasPermissionAtRestaurant, isRestaurantReachable } from "../common/restaurant-reachability.util";
+import {
+  hasPermissionAtRestaurant,
+  isRestaurantReachable,
+} from "../common/restaurant-reachability.util";
 import { getLocalDayWindow } from "../common/timezone-day.util";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -221,11 +224,7 @@ export class DashboardService {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
     if (!hasPermissionAtRestaurant(user, restaurant, "reports.view")) {
-      throw new AppException(
-        "PERMISSION_DENIED",
-        "Missing required permission: reports.view",
-        403,
-      );
+      throw new AppException("PERMISSION_DENIED", "Missing required permission: reports.view", 403);
     }
     return restaurant;
   }
