@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.2.1
+version: 1.3.0
 status: Active
 classification: Critical
 owner: Founder
@@ -117,6 +117,9 @@ ADR-015 already establishes the *normal* case: the customer's receipt shows imme
 
 ## PROCESSOR_CLEARING is never reversed by a refund or a chargeback
 Neither `handleChargeRefunded` (ADR-008, revised by ADR-023) nor `handleDisputeCreated`/`handleDisputeClosed` (ADR-016) ever posts a compensating line against `PROCESSOR_CLEARING` — only `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and (for refunds, as of ADR-023) `TIP_PAYABLE` are reversed. Older than Sprint 6 and not tip-specific — noticed while fixing ADR-023's fee/tip gap, not caused by it. Not blocking; a separate decision, deliberately not folded into ADR-023.
+
+## A Wallet's "Available" balance can still be clawed back after the fact
+ADR-023 already makes `TIP_PAYABLE` reversible — a chargeback opened after a tip was allocated debits the waiter's own credit line back out, and `WalletProjectionService` (ADR-024, Sprint 7) would correctly recompute a lower balance the next time it runs. Not a bug: the projection is doing exactly what it's supposed to, deriving the truth from the Ledger. The open question is what "Available" is allowed to promise the person looking at it — today nothing can be withdrawn at all (`Withdrawal` doesn't exist, ADR-024 Decision 2), so a number labeled "Available" that could still shrink tomorrow is not yet a real-money risk, only a display one. It becomes a real one the moment `Withdrawal` ships: money genuinely paid out against an "Available" balance that a later chargeback then reverses is a real loss with no obvious owner (the waiter already has the cash; does the restaurant eat it, does the platform, is there a clawback mechanism at all). Must be answered as part of designing `Withdrawal`, not discovered after it ships.
 
 ---
 

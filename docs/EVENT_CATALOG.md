@@ -1,6 +1,6 @@
 ---
 title: EVENT_CATALOG
-version: 1.1.0
+version: 1.2.0
 status: Active
 classification: Internal
 owner: Founder
@@ -56,7 +56,7 @@ Applying that formula to every value of `JournalEntryType` gives the complete, c
 | `entry_type` (DB value) | `event_type` produced | Fires when |
 |---|---|---|
 | `payment_captured` | `journal_entry.payment_captured` | **Real, live** — `WebhooksService`'s `payment_intent.succeeded` handler (Sprint 5, shipped) |
-| `tip_allocated` | `journal_entry.tip_allocated` | Not yet implemented — no code path exists (Sprint 6, Tips) |
+| `tip_allocated` | `journal_entry.tip_allocated` | **Real, live** — `WebhooksService`'s `payment_intent.succeeded` handler posts a second `TIP_ALLOCATED` entry whenever `Payment.tipAmount > 0` (Sprint 6, shipped, ADR-022) |
 | `refund_issued` | `journal_entry.refund_issued` | **Real, live** — `WebhooksService`'s `charge.refunded` handler (Sprint 5, shipped) |
 | `chargeback` | `journal_entry.chargeback` | **Real, live** — two separate call sites in `WebhooksService`: `charge.dispute.created` (provisional loss) and, if the dispute is later won, `charge.dispute.closed` (reversal) — ADR-016's own documented one-`Chargeback`-to-many-`JournalEntry` shape, not a hypothetical |
 | `adjustment` | `journal_entry.adjustment` | Not yet implemented — no code path exists |
@@ -72,22 +72,22 @@ Applying that formula to every value of `JournalEntryType` gives the complete, c
 
 The payload is intentionally minimal — an id and the entry's own type, not a denormalized copy of the JournalEntry/LedgerLine rows. A consumer that needs the full picture (which LedgerLines, which Restaurant, which Membership) re-reads `JournalEntry`/`LedgerLine` by `journalEntryId` at dispatch time, rather than trusting a payload that could grow stale between write and dispatch. This isn't written down anywhere else — it's the natural reading of the payload actually being this thin, not a separate design decision with its own ADR.
 
-**No longer hypothetical: three of the six rows above are real, live traffic.** Sprint 5 (Payments & Ledger) shipped `WebhooksService` as `LedgerService.postJournalEntry`'s first real caller — confirmed directly in `apps/backend/src/webhooks/webhooks.service.ts`, not assumed from the sprint being marked done. Every real Stripe `payment_intent.succeeded`, `charge.refunded`, `charge.dispute.created`, and `charge.dispute.closed` webhook this system receives today writes a real `JournalEntry`/`LedgerLine`/`OutboxEvent` row through this exact mechanism. `tip_allocated`, `adjustment`, and `payout` remain genuinely unimplemented — no code path produces them yet — and stay accurately described as hypothetical until a real sprint builds one.
+**No longer hypothetical: four of the six rows above are real, live traffic.** Sprint 5 (Payments & Ledger) shipped `WebhooksService` as `LedgerService.postJournalEntry`'s first real caller — confirmed directly in `apps/backend/src/webhooks/webhooks.service.ts`, not assumed from the sprint being marked done. Sprint 6 (Tips) added `tip_allocated` to that same real traffic — missed in this document's own first pass after Sprint 6 shipped, corrected here. Every real Stripe `payment_intent.succeeded` (with a tip), `charge.refunded`, `charge.dispute.created`, and `charge.dispute.closed` webhook this system receives today writes a real `JournalEntry`/`LedgerLine`/`OutboxEvent` row through this exact mechanism. `adjustment` and `payout` remain genuinely unimplemented — no code path produces them yet — and stay accurately described as hypothetical until a real sprint builds one.
 
 ---
 
 # Consumers
 
-`OutboxPollerService` (`apps/backend/src/outbox/outbox-poller.service.ts`) polls every 2 seconds (`SEQUENCE_PAYMENT_TIP.md`: "Every 1-2 seconds") for rows where `published_at IS NULL`, and currently does exactly one thing with each: increments `attempts` and logs a debug line — "no handler registered yet." No projection reads an event and updates anything. This is a deliberate skeleton (IMPLEMENTATION_PLAN.md, Sprint 1), not an oversight: `SYSTEM_ARCHITECTURE.md` names the intended eventual consumers —
+`OutboxPollerService` (`apps/backend/src/outbox/outbox-poller.service.ts`) polls every 2 seconds (`SEQUENCE_PAYMENT_TIP.md`: "Every 1-2 seconds") for rows where `published_at IS NULL`. **Real as of Sprint 7 (ADR-024), not a skeleton anymore:** each row is dispatched to `WalletProjectionService`, which re-reads `LedgerLine` by `journalEntryId` and re-derives the balance of every Membership that row's entry touched — the first real handler this worker has ever had, replacing the earlier "no handler registered yet" debug line entirely. `SYSTEM_ARCHITECTURE.md` named the intended eventual consumers ahead of any of them existing —
 
-- Wallet Module → updates the affected Wallet's cached balance (Sprint 7)
-- Restaurant Module → updates the affected Restaurant's cached balance
-- Analytics Module → updates its read models (Sprint 9/10)
-- Notification Module (future) → sends alerts
+- Wallet Module → updates the affected Wallet's cached balance (Sprint 7, **shipped**)
+- Restaurant Module → updates the affected Restaurant's cached balance (not yet built)
+- Analytics Module → updates its read models (Sprint 9/10, not yet built)
+- Notification Module (future) → sends alerts (not yet built)
 
-— but none of these modules exist yet, so none is wired in. `dispatch()`'s body, not its polling shape, is what changes when the first real handler lands.
+— Wallet is the only one wired in so far. `dispatch()` handles the projection and marks `published_at` in one atomic transaction, and only increments `attempts` on an actual failure — a change from the old skeleton, which incremented it unconditionally, even on a no-op.
 
-A row whose `attempts` reaches 5 without `published_at` being set logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag) rather than retrying forever. Since nothing currently ever sets `published_at`, this is no longer a future concern to remember — it is happening now: every real `payment_captured`/`refund_issued`/`chargeback` row Sprint 5's live webhook traffic writes today crosses that threshold and logs an error, on a schedule (`MAX_ATTEMPTS_BEFORE_ALERT * POLL_INTERVAL_MS`, currently 5 × 2s = 10s after creation), because Sprint 7 hasn't given the Outbox a consumer yet. Expected, not a bug — but genuinely live log noise in the current system today, not a hypothetical for later, and worth knowing about before treating an `OutboxEvent` error-level log line as a real incident during this gap.
+A row whose `attempts` reaches 5 without `published_at` being set still logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag), but this is no longer the expected steady state it was between Sprint 5 and Sprint 7: a `payment_captured`/`tip_allocated`/`refund_issued`/`chargeback` row now gets `published_at` set within one poll cycle under normal operation, the same run of live verification that closed Sprint 7 confirmed this directly. A row that keeps failing past Sprint 7 is a real signal again, not the expected gap it briefly was — with one known, permanent exception: `ledger.service.spec.ts`'s own atomicity test seeds an `OutboxEvent` with no `journalEntryId` on purpose (proving the write lands in the same transaction as the Ledger write, nothing to do with Wallet), which `dispatch()` now rejects immediately rather than silently matching every Membership in the database — expected local test noise, not an alert to chase.
 
 ---
 
