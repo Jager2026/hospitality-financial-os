@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.7.0
+version: 2.8.0
 status: Active
 classification: Internal
 owner: Founder
@@ -233,7 +233,18 @@ GET /transactions/export — CSV for MVP (Excel, PDF: future). Same filters as T
 # ANALYTICS
 
 ## Dashboard
-GET /dashboard
+GET /dashboard?restaurantId={id} — `restaurantId` required (Sprint 9, ADR-026): a Dashboard is always exactly one Restaurant's view (an org-wide Owner lands on the Restaurants list instead, `UX_MAP.md`), and a restaurant-scoped Manager can hold Memberships at more than one Restaurant, so a bare call would be ambiguous about which one is meant. Requires `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — the Waiter Portal's own navigation has no Dashboard item at all), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant carries the permission (same shape as every other fine-grained permission check in this document).
+
+Every money figure is a live `SUM(CREDIT) - SUM(DEBIT)` aggregation over `LedgerLine`, scoped to the Restaurant and to "today" as a calendar day in the Restaurant's own `timezone` (ADR-026) — never a read of `Payment`/`Transaction` fields directly, and never UTC "today." The window is `LedgerLine.createdAt`-scoped, not `Transaction.createdAt`-scoped: a refund posted today against a payment from a prior day correctly reduces TODAY's totals, not the original sale's day (ADR-026, Decision 3) — each day's own already-posted Ledger activity stays fixed once that day has passed.
+
+Response: `{ restaurantId, date, todayRevenue, todayTips, averageTipBasisPoints, revenueChart, recentPayments, topStaff }`.
+
+- `todayRevenue` — `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)`, today. Deliberately NOT the same quantity as Transaction Details' `netRestaurantRevenue` (ADR-025), which nets out the platform fee — this is bill-only sales (`SUM(billAmount)` net of refunds), the classic "how much business did we do today" sense of revenue (ADR-026, Decision 1).
+- `todayTips` — `net(TIP_PAYABLE)`, today, unfiltered by `membershipId` — the general `PAYMENT_CAPTURED` credit and `TIP_ALLOCATED`'s own reversal of it cancel to zero by construction (ADR-022/025), same as everywhere else this pattern appears.
+- `averageTipBasisPoints` — `(todayTips × 10000) / todayRevenue`, the ratio of the two sums above, never an average of individual transactions' own tip percentages (ADR-026, Decision 4 — the Founder's own explicit correction). A string of basis points (ADR-021's vocabulary — e.g. `"2500"` = 25.00%), `null` — never `"0"` — when `todayRevenue` is exactly zero.
+- `revenueChart` — last 7 local calendar days including today, oldest first, each `{ date, revenue }` using the identical `todayRevenue` definition for that day.
+- `recentPayments` — the 10 most recent Transactions for this Restaurant, all-time (not "today"-scoped) — `{ id, grossAmount, currency, status, createdAt }`.
+- `topStaff` — up to 5 Memberships, ranked by today's net `TIP_PAYABLE` (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of `TIP_ALLOCATED` credits alone — ADR-026, Decision 6, avoiding ADR-023's own bug class from the start) — `{ membershipId, email, tips }`. `email` is the only identifier available: `User` has no display-name field anywhere in the schema (a known, flagged limitation, ADR-026).
 
 ## Revenue
 GET /analytics/revenue
