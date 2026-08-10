@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.5.0
+version: 2.6.0
 status: Active
 classification: Internal
 owner: Founder
@@ -194,19 +194,19 @@ GET /chargebacks/{id}
 
 # WALLETS
 
-Renamed and pluralized from Wallet (ADR-006) — a person may hold more than one, one per Membership.
+Renamed and pluralized from Wallet (ADR-006) — a person may hold more than one, one per Membership. Read-only throughout — there is no `POST /wallets`; a Wallet is only ever created by the Outbox projection consumer, never by direct client request (ADR-024). Reachability-scoped, not permission-gated (ADR-024): the Wallet's own Membership, or a Membership reaching that Wallet's Restaurant (org-wide same-Organization, or restaurant-scoped same-Restaurant) — same rule as Payments/Tips (ADR-005). An org-wide Wallet holder (e.g. an Owner who personally took a payment) has no Restaurant to check reachability against, so only that Membership's own holder can reach it.
 
 ## My Wallets
-GET /wallets — every Wallet the current user holds, each tagged with its Restaurant/Organization. The Waiter Portal aggregates these for display; the underlying balances stay separate per employer.
+GET /wallets — every Wallet the current user holds, each tagged with its Restaurant/Organization. The Waiter Portal aggregates these for display; the underlying balances stay separate per employer. Response: array of `{ id, membershipId, restaurantId, restaurantName, organizationId, availableBalance, pendingBalance, currency, status }` — `pendingBalance` is always `"0"` for MVP (ADR-024: no `Withdrawal` yet, nothing is cashable regardless of label).
 
 ## Wallet Details
-GET /wallets/{id}
+GET /wallets/{id} — same shape as one entry above.
 
 ## Wallet Transactions
-GET /wallets/{id}/transactions — Ledger-derived history for this Wallet only.
+GET /wallets/{id}/transactions — Ledger-derived history for this Wallet only, newest first. Response: array of `{ ledgerLineId, account, direction, amount, currency, restaurantId, transactionId, entryType, createdAt }`.
 
 ## Withdrawal Request
-POST /wallets/{id}/withdrawals — future.
+POST /wallets/{id}/withdrawals — future (IMPLEMENTATION_PLAN.md Sprint 7: "Future Withdrawals Placeholder"). Own-wallet-only, even though `GET /wallets/{id}` is reachable more widely — `PERMISSION_DENIED` for a Manager or Owner who can view but doesn't hold the Wallet, `WITHDRAWAL_NOT_AVAILABLE` (501) for the Wallet's own holder, so the response always means "not built yet," never "not yours."
 
 ---
 
@@ -306,15 +306,15 @@ GET /memberships?status=active
 
 # HTTP Status Codes
 
-200 Success · 201 Created · 204 Deleted · 400 Validation Error · 401 Unauthorized · 403 Forbidden · 404 Not Found · 409 Conflict (includes idempotency-key fingerprint mismatch) · 422 Validation Failed · 429 Rate Limited · 500 Internal Error
+200 Success · 201 Created · 204 Deleted · 400 Validation Error · 401 Unauthorized · 403 Forbidden · 404 Not Found · 409 Conflict (includes idempotency-key fingerprint mismatch) · 422 Validation Failed · 429 Rate Limited · 500 Internal Error · 501 Not Implemented (a documented future capability with no working implementation yet — added for `POST /wallets/{id}/withdrawals`, Sprint 7, ADR-024, so it answers honestly instead of 404ing as if the route doesn't exist)
 
 ---
 
 # Error Codes
 
-AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
+AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · WITHDRAWAL_NOT_AVAILABLE · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
 
-Codes never change. Messages may be translated. (`VALIDATION_ERROR`/`NOT_FOUND` were already live in `ErrorCode` and in active use — e.g. every Zod validation failure — but missing from this list; added here to close that gap, found while adding `PAYMENT_NOT_FOUND` for Sprint 5. `NOT_FOUND` is the generic fallback; prefer a dedicated `_NOT_FOUND` code per resource where one exists.)
+Codes never change. Messages may be translated. (`VALIDATION_ERROR`/`NOT_FOUND` were already live in `ErrorCode` and in active use — e.g. every Zod validation failure — but missing from this list; added here to close that gap, found while adding `PAYMENT_NOT_FOUND` for Sprint 5. `NOT_FOUND` is the generic fallback; prefer a dedicated `_NOT_FOUND` code per resource where one exists. `WITHDRAWAL_NOT_AVAILABLE` added for Sprint 7's Future Withdrawals Placeholder, ADR-024 — paired with HTTP 501, not 404 or 400.)
 
 ---
 

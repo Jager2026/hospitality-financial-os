@@ -1,6 +1,6 @@
 ---
 title: SYSTEM_ARCHITECTURE
-version: 2.0.0
+version: 2.1.0
 status: Active
 classification: Internal
 owner: Founder
@@ -242,6 +242,8 @@ Previous versions of this document referenced domain events (RestaurantCreated, 
 **Mechanism — Transactional Outbox.** Every database transaction that writes a `JournalEntry` / `LedgerLine` also inserts a matching row into `outbox_event`, in the *same* transaction. If the transaction commits, the event is guaranteed to exist; if it rolls back, so does the event. There is no window where a Ledger write succeeds but the event is lost, or vice versa.
 
 **Publishing.** A lightweight polling worker — a scheduled task inside the backend process, not separate infrastructure — periodically reads unpublished `outbox_event` rows and dispatches them to the owning module's projection handler: Wallet Module updates the affected Wallet's cached balance, Restaurant Module updates the affected Restaurant's cached balance, Analytics Module updates its read models, Notification Module (future) sends alerts. Each handler must be idempotent, since retries are expected.
+
+**Real as of Sprint 7 (ADR-024), not only design intent:** Wallet Module is the first of these handlers actually wired in — `WalletProjectionService`, dispatched to directly rather than through a handler registry, since it's still the only real consumer. It satisfies "idempotent" the simplest possible way: a full recompute from `LedgerLine` on every dispatch, not an incremental delta — O(n) in that Membership's own `LedgerLine` history per event, a deliberate MVP-scale tradeoff (small histories today) rather than a checkpointed incremental scheme, revisited only if a real Membership's history grows large enough for the cost to matter in practice. Restaurant and Analytics remain design intent, not yet built.
 
 **Failure and retry.** If a handler fails, the row's `attempts` counter increments and `published_at` stays null; the next poll retries it. A row failing repeatedly beyond a threshold becomes an operational alert, not an infinite retry loop.
 

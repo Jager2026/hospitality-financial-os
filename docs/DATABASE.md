@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.7.1
+version: 2.8.0
 status: Active
 classification: Internal
 owner: Founder
@@ -167,7 +167,9 @@ Wallet
 
 **Relationships:** Wallet → one Membership
 
-**Rules:** Never written by application/business logic directly. Its only writer is the projection-updater that consumes `OutboxEvent` rows and re-derives balances from `LedgerLine`. Fully rebuildable at any time by replaying that Membership's `LedgerLine` rows from zero. The stored columns exist for read performance, not as a second source of truth. Where a person holds multiple Memberships, they have multiple Wallets — the Waiter Portal aggregates them for display; the money underneath stays separate per employer (ADR-006).
+**Rules:** Never written by application/business logic directly. Its only writer is the projection-updater that consumes `OutboxEvent` rows and re-derives balances from `LedgerLine` — a full recompute (`SUM` over that Membership's own `LedgerLine` rows) on every dispatch, not an incremental delta (ADR-024) — which is also why it's fully rebuildable at any time by replaying that Membership's `LedgerLine` rows from zero: rebuilding isn't a separate code path, it's the same recompute called after the row is gone. The stored columns exist for read performance, not as a second source of truth. Where a person holds multiple Memberships, they have multiple Wallets — the Waiter Portal aggregates them for display; the money underneath stays separate per employer (ADR-006).
+
+`pending_balance` (ADR-024): always `0` for MVP — not because nothing is conceptually pending, but because `Withdrawal` doesn't exist yet (a Future entity, no working implementation). With no way to cash anything out of a Wallet at all, "available" and "pending" would just be two labels on the identical, equally-uncashable balance — a display split with no monetary meaning until `Withdrawal` ships and gives the distinction something real to distinguish. The field stays in the schema for that.
 
 ---
 
