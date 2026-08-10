@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.0.1
+version: 2.1.0
 status: Active
 classification: Internal
 owner: Founder
@@ -133,7 +133,9 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 
 **Transaction Details:** Restaurant · Employee · Customer · Gross Amount · Net Amount · Tips · Processing Fee · Reference ID · Timeline · Audit Events
 
-**New (ADR-008):** a Refund / Chargeback status, shown only when one exists on this Transaction — status, amount, and whether the tip was refunded. No action is available here for MVP; refunds are initiated through Stripe, not this screen (see `API_Contract.md`). This exists so an owner is never left wondering why a number changed.
+**New (ADR-008):** a Refund / Chargeback status, shown only when one exists on this Transaction — status, amount, and whether the tip was refunded. No action is available here for MVP; refunds are initiated through Stripe, not this screen (see `API_Contract.md`). This exists so an owner is never left wondering why a number changed. Every figure here — Net Amount, Tips, Processing Fee — reflects the current state after any Refund/Chargeback activity, not a snapshot frozen at the moment of capture, which is exactly why this exists: "why did this number change" always has an answer on this screen.
+
+**Processing Fee is unavailable in MVP (Sprint 8) — shown as "—", never a false `0`:** distinct from `Tax` (also unavailable, but only because no code writes it yet). Fact-checked against ADR-014's own Direct Charge + `fees_collector: "stripe"` configuration: Stripe deducts its own processing fee directly from the Restaurant's connected-account balance, a fact our `payment_intent.succeeded` webhook never observes — the real figure exists only via a separate Stripe `balance_transaction` API call (with the `Stripe-Account` header), which is out of this Sprint's scope ("breakdown computed from `LedgerLine`," `IMPLEMENTATION_PLAN.md`). `MASTERPLAN.md` names Processing Fee and Platform Fee as two distinct concepts — this screen keeps them as two distinct fields rather than collapsing the unavailable one into the one we do have, even though Platform Fee is real and shown correctly today.
 
 ---
 

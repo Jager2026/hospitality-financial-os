@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.6.0
+version: 2.7.0
 status: Active
 classification: Internal
 owner: Founder
@@ -213,13 +213,20 @@ POST /wallets/{id}/withdrawals — future (IMPLEMENTATION_PLAN.md Sprint 7: "Fut
 # TRANSACTIONS
 
 ## Transaction List
-GET /transactions
+GET /transactions — reachability-scoped the same way `GET /payments` already is (ADR-005): every Restaurant the caller's Memberships reach. Filters: `restaurantId`, `status` (`COMPLETED`/`PARTIALLY_REFUNDED`/`REFUNDED`/`DISPUTED`), `membership` (a Waiter's own Transactions, via `Payment.waiter_membership_id` — `GET /transactions?membership=123`, already named in Filtering below). Paginated (`page`/`limit`, same shape as every other list endpoint). Sort fixed at `created_at desc` for MVP, matching Payment History's own precedent.
 
 ## Transaction Details
-GET /transactions/{id} — includes a Ledger breakdown (restaurant revenue, tip, processing fee, platform fee, tax), computed from this Transaction's `JournalEntry` / `LedgerLine` rows at read time. Not stored directly on Transaction (ADR-002).
+GET /transactions/{id} — includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
+
+Response: `{ id, restaurantId, paymentId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, processingFee, refundedAmount, refunds, chargebacks }`.
+
+- `netRestaurantRevenue`, `netTip`, `netPlatformFee`, `refundedAmount` — each the sum of `CREDIT` minus the sum of `DEBIT` `LedgerLine` amounts for that account (`RESTAURANT_REVENUE_PAYABLE`/`TIP_PAYABLE`/`PLATFORM_FEE_REVENUE`/`REFUND_CONTRA`), across every `JournalEntry` under this Transaction — that subtraction, applied per account, **is** the definition of an account balance in double-entry bookkeeping; no special handling is needed for the general, not-yet-attributed `TIP_PAYABLE` line `PAYMENT_CAPTURED` posts (ADR-022) — it and `TIP_ALLOCATED`'s own reversal of it cancel exactly, by construction. `refundedAmount` aggregates both Refund- and Chargeback-driven activity, since both post to `REFUND_CONTRA` (ADR-008/ADR-016). These four, plus `tax`, always sum to exactly `grossAmount` — this Sprint's own Definition of Done, and true for any Transaction regardless of how many partial refunds or chargebacks it has, since `PROCESSOR_CLEARING` is debited exactly once, at capture, for the full `grossAmount`, and never touched again.
+- `tax` — always `"0"` for MVP. `TAX_PAYABLE` exists in the chart of accounts (`schema.prisma`) but no code path writes to it yet — the same "schema ready, not yet used" state as Pool/Shift tip allocation strategies (ADR-007).
+- `processingFee` — always `null` for MVP, **never `"0"`** (a literal zero would misstate a real, nonzero fee Stripe actually collects). Not the same gap as `tax`: this isn't unbuilt logic, it's a fact-checked Stripe limitation. Under ADR-014's Direct Charge + `fees_collector: "stripe"` configuration, Stripe deducts its own processing fee directly from the Restaurant's own connected-account balance — a fact our `payment_intent.succeeded` webhook payload never carries. The real figure exists only via a separate Stripe `balance_transaction` API call (with the `Stripe-Account` header), which is out of this Sprint's scope ("breakdown computed from `LedgerLine`," `IMPLEMENTATION_PLAN.md`). `MASTERPLAN.md` names Processing Fee and Platform Fee as two distinct concepts — kept as two distinct fields here, not collapsed into the one (`netPlatformFee`) that is actually available.
+- `refunds` / `chargebacks` — this Transaction's own `Refund`/`Chargeback` rows (see below), so the client never has to make a second round trip to answer "why did this number change."
 
 ## Export
-GET /transactions/export — CSV, Excel, future PDF.
+GET /transactions/export — CSV for MVP (Excel, PDF: future). Same filters as Transaction List, no pagination — every matching row. Columns: `id, restaurantId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, refundedAmount` — `processingFee` omitted from the export entirely (same reasoning as Transaction Details: `null` has no honest CSV representation that isn't confusable with a real `0`).
 
 ---
 
