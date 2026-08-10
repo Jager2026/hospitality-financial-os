@@ -42,6 +42,13 @@ const fakeLogger = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
+// Same 30s reasoning as beforeAll's own drain loop below, applied to the individual tests too —
+// verified by fact this session, not assumed from resemblance to a prior incident: a real
+// unpublished-event backlog (measured directly via SQL, not guessed) plus real per-dispatch
+// wall-clock cost pushed pollUntilSettled past Vitest's 5000ms default here, reproducibly, even
+// with zero other test files running concurrently against the same database.
+const BACKLOG_SAFE_TIMEOUT_MS = 30_000;
+
 describe("OutboxPollerService (real database)", () => {
   const prisma = new PrismaService();
   let poller: OutboxPollerService;
@@ -171,95 +178,109 @@ describe("OutboxPollerService (real database)", () => {
     }
   }
 
-  it("poll() dispatches a real payment_captured/tip_allocated event pair to WalletProjectionService, marks published_at, and does NOT increment attempts on success — discriminating: the pre-Sprint-7 skeleton incremented attempts unconditionally, even on a successful dispatch", async () => {
-    const { org, restaurant } = await seedOrgRestaurant();
-    const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
-    const piId = `pi_${randomUUID()}`;
-    await seedPayment(restaurant.id, 2000n, 500n, waiterMembership.id, piId);
+  it(
+    "poll() dispatches a real payment_captured/tip_allocated event pair to WalletProjectionService, marks published_at, and does NOT increment attempts on success — discriminating: the pre-Sprint-7 skeleton incremented attempts unconditionally, even on a successful dispatch",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+      const piId = `pi_${randomUUID()}`;
+      await seedPayment(restaurant.id, 2000n, 500n, waiterMembership.id, piId);
 
-    const { rawBody, signature } = signEvent(
-      buildEvent("payment_intent.succeeded", { id: piId, amount: 2000, currency: "eur" }),
-    );
-    await webhooks.handleEvent(rawBody, signature);
+      const { rawBody, signature } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piId, amount: 2000, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawBody, signature);
 
-    const transaction = await prisma.transaction.findFirst({
-      where: { payment: { processorPaymentId: piId } },
-    });
-    const entriesBefore = await prisma.journalEntry.findMany({
-      where: { transactionId: transaction?.id },
-    });
-    const eventsBefore = await prisma.outboxEvent.findMany({
-      where: { aggregateId: { in: entriesBefore.map((e) => e.id) } },
-    });
-    expect(eventsBefore).toHaveLength(2); // PAYMENT_CAPTURED + TIP_ALLOCATED
-    expect(eventsBefore.every((e) => e.publishedAt === null)).toBe(true);
-    expect(eventsBefore.every((e) => e.attempts === 0)).toBe(true);
+      const transaction = await prisma.transaction.findFirst({
+        where: { payment: { processorPaymentId: piId } },
+      });
+      const entriesBefore = await prisma.journalEntry.findMany({
+        where: { transactionId: transaction?.id },
+      });
+      const eventsBefore = await prisma.outboxEvent.findMany({
+        where: { aggregateId: { in: entriesBefore.map((e) => e.id) } },
+      });
+      expect(eventsBefore).toHaveLength(2); // PAYMENT_CAPTURED + TIP_ALLOCATED
+      expect(eventsBefore.every((e) => e.publishedAt === null)).toBe(true);
+      expect(eventsBefore.every((e) => e.attempts === 0)).toBe(true);
 
-    await pollUntilSettled(eventsBefore.map((e) => e.id));
+      await pollUntilSettled(eventsBefore.map((e) => e.id));
 
-    const eventsAfter = await prisma.outboxEvent.findMany({
-      where: { id: { in: eventsBefore.map((e) => e.id) } },
-    });
-    expect(eventsAfter.every((e) => e.publishedAt !== null)).toBe(true);
-    expect(eventsAfter.every((e) => e.attempts === 0)).toBe(true); // NOT incremented on success
+      const eventsAfter = await prisma.outboxEvent.findMany({
+        where: { id: { in: eventsBefore.map((e) => e.id) } },
+      });
+      expect(eventsAfter.every((e) => e.publishedAt !== null)).toBe(true);
+      expect(eventsAfter.every((e) => e.attempts === 0)).toBe(true); // NOT incremented on success
 
-    const wallet = await prisma.wallet.findUnique({ where: { membershipId: waiterMembership.id } });
-    expect(wallet?.availableBalance).toBe(500n); // the real effect: Wallet actually updated
-  });
+      const wallet = await prisma.wallet.findUnique({
+        where: { membershipId: waiterMembership.id },
+      });
+      expect(wallet?.availableBalance).toBe(500n); // the real effect: Wallet actually updated
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
 
-  it("poll() does not re-process an already-published event on a second call", async () => {
-    const { org, restaurant } = await seedOrgRestaurant();
-    const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
-    const piId = `pi_${randomUUID()}`;
-    await seedPayment(restaurant.id, 1000n, 200n, waiterMembership.id, piId);
+  it(
+    "poll() does not re-process an already-published event on a second call",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+      const piId = `pi_${randomUUID()}`;
+      await seedPayment(restaurant.id, 1000n, 200n, waiterMembership.id, piId);
 
-    const { rawBody, signature } = signEvent(
-      buildEvent("payment_intent.succeeded", { id: piId, amount: 1000, currency: "eur" }),
-    );
-    await webhooks.handleEvent(rawBody, signature);
+      const { rawBody, signature } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piId, amount: 1000, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawBody, signature);
 
-    const transaction = await prisma.transaction.findFirst({
-      where: { payment: { processorPaymentId: piId } },
-    });
-    const entries = await prisma.journalEntry.findMany({
-      where: { transactionId: transaction?.id },
-    });
-    const events = await prisma.outboxEvent.findMany({
-      where: { aggregateId: { in: entries.map((e) => e.id) } },
-    });
+      const transaction = await prisma.transaction.findFirst({
+        where: { payment: { processorPaymentId: piId } },
+      });
+      const entries = await prisma.journalEntry.findMany({
+        where: { transactionId: transaction?.id },
+      });
+      const events = await prisma.outboxEvent.findMany({
+        where: { aggregateId: { in: entries.map((e) => e.id) } },
+      });
 
-    await pollUntilSettled(events.map((e) => e.id));
-    const walletAfterFirst = await prisma.wallet.findUnique({
-      where: { membershipId: waiterMembership.id },
-    });
+      await pollUntilSettled(events.map((e) => e.id));
+      const walletAfterFirst = await prisma.wallet.findUnique({
+        where: { membershipId: waiterMembership.id },
+      });
 
-    await poller.poll(); // second call — this test's own events already published, should be a no-op for them
-    const walletAfterSecond = await prisma.wallet.findUnique({
-      where: { membershipId: waiterMembership.id },
-    });
+      await poller.poll(); // second call — this test's own events already published, should be a no-op for them
+      const walletAfterSecond = await prisma.wallet.findUnique({
+        where: { membershipId: waiterMembership.id },
+      });
 
-    expect(walletAfterSecond?.availableBalance).toBe(walletAfterFirst?.availableBalance);
-    expect(walletAfterSecond?.updatedAt.getTime()).toBe(walletAfterFirst?.updatedAt.getTime()); // not re-written
-  });
+      expect(walletAfterSecond?.availableBalance).toBe(walletAfterFirst?.availableBalance);
+      expect(walletAfterSecond?.updatedAt.getTime()).toBe(walletAfterFirst?.updatedAt.getTime()); // not re-written
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
 
-  it("a malformed event fails, increments attempts, and leaves published_at null — proves the retry path is real, not just the success path", async () => {
-    const badEvent = await prisma.outboxEvent.create({
-      data: {
-        aggregateType: "JournalEntry",
-        aggregateId: randomUUID(),
-        eventType: "journal_entry.payment_captured",
-        payload: { journalEntryId: "not-a-valid-uuid" }, // Postgres will reject this as a UUID filter
-      },
-    });
+  it(
+    "a malformed event fails, increments attempts, and leaves published_at null — proves the retry path is real, not just the success path",
+    async () => {
+      const badEvent = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "JournalEntry",
+          aggregateId: randomUUID(),
+          eventType: "journal_entry.payment_captured",
+          payload: { journalEntryId: "not-a-valid-uuid" }, // Postgres will reject this as a UUID filter
+        },
+      });
 
-    for (let i = 0; i < 20; i++) {
-      const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: badEvent.id } });
-      if (current.attempts > 0) break;
-      await poller.poll();
-    }
+      for (let i = 0; i < 20; i++) {
+        const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: badEvent.id } });
+        if (current.attempts > 0) break;
+        await poller.poll();
+      }
 
-    const after = await prisma.outboxEvent.findUnique({ where: { id: badEvent.id } });
-    expect(after?.publishedAt).toBeNull();
-    expect(after?.attempts).toBe(1);
-  });
+      const after = await prisma.outboxEvent.findUnique({ where: { id: badEvent.id } });
+      expect(after?.publishedAt).toBeNull();
+      expect(after?.attempts).toBe(1);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
 });
