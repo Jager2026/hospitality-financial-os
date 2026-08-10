@@ -227,8 +227,14 @@ describe("AnalyticsService (real database)", () => {
 
         const from = dateNDaysAgo(2);
         const to = dateNDaysAgo(0);
-        const revenue = await analyticsService.getRevenue({ restaurantId: restaurant.id, from, to }, userReaching(org.id));
-        const tips = await analyticsService.getTips({ restaurantId: restaurant.id, from, to }, userReaching(org.id));
+        const revenue = await analyticsService.getRevenue(
+          { restaurantId: restaurant.id, from, to },
+          userReaching(org.id),
+        );
+        const tips = await analyticsService.getTips(
+          { restaurantId: restaurant.id, from, to },
+          userReaching(org.id),
+        );
 
         expect(revenue.series).toHaveLength(3);
         expect(revenue.series[0]).toEqual({ date: dateNDaysAgo(2), amount: "300" });
@@ -449,7 +455,10 @@ describe("AnalyticsService (real database)", () => {
         ).resolves.toBeDefined();
 
         await expect(
-          analyticsService.exportRevenueCsv({ restaurantId: restaurant.id, from, to }, viewOnlyUser),
+          analyticsService.exportRevenueCsv(
+            { restaurantId: restaurant.id, from, to },
+            viewOnlyUser,
+          ),
         ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
         await expect(
           analyticsService.exportTipsCsv({ restaurantId: restaurant.id, from, to }, viewOnlyUser),
@@ -458,7 +467,10 @@ describe("AnalyticsService (real database)", () => {
           analyticsService.exportStaffCsv({ restaurantId: restaurant.id, from, to }, viewOnlyUser),
         ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
         await expect(
-          analyticsService.exportPerformanceCsv({ restaurantId: restaurant.id, from, to }, viewOnlyUser),
+          analyticsService.exportPerformanceCsv(
+            { restaurantId: restaurant.id, from, to },
+            viewOnlyUser,
+          ),
         ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
         await expect(
           analyticsService.exportReportCsv(
@@ -479,7 +491,10 @@ describe("AnalyticsService (real database)", () => {
         analyticsService.getRevenue({ restaurantId: restaurant.id, from, to }, exportOnlyUser),
       ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
       await expect(
-        analyticsService.exportRevenueCsv({ restaurantId: restaurant.id, from, to }, exportOnlyUser),
+        analyticsService.exportRevenueCsv(
+          { restaurantId: restaurant.id, from, to },
+          exportOnlyUser,
+        ),
       ).resolves.toBeDefined();
     });
 

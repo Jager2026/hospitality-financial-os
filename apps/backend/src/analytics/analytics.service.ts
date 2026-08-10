@@ -192,7 +192,12 @@ export class AnalyticsService {
         perf.previousPeriod.revenue,
         perf.changeBasisPoints.revenue,
       ),
-      csvRow("tips", perf.currentPeriod.tips, perf.previousPeriod.tips, perf.changeBasisPoints.tips),
+      csvRow(
+        "tips",
+        perf.currentPeriod.tips,
+        perf.previousPeriod.tips,
+        perf.changeBasisPoints.tips,
+      ),
       csvRow(
         "transactionCount",
         perf.currentPeriod.transactionCount,
@@ -249,7 +254,14 @@ export class AnalyticsService {
   ): Promise<RevenueAnalytics> {
     const series = await this.buildSeries(restaurant, from, to, BILL_REVENUE_ACCOUNTS);
     const total = series.reduce((acc, p) => acc + BigInt(p.amount), 0n);
-    return { restaurantId: restaurant.id, from, to, total: total.toString(), totalNote: TOTAL_NOTE, series };
+    return {
+      restaurantId: restaurant.id,
+      from,
+      to,
+      total: total.toString(),
+      totalNote: TOTAL_NOTE,
+      series,
+    };
   }
 
   private async computeTips(

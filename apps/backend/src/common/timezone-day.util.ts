@@ -46,7 +46,10 @@ export function enumerateDates(from: string, to: string): string[] {
   const dates: string[] = [];
   let cursor: DateParts = { year: fy, month: fm, day: fd };
   const end: DateParts = { year: ty, month: tm, day: td };
-  while (Date.UTC(cursor.year, cursor.month - 1, cursor.day) <= Date.UTC(end.year, end.month - 1, end.day)) {
+  while (
+    Date.UTC(cursor.year, cursor.month - 1, cursor.day) <=
+    Date.UTC(end.year, end.month - 1, end.day)
+  ) {
     dates.push(`${cursor.year}-${pad(cursor.month)}-${pad(cursor.day)}`);
     cursor = addCalendarDays(cursor, 1);
   }
