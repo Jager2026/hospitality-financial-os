@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.8.0
+version: 2.9.0
 status: Active
 classification: Internal
 owner: Founder
@@ -199,7 +199,7 @@ Transaction
 
 **Relationships:** Transaction → Payment · Transaction → many JournalEntry · Transaction → zero-or-one Tip
 
-**Rules:** Never edited. Corrections happen through a new `JournalEntry` (refund / chargeback / adjustment), never by changing this row. Does **not** store `restaurant_amount`, `tip_amount`, `processing_fee`, or `platform_fee` — those exist only as `LedgerLine` rows under this Transaction's `JournalEntry`. This closes the v1.0 duplication where both Transaction and Tip separately stored a tip amount.
+**Rules:** Never edited. Corrections happen through a new `JournalEntry` (refund / chargeback / adjustment), never by changing this row. Does **not** store `restaurant_amount`, `tip_amount`, `processing_fee`, or `platform_fee` — those exist only as `LedgerLine` rows under this Transaction's `JournalEntry` rows (plural: one Transaction can carry several over its life — `PAYMENT_CAPTURED` plus any later `TIP_ALLOCATED`/`REFUND_ISSUED`/`CHARGEBACK`). This closes the v1.0 duplication where both Transaction and Tip separately stored a tip amount. A read-time breakdown sums `CREDIT` minus `DEBIT` per account across **all** of them, not just `PAYMENT_CAPTURED` — Sprint 8, ADR-025 — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture.
 
 ---
 

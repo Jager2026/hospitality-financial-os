@@ -19,6 +19,7 @@ import { MembershipModule } from "./membership/membership.module";
 import { PaymentModule } from "./payment/payment.module";
 import { SettingsModule } from "./settings/settings.module";
 import { TipModule } from "./tip/tip.module";
+import { TransactionModule } from "./transaction/transaction.module";
 import { WalletModule } from "./wallet/wallet.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
@@ -61,6 +62,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     TipModule,
     SettingsModule,
     WalletModule,
+    TransactionModule,
     WebhooksModule,
   ],
   providers: [
