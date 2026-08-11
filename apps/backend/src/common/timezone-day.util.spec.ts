@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getLocalDayWindow } from "./timezone-day.util";
+import { enumerateDates, getDayWindowForDate, getLocalDayWindow } from "./timezone-day.util";
 
 const VILNIUS = "Europe/Vilnius"; // ADR-012's launch timezone
 
@@ -64,5 +64,46 @@ describe("getLocalDayWindow", () => {
     expect(window.date).toBe("2026-08-09");
     expect(window.start.toISOString()).toBe("2026-08-09T07:00:00.000Z");
     expect(window.end.toISOString()).toBe("2026-08-10T07:00:00.000Z");
+  });
+});
+
+describe("getDayWindowForDate", () => {
+  it("matches getLocalDayWindow's own output for the same calendar date — one direct-date, one relative-to-today, same underlying math", () => {
+    const referenceUtc = new Date("2026-08-10T12:00:00Z");
+    const relative = getLocalDayWindow(VILNIUS, 0, referenceUtc);
+    const direct = getDayWindowForDate(VILNIUS, "2026-08-10");
+    expect(direct.start.toISOString()).toBe(relative.start.toISOString());
+    expect(direct.end.toISOString()).toBe(relative.end.toISOString());
+    expect(direct.date).toBe("2026-08-10");
+  });
+
+  it("handles a negative-offset timezone for an explicit date, not just Vilnius", () => {
+    const window = getDayWindowForDate("America/Los_Angeles", "2026-08-09");
+    expect(window.start.toISOString()).toBe("2026-08-09T07:00:00.000Z");
+    expect(window.end.toISOString()).toBe("2026-08-10T07:00:00.000Z");
+  });
+});
+
+describe("enumerateDates", () => {
+  it("returns a single-day array when from equals to", () => {
+    expect(enumerateDates("2026-08-10", "2026-08-10")).toEqual(["2026-08-10"]);
+  });
+
+  it("returns every date inclusive, oldest first, correctly crossing a month boundary", () => {
+    expect(enumerateDates("2026-07-30", "2026-08-02")).toEqual([
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-01",
+      "2026-08-02",
+    ]);
+  });
+
+  it("correctly crosses a year boundary", () => {
+    expect(enumerateDates("2025-12-30", "2026-01-02")).toEqual([
+      "2025-12-30",
+      "2025-12-31",
+      "2026-01-01",
+      "2026-01-02",
+    ]);
   });
 });

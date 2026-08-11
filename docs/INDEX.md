@@ -1,6 +1,6 @@
 ---
 title: INDEX
-version: 1.2.0
+version: 1.2.1
 status: Active
 classification: Internal
 owner: Founder
@@ -18,10 +18,10 @@ Regenerate by hand when a doc's version bumps or a new doc is added — it isn't
 | [MASTERPLAN.md](MASTERPLAN.md) | 2.0.0 | Product vision, business model, and scope for the Hospitality Financial Operating System — the top of the document hierarchy everything else refines. |
 | [AI_WORKFLOW.md](AI_WORKFLOW.md) | 1.0 | The step-by-step process Claude must follow before implementing any feature — read docs in order, understand the problem, then design, then code. |
 | [CLAUDE_RULES.md](CLAUDE_RULES.md) | 2.4.2 | Behavioral and values contract for Claude as AI Technical Co-Founder — engineering culture, review standards, communication rules. Byte-identical to root `CLAUDE.md` per ADR-011. |
-| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | 1.12.1 | The full ADR log — twenty-six accepted architecture decisions, each with context, decision, and consequences; the canonical record of *why*, including in-place revisions to earlier decisions (e.g. ADR-009, ADR-014, ADR-023, ADR-026). |
+| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | 1.13.0 | The full ADR log — twenty-seven accepted architecture decisions, each with context, decision, and consequences; the canonical record of *why*, including in-place revisions to earlier decisions (e.g. ADR-009, ADR-014, ADR-023, ADR-026). |
 | [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) | 2.1.0 | The system's components, modules, and how they fit together — the technical shape the ADRs decided into. |
 | [DATABASE.md](DATABASE.md) | 2.9.0 | Every entity, field, and relationship in the data model — the source `schema.prisma` is translated from. |
-| [API_Contract.md](API_Contract.md) (title: API_SPECIFICATION) | 2.8.1 | Every REST endpoint — request/response shape, auth requirements, rate limits — the contract the frontend and backend both build against. |
+| [API_Contract.md](API_Contract.md) (title: API_SPECIFICATION) | 2.9.0 | Every REST endpoint — request/response shape, auth requirements, rate limits — the contract the frontend and backend both build against. |
 | [UX_MAP.md](UX_MAP.md) | 2.1.0 | Every screen, navigation path, and interaction in the product, and what changed on each screen as a result of specific ADRs. |
 | [DOMAIN_GLOSSARY.md](DOMAIN_GLOSSARY.md) | 1.0.0 | One-page dictionary of project-specific terms and confusable pairs, compiled from DATABASE.md/ARCHITECTURE_DECISIONS.md/MASTERPLAN.md — never a new decision of its own. |
 | [EVENT_CATALOG.md](EVENT_CATALOG.md) | 1.2.0 | The concrete catalog of `OutboxEvent` rows the codebase actually produces and their payload shapes, read directly from the code, not designed ahead of it. |
