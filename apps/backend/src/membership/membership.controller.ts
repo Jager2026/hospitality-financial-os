@@ -33,9 +33,16 @@ export class MembershipController {
     private readonly prisma: PrismaService,
   ) {}
 
+  // Sprint 11 (ADR-028): 20/min. No real email delivery exists yet (invite() just creates a
+  // MembershipInvitation row and hands the raw token back to the caller — the caller relays it),
+  // so this isn't yet an email-spam vector; it's a resource-exhaustion one — an authenticated,
+  // permissioned-but-possibly-compromised account could otherwise flood the table with rows. 20/
+  // min still comfortably covers onboarding a whole shift's worth of staff in one sitting. Revisit
+  // this number once a real delivery provider exists and email-spam becomes the actual risk.
   @Post()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission("membership.invite")
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @AuditEntity("MembershipInvitation")
   async invite(
     @Body(new ZodValidationPipe(inviteMembershipSchema)) dto: InviteMembershipDto,

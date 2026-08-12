@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.9.0
+version: 2.10.0
 status: Active
 classification: Internal
 owner: Founder
@@ -409,9 +409,16 @@ Future — for third-party integrations, not required for MVP:
 
 # Rate Limiting
 
-Authentication 10/min · Payments strict · Analytics moderate · Public low.
+Global baseline: 100/min (ADR-010), applied to every route without its own override. Per-endpoint overrides, tuned by actual cost/abuse shape rather than uniformly (ADR-028, Sprint 11):
 
-Active from Sprint 1 (ADR-010), not deferred to a later hardening pass. Limits configurable.
+- `POST /auth/login` — 10/min (brute-force/credential-stuffing).
+- `POST /memberships/invitations/accept` — 10/min (same cost/risk shape as login: a DB lookup by email plus a hash-compare per candidate).
+- `POST /payments` — 20/min (every call creates a real Stripe PaymentIntent; the shape card-testing fraud targets).
+- `POST /restaurants` and `POST /organizations/:organizationId/restaurants` — 5/min each (every call creates a real Stripe Connect account; the first carries no permission check at all by design).
+- `POST /memberships` (invite) — 20/min (resource-exhaustion risk on `MembershipInvitation` row growth; becomes an email-spam risk once a real delivery provider exists, not yet).
+- `POST /webhooks/stripe` — 500/min, raised above the baseline, not tightened: the signature is already verified before processing, and Stripe's webhook senders share a platform-wide IP pool, making the old 100/min baseline a cross-restaurant ceiling rather than a per-caller one.
+
+Every override above is exercised by its own `*-throttle.integration.spec.ts` against the real Controller/Guard/Interceptor classes, not just documented here.
 
 ---
 

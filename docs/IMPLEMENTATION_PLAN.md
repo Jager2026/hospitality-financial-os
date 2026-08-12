@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.2.1
+version: 2.3.0
 status: Active
 classification: Critical
 priority: Highest
@@ -185,7 +185,7 @@ Definition of Done: Restaurant can measure performance. Every analytics figure i
 
 Reframed from v1.0: rate limiting and audit logging already exist since Sprint 1. This sprint tunes and pressure-tests them — it is not their first implementation.
 
-Tasks: Per-endpoint rate limit tuning, Permission Review (audit every `RolePermission` row), Validation Review, Security Headers, webhook signature verification audit, OWASP Top 10 review, penetration test pass.
+Tasks: Per-endpoint rate limit tuning, Permission Review (audit every `RolePermission` row), Validation Review, Security Headers, webhook signature verification audit, OWASP Top 10 review, penetration test pass, `@nestjs/core` 10→11 major upgrade (flagged as a deferred finding during the pre-Sprint-10 dependency audit, confirmed by the Founder as belonging to this Sprint specifically; done as its own focused task with its own live verification, not mixed into the rest of the audit — same precedent as the Next.js 14→15 upgrade, `IMPLEMENTATION_PLAN.md` Sprint 5-era work).
 
 Definition of Done: OWASP Top 10 checked. No endpoint is missing a rate limit or a permission check.
 
@@ -234,6 +234,15 @@ Business Logic, Security, Performance, Documentation, Testing, Naming, Architect
 Owner can register. Restaurant created. Team invited (Membership). Customer pays. Customer tips. Wallet updates. Dashboard updates. Reports work. A refund processes correctly and the Ledger stays balanced. A reconciliation query — sum of debits equals sum of credits, per account — returns zero discrepancies. Production deployed. Documentation complete.
 
 Only then is MVP complete.
+
+---
+
+# Deferred, Not Yet Scheduled
+
+Dependency-audit findings that require a major-version bump are never mixed into a routine audit or another sprint's own task list — each earns its own focused task with its own live verification (typecheck, tests, both builds, and a real running-app check where the surface is user-facing), the same discipline `@nestjs/core` 10→11 got once assigned to Sprint 11 above. Listed here until a Sprint claims them, so the decision isn't only recoverable from chat history:
+
+- **Prisma 5→7.** Two majors at once (5→6, 6→7) — flagged during the pre-Sprint-10 dependency audit, deliberately not bundled into Sprint 11 (rate-limit tuning and Prisma's own breaking changes shouldn't compete for review attention in the same PR). Needs its own scoped plan before it gets a Sprint.
+- **vitest 2→3.** Flagged the same audit pass. Not yet assigned to a Sprint.
 
 ---
 
