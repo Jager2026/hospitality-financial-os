@@ -25,7 +25,7 @@ Regenerate by hand when a doc's version bumps or a new doc is added — it isn't
 | [UX_MAP.md](UX_MAP.md) | 2.1.0 | Every screen, navigation path, and interaction in the product, and what changed on each screen as a result of specific ADRs. |
 | [DOMAIN_GLOSSARY.md](DOMAIN_GLOSSARY.md) | 1.0.0 | One-page dictionary of project-specific terms and confusable pairs, compiled from DATABASE.md/ARCHITECTURE_DECISIONS.md/MASTERPLAN.md — never a new decision of its own. |
 | [EVENT_CATALOG.md](EVENT_CATALOG.md) | 1.2.0 | The concrete catalog of `OutboxEvent` rows the codebase actually produces and their payload shapes, read directly from the code, not designed ahead of it. |
-| [THREAT_MODEL.md](THREAT_MODEL.md) | 1.3.0 | Security threats considered for the platform — organized into Closed Threats, Accepted Risk, and Open, Not Answered, each citing the ADR that resolved or owns it. |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | 1.4.0 | Security threats considered for the platform — organized into Closed Threats, Accepted Risk, and Open, Not Answered, each citing the ADR that resolved or owns it; includes Sprint 11's OWASP Top 10:2025 review, folded into this same structure. |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | 2.3.0 | The sprint-by-sprint build plan — tasks and Definition of Done for each sprint, Sprint 0 through the current one. |
 | [SEQUENCE_DIAGRAMS.md](SEQUENCE_DIAGRAMS.md) | 1.0.1 | Prose explanation of what each sequence diagram resolves and the ADRs that came out of walking through the timing (ADR-014, ADR-015, ADR-016). |
 | [SEQUENCE_ONBOARDING.md](SEQUENCE_ONBOARDING.md) | — (no frontmatter; mermaid source) | Mermaid sequence diagram for restaurant creation through Stripe Connect onboarding to first-payment readiness. |
