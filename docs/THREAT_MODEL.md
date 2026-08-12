@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.3.0
+version: 1.4.0
 status: Active
 classification: Critical
 owner: Founder
@@ -46,7 +46,7 @@ Every entry below cites a real ADR number and a real, already-existing mechanism
 
 ---
 
-## 4. A stolen refresh token used in parallel with the legitimate session
+## 4. A stolen refresh token used in parallel with the legitimate session (OWASP A07:2025, Authentication Failures)
 **Threat:** An attacker obtains a refresh token (device compromise, log leak, etc.) and uses it. Rotation alone (revoking only the used token) doesn't distinguish "the legitimate client rotated normally" from "someone just replayed an already-superseded token" — the standard signature of a stolen token racing the real one.
 
 **Closed by:** ADR-019 (revised) — Refresh Token Storage, family-wide reuse detection. *"A revoked family invalidates every token descended from that login, present or future, not just the one being replayed."*
@@ -55,7 +55,7 @@ Every entry below cites a real ADR number and a real, already-existing mechanism
 
 ---
 
-## 5. Credential-stuffing / brute-force login attempts
+## 5. Credential-stuffing / brute-force login attempts (OWASP A07:2025, Authentication Failures)
 **Threat:** An attacker scripts repeated login attempts against `/auth/login` — either guessing one account's password, or testing a leaked credential list across many accounts.
 
 **Closed by:** ADR-010 — Audit Logging and Rate Limiting Belong to Foundation. *"Baseline rate limiting is a global throttling module, tuned per endpoint later against the limits already specified in API_Contract. Both are built in Sprint 1, before Authentication."*
@@ -91,6 +91,78 @@ Every entry below cites a real ADR number and a real, already-existing mechanism
 
 ---
 
+Entries 9–15 below are Sprint 11's OWASP Top 10:2025 review (`IMPLEMENTATION_PLAN.md`), folded into this document's own existing structure rather than kept as a separate checklist — each cites the specific ADR/mechanism that closes it, same rule as every entry above. Not every one of the ten categories produced a new entry: #4 and #5 above already close A07:2025 (Authentication Failures) and are labeled accordingly rather than duplicated.
+
+## 9. Cross-Organization or cross-Restaurant data access via a legitimately-authenticated caller (OWASP A01:2025, Broken Access Control)
+**Threat:** An authenticated User with a real Membership at Organization/Restaurant A reads or writes data belonging to Organization/Restaurant B — either because an org-wide Membership's `organizationId` is never actually compared against the target resource's own, or a restaurant-scoped Membership's reach is computed too broadly. The single most consequential access-control bug shape in this codebase, real not hypothetical: `RestaurantService.findAllForUser` shipped with exactly this gap in Sprint 4 (used every Membership's `organizationId` regardless of scope, so a restaurant-scoped Manager could see every Restaurant in the Organization the moment a second one existed) — caught live, not by a test.
+
+**Closed by:** ADR-005 — the reachability rule itself: an org-wide Membership (`restaurantId IS NULL`) reaches every Restaurant in its own Organization; a restaurant-scoped one reaches only the exact Restaurant it names — never "any org-wide Membership anywhere." Enforced twice, by design: `PermissionsGuard` (coarse — does the caller hold this permission on *any* Membership) then a resource-scoped service-layer check (fine — does the *specific* Membership that actually reaches this resource hold it), `restaurant-reachability.util.ts`'s `isRestaurantReachable`/`hasPermissionAtRestaurant`.
+
+**Mechanism, closed by a systematic sweep this Sprint, not a sample (ADR-028 Decision 5):** two search methods deliberately broader than the canonical `restaurantId === null && organizationId === X` idiom, so a check written in different wording wouldn't be missed — every function accepting an `AuthenticatedUser` (35 files), narrowed to every one that actually reads `.memberships` (16 files), plus both Guard files read in full. Result: 21 real reachability/permission-scoped sites across 11 service/controller files, all confirmed comparing `organizationId` correctly. Zero new findings this pass — the last time this class of bug was caught was Sprint 6's `TipService.assertReachable` first draft, caught by self-review before any test or live run.
+
+---
+
+## 10. Missing platform-level protections against common web attack classes (OWASP A02:2025, Security Misconfiguration)
+**Threat:** No security response headers (clickjacking via frame embedding, MIME-type sniffing, no HSTS), CORS reflecting any Origin instead of an explicit allowlist, or a verbose error response leaking a stack trace or internal file path to a client.
+
+**Closed by:** ADR-028 Decisions 1–2 — `helmet()` with standard defaults (`main.ts`), and `CORS_ORIGIN` as a required env var (no `.default()`) replacing the previous bare `enableCors()`, which reflected any Origin. The error-response half of this category predates Sprint 11: `AllExceptionsFilter` (Sprint 1) was already designed so an unhandled exception returns a fixed, generic `{ code: "UNKNOWN_ERROR", message: "Something went wrong. Please try again." }` to the client — full diagnostic detail goes to the logger only, never the response body (CLAUDE_RULES.md, Error Philosophy).
+
+**Mechanism, live-verified this Sprint:** a real `GET /health` response carries `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, and the rest of helmet's default set; a request from the `CORS_ORIGIN`-allowed Origin gets `Access-Control-Allow-Origin` echoed back, a request from an unrelated Origin gets no CORS header at all.
+
+---
+
+## 11. SQL injection via a raw, unparameterized query (OWASP A05:2025, Injection)
+**Threat:** Request-derived input reaching the database as string-concatenated SQL instead of a parameterized query.
+
+**Closed by:** architecture default, not a per-query discipline — every query in this codebase goes through Prisma Client's generated query builder, which parameterizes by construction; there is no ORM escape hatch used casually. Confirmed this Sprint by finding and reading, line by line, the *only* three raw-SQL call sites in the entire backend (`grep` for `$queryRaw`/`$executeRaw`, not assumed absent).
+
+**Mechanism:** `health.controller.ts`'s liveness check — `` this.prisma.$queryRaw`SELECT 1` `` — a static tagged template with zero interpolation. `ledger.service.ts`'s `client.$executeRawUnsafe("SET CONSTRAINTS ledger_line_balanced IMMEDIATE")` — despite the `Unsafe` suffix, the argument is a hardcoded literal with no interpolated value at all (the `Unsafe` variant is used because Prisma's safe tagged-template form has known trouble with `SET` statements, not to skip parameterization for convenience); the actual user-supplied Ledger data never appears in this call at all, only in the ORM-built `journalEntry.create`/`ledgerLine.createMany` calls immediately around it. `ledger-trigger.integration.spec.ts`'s own raw SQL is test-only, never reachable from a request.
+
+---
+
+## 12. An unsigned or forged webhook accepted as if it were genuinely from Stripe (OWASP A08:2025, Software or Data Integrity Failures)
+**Threat:** Distinct from replay of a *genuine* webhook (Closed Threat #1, ADR-004) — an attacker POSTs a fabricated event directly to `/webhooks/stripe`, without ever holding the real signing secret, attempting to make the Ledger post money that was never actually charged.
+
+**Closed by:** `API_Contract.md`, Incoming Webhooks — Stripe: *"the signature (verified inside WebhooksService, using the exact raw bytes `main.ts`'s `rawBody:true` captures) is the authentication"* — the endpoint carries no `JwtAuthGuard` at all by design, precisely because signature verification is a stronger authentication than a bearer token here (it also proves the payload itself, not just the caller's identity). `StripeService.constructWebhookEvent` delegates to Stripe's own SDK HMAC verification rather than a hand-rolled comparison.
+
+**Mechanism, live-verified this Sprint** (during the `@nestjs/core` 11 upgrade's own verification, since raw-body capture is Express-middleware-dependent and worth re-proving after a major HTTP-layer dependency bump): a real, validly-signed test event accepted end-to-end (`200`, `{"received":true}`); the identical payload re-sent with a forged `v1` signature correctly rejected (`400`) before any Ledger code ever runs.
+
+---
+
+## 13. A background write failing without anyone finding out (OWASP A10:2025, Mishandling of Exceptional Conditions)
+**Threat:** An asynchronous side effect — an Outbox dispatch, a deferred database constraint — fails, and the failure simply disappears: no retry, no alert, no record, leaving a `JournalEntry` that looks posted but never completed its downstream effects, or a corrupt write nobody notices until reconciliation.
+
+**Closed by:** ADR-002's own reasoning for forcing the deferred trigger to run *inside* the write transaction rather than letting Postgres check it naturally at COMMIT — confirmed directly, not assumed, by `ledger-trigger.integration.spec.ts`: when the trigger fails at COMMIT instead, `Prisma.$transaction()` resolves normally even though the server rolled everything back, so the caller never learns the write failed — "worse than an error: code downstream would treat a silently-discarded JournalEntry as successfully posted" (`ledger.service.ts`'s own comment). SYSTEM_ARCHITECTURE.md's Outbox Lag design answers the async-dispatch half: a repeatedly-failing `OutboxEvent` is not silently dropped, it raises an `ERROR`-level "operational alert" on every poll.
+
+**Mechanism, observed live this Sprint** (not staged for the purpose — encountered as pre-existing dev-DB debris while booting the server for an unrelated check): the exact alert fired repeatedly and correctly against real poisoned rows left over from earlier testing, confirming the alerting path is real and active, not aspirational. `AllExceptionsFilter`'s own catch-all (Closed Threat #10 above) is the same principle applied to the synchronous request path — an unhandled exception always returns a real error, never an ambiguous success.
+
+---
+
+## 14. A security-relevant event happening with no record of it (OWASP A09:2025, Security Logging and Alerting Failures)
+**Threat:** A permission denial, a failed login, a Guard rejection, or a suspicious pattern occurs and leaves no trace — undetectable after the fact, whether for incident response or routine review.
+
+**Closed by:** ADR-010 — audit logging as a Sprint 1 foundation, not an afterthought. `AuditLogInterceptor` covers requests that reach a handler; `AllExceptionsFilter`'s own `auditGuardRejection` fallback specifically covers the gap NestJS's own pipeline ordering creates — Guards run *before* Interceptors, so a request rejected by `JwtAuthGuard`/`PermissionsGuard`/`ThrottlerGuard` never reaches `AuditLogInterceptor` at all; the filter is the only place in the pipeline that sees every exception regardless of where it was thrown. Sensitive fields never reach the log in the first place: pino's own `redact` list (`app.module.ts`) strips `Authorization`/cookie headers and `password`/`refreshToken`/`card` body fields before a log line is even written (CLAUDE_RULES.md, Logging Philosophy).
+
+**Mechanism, already proven live (existing entries):** `refresh_token_reuse_detected` written to `AuditLog` with correct `user_id`/`familyId`/IP/user-agent (Closed Threat #4); the login-throttle test's `429` and its preceding `401`s both correctly `AuditLog`-ed (Closed Threat #5).
+
+---
+
+## 15. A weak or improperly-handled secret (password, token, key) at rest or in transit (OWASP A04:2025, Cryptographic Failures)
+**Threat:** A password stored recoverably instead of hashed, a session/refresh token stored or compared insecurely, or a signing secret weak enough to guess or brute-force.
+
+**Closed by, for what this application itself is responsible for:** passwords hashed with bcrypt (`password.util.ts`), never stored or logged in plaintext — tested directly (`password.util.spec.ts`: a different hash for the same password on each call, confirming a real random salt, not a lookup-table-vulnerable fixed one). `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` required at minimum 32 characters (`env.validation.ts`), refused at boot otherwise. Membership invitation tokens hashed with SHA-256 and compared with `timingSafeEqual` (`invitation-token.util.ts`), not a plain string comparison vulnerable to a timing attack. Refresh tokens rotated with family-wide reuse detection (Closed Threat #4).
+
+**Explicitly out of this review's scope, not silently assumed:** transport-layer encryption (TLS termination) is not this application's own responsibility — it terminates HTTP, and real TLS is `IMPLEMENTATION_PLAN.md` Sprint 13's job (Docker, GitHub Actions, Production Database, Domain, **SSL**, Monitoring), not yet built. `helmet()`'s HSTS header (ADR-028) already asserts the expectation that HTTPS will front this service in production — an instruction to browsers, not a guarantee this application enforces itself.
+
+---
+
+## 16. An architectural decision made without weighing its security consequences (OWASP A06:2025, Insecure Design)
+**Threat:** The broadest category by construction — a feature built to only ever see the "happy path," where security was never actually part of the design conversation, only patched on afterward if at all.
+
+**Closed by, as an ongoing practice with concrete evidence rather than a one-time answer:** this document's own existence and the discipline behind it — every entry above cites a real ADR that made an explicit security tradeoff *at design time*, not after an incident. Representative examples of the practice, not an exhaustive list: ADR-002's two independent layers (application check + database trigger) so no single bypass compromises the Ledger's one invariant; ADR-004's idempotency designed in before Sprint 5 had a single real caller; ADR-028's rate limits chosen by each endpoint's actual cost/abuse shape rather than one uniform number; fail-closed as the default throughout (`PermissionsGuard` throws if `request.user` is missing rather than defaulting to allow; `AllExceptionsFilter`'s fallback is a rejection, never a silent 200).
+
+---
+
 # Accepted Risk (Not Closed — Deliberately Left Open)
 
 ## Redis flush silently un-revokes outstanding refresh tokens and token families
@@ -120,6 +192,20 @@ Neither `handleChargeRefunded` (ADR-008, revised by ADR-023) nor `handleDisputeC
 
 ## A Wallet's "Available" balance can still be clawed back after the fact
 ADR-023 already makes `TIP_PAYABLE` reversible — a chargeback opened after a tip was allocated debits the waiter's own credit line back out, and `WalletProjectionService` (ADR-024, Sprint 7) would correctly recompute a lower balance the next time it runs. Not a bug: the projection is doing exactly what it's supposed to, deriving the truth from the Ledger. The open question is what "Available" is allowed to promise the person looking at it — today nothing can be withdrawn at all (`Withdrawal` doesn't exist, ADR-024 Decision 2), so a number labeled "Available" that could still shrink tomorrow is not yet a real-money risk, only a display one. It becomes a real one the moment `Withdrawal` ships: money genuinely paid out against an "Available" balance that a later chargeback then reverses is a real loss with no obvious owner (the waiter already has the cash; does the restaurant eat it, does the platform, is there a clawback mechanism at all). Must be answered as part of designing `Withdrawal`, not discovered after it ships.
+
+---
+
+The two entries below are Sprint 11's own honest OWASP Top 10:2025 findings (`IMPLEMENTATION_PLAN.md`) — genuinely unanswered for reasons distinct from the five above (those wait on Sprint 5-era code that now exists; these wait on a recurring process and a Sprint 13 deployment surface, neither built yet).
+
+## No automated, recurring check for known-vulnerable dependencies (OWASP A03:2025, Software Supply Chain Failures)
+**What exists:** `pnpm-lock.yaml` is committed and CI installs with `--frozen-lockfile` (`.github/workflows/ci.yml`) — a real, working guard against silent dependency substitution or drift between what was reviewed and what actually gets installed. `pnpm audit` has been run and acted on manually at least once (the `sharp` GHSA-f88m-g3jw-g9cj fix, `pnpm.overrides`) — a real closed instance, not a hypothetical.
+
+**What's genuinely missing:** none of that is a recurring, automated gate. A new CVE disclosed against an already-installed dependency produces no signal at all until someone thinks to run `pnpm audit` by hand again — no CI step, no Dependabot/Renovate equivalent. Becomes answerable when CI gains its own dependency-audit step (or an equivalent scheduled job) with an explicit severity threshold for what fails a build versus what's merely logged — not decided yet, and guessing a threshold now would be exactly the kind of unforced assumption this document exists to avoid.
+
+## No multi-factor authentication and no breached-password check (OWASP A07:2025, Authentication Failures)
+**What exists:** the brute-force/credential-stuffing threat itself is closed (Closed Threats #4–#5) — rate limiting, refresh-token rotation with reuse detection, account-status enforcement on every request (`JwtAuthGuard` re-checks `deletedAt`/`status` from the database on every call, never trusts a stale JWT claim). Password policy requires a minimum of 8 characters (`register.schema.ts`) with no forced complexity rule, which is the current NIST 800-63B-recommended shape, not an oversight.
+
+**What's genuinely missing:** no second factor of any kind, and no check against a known-breached-password list (e.g., a Have I Been Pwned-style k-anonymity lookup) at registration or login — a user can pick a password that appears in a public breach corpus and the system has no way to know. Neither has ever been the subject of an explicit Founder decision to defer (unlike the Redis-flush risk in Accepted Risk above, which was); listed here as genuinely open, not assumed acceptable, until it is one.
 
 ---
 
