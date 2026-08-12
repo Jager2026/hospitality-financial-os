@@ -24,6 +24,17 @@ const envSchema = z.object({
   // is backend-only); the redirect target is real, the page behind it isn't, same kind of gap as
   // any other "API ready, UI not built yet" state.
   FRONTEND_URL: z.string().url().default("http://localhost:3000"),
+  // Sprint 11 (Security Hardening): CORS_ORIGIN replaces main.ts's previous bare `enableCors()`
+  // (NestJS's own default, which reflects any Origin — OWASP A05 Security Misconfiguration). No
+  // default value: which origins may call this API in production is a business decision the
+  // Founder makes explicitly per environment, never silently assumed the way a fallback would.
+  // Comma-separated for the (documented, not yet real) case of more than one legitimate frontend
+  // origin — same "flexibility on demand of the first real case" reasoning as ADR-007/021/024/027,
+  // here applied to config shape rather than code.
+  CORS_ORIGIN: z
+    .string()
+    .min(1, "CORS_ORIGIN is required")
+    .transform((v) => v.split(",").map((s) => s.trim())),
 });
 
 export type Env = z.infer<typeof envSchema>;

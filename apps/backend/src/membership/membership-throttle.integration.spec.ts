@@ -1,9 +1,10 @@
-import type { INestApplication } from "@nestjs/common";
+import type { CanActivate, ExecutionContext, INestApplication } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { TokenService } from "../auth/token.service";
@@ -78,5 +79,87 @@ describe("MembershipController — accept-invitation throttle (integration)", ()
       .post("/memberships/invitations/accept")
       .send(body);
     expect(eleventh.status).toBe(429);
+  });
+});
+
+// Sprint 11 (ADR-028): same precedent as the accept-invitation block above, for the invite-
+// creation route's own new 20/min override. This route IS behind JwtAuthGuard + PermissionsGuard
+// (unlike accept), so both guards run for real against a fake, injected AuthenticatedUser rather
+// than being faked out entirely — proves the real @RequirePermission("membership.invite") check
+// and the real @Throttle decorator compose correctly, not just that the decorator exists in
+// isolation.
+describe("MembershipController — invite throttle (integration)", () => {
+  let app: INestApplication;
+  const organizationId = randomUUID();
+
+  beforeAll(async () => {
+    const fakeInvitationService = {
+      invite: vi.fn().mockResolvedValue({ id: randomUUID(), email: "x@example.com", token: "t" }),
+      accept: vi.fn(),
+    };
+    const fakeMembershipService = {
+      findAllForUser: vi.fn(),
+      findOne: vi.fn(),
+      update: vi.fn(),
+      disable: vi.fn(),
+    };
+    const fakeAuthGuard: CanActivate = {
+      canActivate: (context: ExecutionContext) => {
+        const req = context.switchToHttp().getRequest();
+        req.user = {
+          id: randomUUID(),
+          email: "inviter@example.com",
+          locale: "en",
+          memberships: [
+            {
+              id: randomUUID(),
+              organizationId,
+              restaurantId: null,
+              role: { id: randomUUID(), name: "Owner", permissions: ["membership.invite"] },
+            },
+          ],
+        };
+        return true;
+      },
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }])],
+      controllers: [MembershipController],
+      providers: [
+        { provide: MembershipInvitationService, useValue: fakeInvitationService },
+        { provide: MembershipService, useValue: fakeMembershipService },
+        { provide: APP_GUARD, useClass: ThrottlerGuard },
+        { provide: TokenService, useValue: {} },
+        { provide: PrismaService, useValue: {} },
+        PermissionsGuard,
+      ],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue(fakeAuthGuard)
+      .compile();
+
+    app = moduleRef.createNestApplication();
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("allows exactly 20/min and rejects the 21st with 429", async () => {
+    const roleId = randomUUID();
+
+    for (let i = 0; i < 20; i++) {
+      const res = await request(app.getHttpServer())
+        .post("/memberships")
+        .send({ email: `staff-${i}@example.com`, roleId });
+      expect(res.status).not.toBe(429);
+    }
+
+    const twentyFirst = await request(app.getHttpServer())
+      .post("/memberships")
+      .send({ email: "staff-21@example.com", roleId });
+    expect(twentyFirst.status).toBe(429);
   });
 });

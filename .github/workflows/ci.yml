@@ -27,6 +27,10 @@ jobs:
       # start at all, same reasoning as the Stripe placeholders above. The actual rate (100 = 1.00%)
       # doesn't matter for CI correctness; platform-fee.util.spec.ts tests the arithmetic directly.
       DEFAULT_PLATFORM_FEE_BASIS_POINTS: "100"
+      # Sprint 11: required, no .default() in env.validation.ts (which Origins may call this API in
+      # production is a business decision, never silently assumed) — same "present so the app can
+      # start" reasoning as the vars above, in case a future CI step ever boots the real app.
+      CORS_ORIGIN: http://localhost:3000
 
     services:
       postgres:
