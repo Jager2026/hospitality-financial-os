@@ -16,7 +16,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
 
   app.useLogger(app.get(Logger));
-  // Sprint 11 (Security Hardening), OWASP A05 (Security Misconfiguration): standard helmet
+  // Sprint 11 (Security Hardening), OWASP A02:2025 (Security Misconfiguration): standard helmet
   // defaults (HSTS, X-Content-Type-Options, X-Frame-Options, etc.) — no custom CSP directives yet,
   // since this API serves no HTML of its own to apply a Content-Security-Policy against; revisit
   // if that changes rather than guessing directives now.
@@ -29,7 +29,7 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix("api/v1", { exclude: ["health", "webhooks/stripe"] });
 
   // Sprint 11: CORS_ORIGIN replaces the previous bare enableCors() (NestJS's own default reflects
-  // any Origin — the same OWASP A05 class as the missing security headers above). Read via
+  // any Origin — the same OWASP A02:2025 class as the missing security headers above). Read via
   // ConfigService rather than process.env directly so this fails the same way every other required
   // env var already does (validateEnv, config/env.validation.ts) if it's ever missing.
   const configService = app.get(ConfigService);
