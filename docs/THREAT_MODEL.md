@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.4.0
+version: 1.5.0
 status: Active
 classification: Critical
 owner: Founder
@@ -206,6 +206,15 @@ The two entries below are Sprint 11's own honest OWASP Top 10:2025 findings (`IM
 **What exists:** the brute-force/credential-stuffing threat itself is closed (Closed Threats #4–#5) — rate limiting, refresh-token rotation with reuse detection, account-status enforcement on every request (`JwtAuthGuard` re-checks `deletedAt`/`status` from the database on every call, never trusts a stale JWT claim). Password policy requires a minimum of 8 characters (`register.schema.ts`) with no forced complexity rule, which is the current NIST 800-63B-recommended shape, not an oversight.
 
 **What's genuinely missing:** no second factor of any kind, and no check against a known-breached-password list (e.g., a Have I Been Pwned-style k-anonymity lookup) at registration or login — a user can pick a password that appears in a public breach corpus and the system has no way to know. Neither has ever been the subject of an explicit Founder decision to defer (unlike the Redis-flush risk in Accepted Risk above, which was); listed here as genuinely open, not assumed acceptable, until it is one.
+
+---
+
+The entry below is a different kind of open item from every one above it — not missing code, not a missing process, but a pending answer from outside this codebase entirely (ADR-029).
+
+## Waiter employment-status classification for GPM (Lithuanian personal income tax) purposes is undefined
+**What exists:** none — this is not a code gap. It is a legal-classification question this document cannot answer and no line of code can decide on the platform's behalf.
+
+**What's genuinely missing:** whether a waiter receiving tips through this platform is, for GPM purposes, an employee of the restaurant, self-employed, or something else is undecided — and that classification determines the applicable rate, the legal basis for any tax treatment, and who (if anyone) is the tax agent. This blocks two distinct things, not one: actually computing an estimated tax figure, and merely *displaying* one next to the existing gross/net tip amounts (`MASTERPLAN.md`, "Pilot-Ready Product," ADR-029 Decision 2). Becomes answerable only when the Founder has a written answer from a Lithuanian tax/payroll consultant — not a development task, and not something this codebase's own code can close by itself.
 
 ---
 

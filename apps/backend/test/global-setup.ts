@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { seedCurrencies, seedRbac } from "../prisma/seed";
 
 // Vitest's `globalSetup` runs exactly ONCE, in its own process, before any test file's worker
 // starts — unlike `setupFiles` (./setup.ts), which runs once PER FILE. This is the right tool for
@@ -17,63 +18,18 @@ import { PrismaClient } from "@prisma/client";
 //
 // Seeding once here removes the race by construction: every spec file that used to `upsert` these
 // rows now does a plain `findUniqueOrThrow` instead, which never writes and so cannot race.
+//
+// Sprint 12: delegates to `prisma/seed.ts`'s own `seedCurrencies`/`seedRbac` instead of maintaining
+// a second, hand-copied Permission/Role/RolePermission matrix here — the previous copy had drifted
+// stale (4 of 10 real Permissions, 3 of 4 real Roles, Owner missing 8 of its 10 real grants),
+// invisible until Sprint 12's own E2E flow test became the first test to exercise the real
+// JwtAuthGuard/PermissionsGuard DB-backed pipeline instead of hand-building AuthenticatedUser.
 export async function setup(): Promise<void> {
   const prisma = new PrismaClient();
   await prisma.$connect();
 
-  await prisma.currency.upsert({
-    where: { code: "EUR" },
-    update: {},
-    create: { code: "EUR", exponent: 2, name: "Euro" },
-  });
-
-  const permissions = [
-    { name: "restaurant.create", description: "Create a new Restaurant" },
-    { name: "restaurant.edit", description: "Edit Restaurant details and settings" },
-    { name: "membership.manage", description: "Edit or disable an existing Membership" },
-    { name: "payments.manage", description: "View and manage payment activity" },
-  ];
-
-  for (const permission of permissions) {
-    await prisma.permission.upsert({
-      where: { name: permission.name },
-      update: {},
-      create: permission,
-    });
-  }
-
-  const roles = [
-    { name: "Owner", description: "Full control of an Organization and its Restaurants" },
-    { name: "Manager", description: "Day-to-day operational control of one Restaurant" },
-    { name: "Waiter", description: "Restaurant staff member" },
-  ];
-
-  for (const role of roles) {
-    await prisma.role.upsert({
-      where: { name: role.name },
-      update: {},
-      create: role,
-    });
-  }
-
-  const rolePermissions = [
-    { role: "Owner", permission: "restaurant.create" },
-    { role: "Owner", permission: "restaurant.edit" },
-    { role: "Manager", permission: "membership.manage" },
-    { role: "Manager", permission: "payments.manage" },
-  ];
-
-  for (const { role, permission } of rolePermissions) {
-    const [roleRow, permissionRow] = await Promise.all([
-      prisma.role.findUniqueOrThrow({ where: { name: role } }),
-      prisma.permission.findUniqueOrThrow({ where: { name: permission } }),
-    ]);
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: roleRow.id, permissionId: permissionRow.id } },
-      update: {},
-      create: { roleId: roleRow.id, permissionId: permissionRow.id },
-    });
-  }
+  await seedCurrencies(prisma);
+  await seedRbac(prisma);
 
   await prisma.$disconnect();
 }

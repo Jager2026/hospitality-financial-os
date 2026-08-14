@@ -1,7 +1,5 @@
 import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
-
 // ISO 4217 reference data (ADR-001). Not exhaustive — a curated set covering: EUR (required,
 // ADR-012's launch currency), other major currencies a restaurant guest might reasonably pay
 // with, and a deliberate sample of non-2-exponent currencies (JPY: 0, BHD: 3) proving the
@@ -76,7 +74,16 @@ const ROLES: Array<{ name: string; description: string; permissions: readonly st
   { name: "Waiter", description: "Restaurant staff member", permissions: [] },
 ];
 
-async function seedCurrencies(): Promise<void> {
+// Exported (Sprint 12) so test/global-setup.ts can seed the exact same Permission/Role/
+// RolePermission matrix real deployments get, instead of maintaining its own hand-copied subset —
+// a second, independently-edited copy of this matrix is exactly the "two numbers that could drift
+// apart" failure shape this project has already extracted shared code to avoid elsewhere
+// (restaurant-ledger-window.util.ts, restaurant-reachability.util.ts). Found stale by exactly that
+// drift: global-setup.ts had 4 of 10 Permissions, 3 of 4 Roles, and granted Owner only 2 of its 10
+// real Permissions — invisible until now because every existing test builds AuthenticatedUser by
+// hand, bypassing the real JwtAuthGuard/PermissionsGuard DB-backed pipeline entirely; Sprint 12's
+// own E2E flow test is the first to go through it for real.
+export async function seedCurrencies(prisma: PrismaClient): Promise<void> {
   for (const currency of CURRENCIES) {
     await prisma.currency.upsert({
       where: { code: currency.code },
@@ -87,7 +94,7 @@ async function seedCurrencies(): Promise<void> {
   console.log(`Seeded ${CURRENCIES.length} currencies.`);
 }
 
-async function seedRbac(): Promise<void> {
+export async function seedRbac(prisma: PrismaClient): Promise<void> {
   for (const permission of PERMISSIONS) {
     await prisma.permission.upsert({
       where: { name: permission.name },
@@ -119,15 +126,17 @@ async function seedRbac(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  await seedCurrencies();
-  await seedRbac();
+  const prisma = new PrismaClient();
+  await seedCurrencies(prisma);
+  await seedRbac(prisma);
+  await prisma.$disconnect();
 }
 
-main()
-  .catch((err) => {
+// Guards the auto-run so importing seedCurrencies/seedRbac from global-setup.ts doesn't also
+// trigger this file's own standalone `main()` as an import side effect.
+if (require.main === module) {
+  main().catch((err) => {
     console.error(err);
     process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
   });
+}

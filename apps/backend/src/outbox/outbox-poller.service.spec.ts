@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
 import type { RestaurantService } from "../restaurant/restaurant.service";
@@ -280,6 +280,92 @@ describe("OutboxPollerService (real database)", () => {
       const after = await prisma.outboxEvent.findUnique({ where: { id: badEvent.id } });
       expect(after?.publishedAt).toBeNull();
       expect(after?.attempts).toBe(1);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "IMPLEMENTATION_PLAN.md Sprint 12 chaos test: a transient crash mid-dispatch (simulating the " +
+      "worker dying mid-run, not a permanently malformed event) leaves the crashed event " +
+      "unpublished and its projection un-applied — retried on a later poll, it resumes and " +
+      "completes exactly once, never losing or duplicating the Wallet effect",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+      const piId = `pi_${randomUUID()}`;
+      await seedPayment(restaurant.id, 1500n, 300n, waiterMembership.id, piId);
+
+      const { rawBody, signature } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piId, amount: 1500, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawBody, signature);
+
+      const transaction = await prisma.transaction.findFirst({
+        where: { payment: { processorPaymentId: piId } },
+      });
+      const entries = await prisma.journalEntry.findMany({
+        where: { transactionId: transaction?.id },
+      });
+      const myEntryIds = new Set(entries.map((e) => e.id));
+      const events = await prisma.outboxEvent.findMany({
+        where: { aggregateId: { in: entries.map((e) => e.id) } },
+      });
+      expect(events.length).toBeGreaterThan(0);
+
+      // Targets the crash at THIS test's own journalEntryId specifically (throwing exactly once,
+      // then delegating to the real implementation for every other call) rather than "whichever
+      // event this poll() happens to dispatch first" — the dev database is shared with whatever
+      // else is running concurrently (the same reason pollUntilSettled exists at all, per this
+      // file's own beforeAll comment), so a queue-position-dependent trigger would be flaky by
+      // construction. This makes the simulated crash deterministic regardless of what else is in
+      // the queue.
+      const originalHandle = walletProjection.handleJournalEntryEvent.bind(walletProjection);
+      let crashed = false;
+      const crashSpy = vi
+        .spyOn(walletProjection, "handleJournalEntryEvent")
+        .mockImplementation(async (journalEntryId, tx) => {
+          if (!crashed && myEntryIds.has(journalEntryId)) {
+            crashed = true;
+            throw new Error("simulated worker crash mid-dispatch");
+          }
+          return originalHandle(journalEntryId, tx);
+        });
+
+      await poller.poll();
+      expect(crashed).toBe(true); // sanity: the simulated crash actually fired during this poll
+
+      const afterCrash = await prisma.outboxEvent.findMany({
+        where: { id: { in: events.map((e) => e.id) } },
+      });
+      const crashedEvent = afterCrash.find((e) => e.attempts === 1 && e.publishedAt === null);
+      // Real proof the crash rolled back cleanly, not partially: outbox-poller.service.ts wraps
+      // handleJournalEntryEvent + the published_at write in one Prisma $transaction, so a throw
+      // inside the projection must leave BOTH un-committed, exactly like a real process crash
+      // between them would (nothing left half-applied, matching ADR-002's own reasoning for why
+      // the Ledger's own deferred trigger runs INSIDE the write transaction, not after it).
+      expect(crashedEvent).toBeDefined();
+
+      crashSpy.mockRestore(); // every subsequent call runs the real handleJournalEntryEvent again
+
+      await pollUntilSettled(events.map((e) => e.id));
+
+      const afterRetry = await prisma.outboxEvent.findMany({
+        where: { id: { in: events.map((e) => e.id) } },
+      });
+      expect(afterRetry.every((e) => e.publishedAt !== null)).toBe(true); // resumed, not stuck
+
+      const walletAfterRetry = await prisma.wallet.findUnique({
+        where: { membershipId: waiterMembership.id },
+      });
+      expect(walletAfterRetry?.availableBalance).toBe(300n); // exactly the real tip — not lost
+
+      // One further poll, now that everything for this test is already published, must not
+      // double-apply anything — the "not duplicating" half of the DoD, not just "not losing."
+      await poller.poll();
+      const walletAfterExtraPoll = await prisma.wallet.findUnique({
+        where: { membershipId: waiterMembership.id },
+      });
+      expect(walletAfterExtraPoll?.availableBalance).toBe(300n);
     },
     BACKLOG_SAFE_TIMEOUT_MS,
   );
