@@ -185,7 +185,10 @@ describe("Payment/Ledger load test: concurrent distinct payments + Ledger reconc
               "Idempotency-Key": randomUUID(),
             },
             body: JSON.stringify({ restaurantId, amount: paymentAmount, tipAmount }),
-          }).then(async (r) => ({ status: r.status, body: (await r.json()) as { data: { id: string } } })),
+          }).then(async (r) => ({
+            status: r.status,
+            body: (await r.json()) as { data: { id: string } },
+          })),
         ),
       );
       expect(results.every((r) => r.status === 201)).toBe(true);
@@ -283,7 +286,9 @@ describe("Payment/Ledger load test: identical Idempotency-Key race", () => {
         acc[s] = (acc[s] ?? 0) + 1;
         return acc;
       }, {});
-      console.log(`\n=== Identical-key race status distribution: ${JSON.stringify(distribution)} ===`);
+      console.log(
+        `\n=== Identical-key race status distribution: ${JSON.stringify(distribution)} ===`,
+      );
 
       const raceRows = await ctx.prisma.payment.count({
         where: { restaurantId, idempotencyKey: raceKey },

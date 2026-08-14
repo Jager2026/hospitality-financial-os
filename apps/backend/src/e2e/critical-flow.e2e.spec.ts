@@ -120,131 +120,127 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
     await prisma.$disconnect();
   });
 
-  it(
-    "register -> create restaurant -> invite staff -> pay -> tip -> wallet updates -> dashboard",
-    async () => {
-      const ownerEmail = `owner-e2e-${randomUUID()}@example.com`;
-      const ownerPassword = "correct horse battery staple";
+  it("register -> create restaurant -> invite staff -> pay -> tip -> wallet updates -> dashboard", async () => {
+    const ownerEmail = `owner-e2e-${randomUUID()}@example.com`;
+    const ownerPassword = "correct horse battery staple";
 
-      // 1. Register
-      const registerRes = await request(app.getHttpServer())
-        .post("/api/v1/auth/register")
-        .send({ email: ownerEmail, password: ownerPassword, locale: "en" });
-      expect(registerRes.status).toBe(201);
-      expect(registerRes.body.data.accessToken).toBeTruthy();
+    // 1. Register
+    const registerRes = await request(app.getHttpServer())
+      .post("/api/v1/auth/register")
+      .send({ email: ownerEmail, password: ownerPassword, locale: "en" });
+    expect(registerRes.status).toBe(201);
+    expect(registerRes.body.data.accessToken).toBeTruthy();
 
-      // 2. Login (real bcrypt hash written by register, real bcrypt verify here)
-      const loginRes = await request(app.getHttpServer())
-        .post("/api/v1/auth/login")
-        .send({ email: ownerEmail, password: ownerPassword });
-      expect(loginRes.status).toBe(200);
-      const ownerAccessToken: string = loginRes.body.data.accessToken;
+    // 2. Login (real bcrypt hash written by register, real bcrypt verify here)
+    const loginRes = await request(app.getHttpServer())
+      .post("/api/v1/auth/login")
+      .send({ email: ownerEmail, password: ownerPassword });
+    expect(loginRes.status).toBe(200);
+    const ownerAccessToken: string = loginRes.body.data.accessToken;
 
-      // 3. Create Restaurant — auto-creates Organization + org-wide Owner Membership
-      // (restaurant.controller.ts's own documented behavior); real Stripe Connect account
-      // creation is stubbed by FakeStripeService.
-      const restaurantRes = await request(app.getHttpServer())
-        .post("/api/v1/restaurants")
-        .set("Authorization", `Bearer ${ownerAccessToken}`)
-        .send({
-          name: "E2E Test Restaurant",
-          legalName: "E2E Test Restaurant UAB",
-          companyNumber: `E2E-${randomUUID()}`,
-          vatNumber: `LT${randomUUID()}`,
-          email: `restaurant-e2e-${randomUUID()}@example.com`,
-          phone: "+37060000099",
-          country: "LT",
-          currency: "EUR",
-          defaultCustomerLocale: "en",
-          timezone: "Europe/Vilnius",
-          address: "Test address 1",
-        });
-      expect(restaurantRes.status).toBe(201);
-      const restaurantId: string = restaurantRes.body.data.id;
-      expect(restaurantId).toBeTruthy();
+    // 3. Create Restaurant — auto-creates Organization + org-wide Owner Membership
+    // (restaurant.controller.ts's own documented behavior); real Stripe Connect account
+    // creation is stubbed by FakeStripeService.
+    const restaurantRes = await request(app.getHttpServer())
+      .post("/api/v1/restaurants")
+      .set("Authorization", `Bearer ${ownerAccessToken}`)
+      .send({
+        name: "E2E Test Restaurant",
+        legalName: "E2E Test Restaurant UAB",
+        companyNumber: `E2E-${randomUUID()}`,
+        vatNumber: `LT${randomUUID()}`,
+        email: `restaurant-e2e-${randomUUID()}@example.com`,
+        phone: "+37060000099",
+        country: "LT",
+        currency: "EUR",
+        defaultCustomerLocale: "en",
+        timezone: "Europe/Vilnius",
+        address: "Test address 1",
+      });
+    expect(restaurantRes.status).toBe(201);
+    const restaurantId: string = restaurantRes.body.data.id;
+    expect(restaurantId).toBeTruthy();
 
-      // 4. Invite a Manager (see file doc comment: the only staff role that can itself hold
-      // payments.manage under today's real seed data)
-      const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
-      const managerEmail = `manager-e2e-${randomUUID()}@example.com`;
-      const managerPassword = "another correct horse battery staple";
+    // 4. Invite a Manager (see file doc comment: the only staff role that can itself hold
+    // payments.manage under today's real seed data)
+    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
+    const managerEmail = `manager-e2e-${randomUUID()}@example.com`;
+    const managerPassword = "another correct horse battery staple";
 
-      const inviteRes = await request(app.getHttpServer())
-        .post("/api/v1/memberships")
-        .set("Authorization", `Bearer ${ownerAccessToken}`)
-        .send({ email: managerEmail, restaurantId, roleId: managerRole.id });
-      expect(inviteRes.status).toBe(201);
-      const invitationToken: string = inviteRes.body.data.token;
-      expect(invitationToken).toBeTruthy();
+    const inviteRes = await request(app.getHttpServer())
+      .post("/api/v1/memberships")
+      .set("Authorization", `Bearer ${ownerAccessToken}`)
+      .send({ email: managerEmail, restaurantId, roleId: managerRole.id });
+    expect(inviteRes.status).toBe(201);
+    const invitationToken: string = inviteRes.body.data.token;
+    expect(invitationToken).toBeTruthy();
 
-      // 5. Manager accepts the invitation (creates User + password + Membership)
-      const acceptRes = await request(app.getHttpServer())
-        .post("/api/v1/memberships/invitations/accept")
-        .send({ email: managerEmail, token: invitationToken, password: managerPassword });
-      expect(acceptRes.status).toBe(200);
+    // 5. Manager accepts the invitation (creates User + password + Membership)
+    const acceptRes = await request(app.getHttpServer())
+      .post("/api/v1/memberships/invitations/accept")
+      .send({ email: managerEmail, token: invitationToken, password: managerPassword });
+    expect(acceptRes.status).toBe(200);
 
-      // 6. Manager logs in
-      const managerLoginRes = await request(app.getHttpServer())
-        .post("/api/v1/auth/login")
-        .send({ email: managerEmail, password: managerPassword });
-      expect(managerLoginRes.status).toBe(200);
-      const managerAccessToken: string = managerLoginRes.body.data.accessToken;
+    // 6. Manager logs in
+    const managerLoginRes = await request(app.getHttpServer())
+      .post("/api/v1/auth/login")
+      .send({ email: managerEmail, password: managerPassword });
+    expect(managerLoginRes.status).toBe(200);
+    const managerAccessToken: string = managerLoginRes.body.data.accessToken;
 
-      // 7. Manager captures a payment with a tip — real permission check (payments.manage), real
-      // billAmount/fee split, real Payment row write; only the outbound Stripe PaymentIntent
-      // creation is stubbed.
-      const paymentRes = await request(app.getHttpServer())
-        .post("/api/v1/payments")
-        .set("Authorization", `Bearer ${managerAccessToken}`)
-        .set("Idempotency-Key", randomUUID())
-        .send({ restaurantId, amount: 2000, tipAmount: 500 }); // billAmount=1500, tip=500
-      expect(paymentRes.status).toBe(201);
-      const paymentId: string = paymentRes.body.data.id;
-      expect(paymentId).toBeTruthy();
+    // 7. Manager captures a payment with a tip — real permission check (payments.manage), real
+    // billAmount/fee split, real Payment row write; only the outbound Stripe PaymentIntent
+    // creation is stubbed.
+    const paymentRes = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("Authorization", `Bearer ${managerAccessToken}`)
+      .set("Idempotency-Key", randomUUID())
+      .send({ restaurantId, amount: 2000, tipAmount: 500 }); // billAmount=1500, tip=500
+    expect(paymentRes.status).toBe(201);
+    const paymentId: string = paymentRes.body.data.id;
+    expect(paymentId).toBeTruthy();
 
-      const paymentRow = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+    const paymentRow = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
 
-      // 8. The real webhook endpoint — real signature verification, real LedgerService posting,
-      // real Outbox write.
-      const { rawBody, signature } = signEvent(
-        buildEvent("payment_intent.succeeded", {
-          id: paymentRow.processorPaymentId,
-          amount: 2000,
-          currency: "eur",
-        }),
-      );
-      const webhookRes = await request(app.getHttpServer())
-        .post("/webhooks/stripe")
-        .set("stripe-signature", signature)
-        .set("Content-Type", "application/json")
-        .send(rawBody);
-      expect(webhookRes.status).toBe(200);
-      expect(webhookRes.body.data).toEqual({ received: true });
+    // 8. The real webhook endpoint — real signature verification, real LedgerService posting,
+    // real Outbox write.
+    const { rawBody, signature } = signEvent(
+      buildEvent("payment_intent.succeeded", {
+        id: paymentRow.processorPaymentId,
+        amount: 2000,
+        currency: "eur",
+      }),
+    );
+    const webhookRes = await request(app.getHttpServer())
+      .post("/webhooks/stripe")
+      .set("stripe-signature", signature)
+      .set("Content-Type", "application/json")
+      .send(rawBody);
+    expect(webhookRes.status).toBe(200);
+    expect(webhookRes.body.data).toEqual({ received: true });
 
-      // Outbox dispatch (WalletProjectionService's own consumer) runs on its own @Interval poll,
-      // not synchronously with the webhook response (ADR-024) — poll it directly here rather than
-      // sleeping a guessed duration, matching this codebase's own "explicit over implicit" style.
-      const outboxPoller = app.get(OutboxPollerService);
-      await outboxPoller.poll();
+    // Outbox dispatch (WalletProjectionService's own consumer) runs on its own @Interval poll,
+    // not synchronously with the webhook response (ADR-024) — poll it directly here rather than
+    // sleeping a guessed duration, matching this codebase's own "explicit over implicit" style.
+    const outboxPoller = app.get(OutboxPollerService);
+    await outboxPoller.poll();
 
-      // 9. Manager's own Wallet reflects the tip
-      const walletRes = await request(app.getHttpServer())
-        .get("/api/v1/wallets")
-        .set("Authorization", `Bearer ${managerAccessToken}`);
-      expect(walletRes.status).toBe(200);
-      const wallets = walletRes.body.data as Array<{ availableBalance: string }>;
-      expect(wallets).toHaveLength(1);
-      expect(wallets[0].availableBalance).toBe("500");
+    // 9. Manager's own Wallet reflects the tip
+    const walletRes = await request(app.getHttpServer())
+      .get("/api/v1/wallets")
+      .set("Authorization", `Bearer ${managerAccessToken}`);
+    expect(walletRes.status).toBe(200);
+    const wallets = walletRes.body.data as Array<{ availableBalance: string }>;
+    expect(wallets).toHaveLength(1);
+    expect(wallets[0].availableBalance).toBe("500");
 
-      // 10. Owner's Dashboard reflects today's revenue and the Manager's tip
-      const dashboardRes = await request(app.getHttpServer())
-        .get(`/api/v1/dashboard?restaurantId=${restaurantId}`)
-        .set("Authorization", `Bearer ${ownerAccessToken}`);
-      expect(dashboardRes.status).toBe(200);
-      const dashboard = dashboardRes.body.data;
-      expect(dashboard.todayRevenue).toBe("1500"); // billAmount = amount(2000) - tipAmount(500)
-      expect(dashboard.todayTips).toBe("500");
-    },
-    20_000,
-  );
+    // 10. Owner's Dashboard reflects today's revenue and the Manager's tip
+    const dashboardRes = await request(app.getHttpServer())
+      .get(`/api/v1/dashboard?restaurantId=${restaurantId}`)
+      .set("Authorization", `Bearer ${ownerAccessToken}`);
+    expect(dashboardRes.status).toBe(200);
+    const dashboard = dashboardRes.body.data;
+    expect(dashboard.todayRevenue).toBe("1500"); // billAmount = amount(2000) - tipAmount(500)
+    expect(dashboard.todayTips).toBe("500");
+  }, 20_000);
 });
