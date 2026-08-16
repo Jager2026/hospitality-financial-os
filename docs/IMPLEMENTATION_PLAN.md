@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.3.0
+version: 2.4.0
 status: Active
 classification: Critical
 priority: Highest

@@ -17,6 +17,16 @@ jobs:
       # DATABASE_URL fails with "Environment variable not found: DATABASE_URL", not a soft skip).
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hospitality_os_test
       REDIS_URL: redis://localhost:6379
+      # Sprint 12: env.validation.ts requires each at least 32 characters so the app can start —
+      # no test in the suite makes real use of these as signing secrets in a way that needs to be
+      # unguessable (TokenService is faked or exercised only through real login/register flows
+      # that mint and verify their own tokens within the same run), so a fixed placeholder is
+      # fine, same "present so the app can start" reasoning as the Stripe placeholders below.
+      # Needed starting with critical-flow.e2e.spec.ts / smoke.e2e.spec.ts (Sprint 12): the first
+      # tests in this codebase to import AppModule itself rather than construct services by hand,
+      # so the first to actually trigger ConfigModule's own validateEnv at boot.
+      JWT_ACCESS_SECRET: ci_placeholder_access_secret_not_a_real_secret_32chars
+      JWT_REFRESH_SECRET: ci_placeholder_refresh_secret_not_a_real_secret_32chars
       # Sprint 3: env.validation.ts requires these to be non-empty strings so the app can start —
       # nothing in the test suite makes a real Stripe network call (StripeService is faked in
       # every test that touches it), so these never need to be working credentials, only present.

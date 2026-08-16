@@ -1,7 +1,7 @@
 ---
 title: MASTERPLAN
 subtitle: Hospitality Financial Operating System
-version: 2.0.0
+version: 2.1.0
 status: Active
 classification: Internal
 owner: Founder
@@ -722,11 +722,29 @@ Receipts should always remain accessible.
 
 The following features are intentionally excluded:
 
-QR Ordering. Menu Management. Kitchen Display. Reservations. Inventory. Supplier Marketplace. Marketing Platform. AI Recommendations. Accounting Integrations. Payroll. Invoices. Subscriptions. Financing. Cross-border Payments. Loyalty. Gift Cards. Coupons. Split Bills. Table Management.
+QR Ordering. Menu Management. Kitchen Display. Reservations. Inventory. Supplier Marketplace. Marketing Platform. AI Recommendations. Accounting Integrations (two narrow exceptions — see "Pilot-Ready Product" below). Payroll. Invoices. Subscriptions. Financing. Cross-border Payments. Loyalty. Gift Cards. Coupons. Split Bills. Table Management.
 
 **Hotel-specific workflows** — room folios, front-desk billing, PMS integration — are excluded for the same reason: the current model assumes table-service tipping, and hotels need a different operational shape (see Executive Summary).
 
 We are not saying these features are unimportant. We are saying they are **not required to validate the MVP**.
+
+## Pilot-Ready Product — Beyond MVP, Before Phase 2
+
+*(ADR-029)*
+
+The MVP Definition above answers one question: what is the smallest build that tests the five original hypotheses? That is a narrow question, and its answer stays narrow on purpose.
+
+A second, different question — what a real restaurant needs to see before it will actually pay and switch providers — has a slightly broader answer. Both questions are legitimate; conflating them either shrinks the pitch or bloats the MVP. This section keeps them separate.
+
+Two items move from the "Out of Scope" wording to an explicit **Pilot-Ready** tier — narrowly, not the whole "Accounting Integrations" line, which otherwise stays out of scope as written:
+
+**Accountant-ready export.** Every module already produces a Ledger-derived export (Transaction/Analytics CSV, ADR-025/027). Pilot-Ready extends this into a shape an external accountant can actually use — no new financial logic, no accounting software, no filing. This is a decision about the shape of the data, not an expansion of what the Ledger computes.
+
+**Tip tax estimate — display only, never withholding.** By MASTERPLAN's own promise ("the waiter should never wonder how much they're owed"), showing the *gross* tip total without the tax a waiter will actually lose is an unfinished promise, not a kept one. Pilot-Ready therefore includes computing and displaying an estimated tax figure alongside the gross/net tip amounts.
+
+This explicitly **does not include**: actually withholding funds, remitting anything to VMI/Sodra, or the platform (or the restaurant, through the platform) acting as a formal tax agent. That remains Phase 3 ("Automated Accounting. Tax Reporting.") exactly as already written, and requires a formal legal/tax opinion first.
+
+**A blocking dependency, not a development task:** the correct rate, the correct legal basis, and who is actually the tax agent all depend on the waiter's employment-status classification — a question this document cannot answer and code cannot decide on its own. No rate, no bracket, and no computation logic gets implemented until the Founder has a written answer from a Lithuanian tax/payroll consultant. Until then, this item stays flagged, not built — see `THREAT_MODEL.md`, "Open, Not Answered."
 
 ## User Journey
 
