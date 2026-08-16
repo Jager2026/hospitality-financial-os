@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.5.0
+version: 1.6.0
 status: Active
 classification: Critical
 owner: Founder
@@ -215,6 +215,20 @@ The entry below is a different kind of open item from every one above it — not
 **What exists:** none — this is not a code gap. It is a legal-classification question this document cannot answer and no line of code can decide on the platform's behalf.
 
 **What's genuinely missing:** whether a waiter receiving tips through this platform is, for GPM purposes, an employee of the restaurant, self-employed, or something else is undecided — and that classification determines the applicable rate, the legal basis for any tax treatment, and who (if anyone) is the tax agent. This blocks two distinct things, not one: actually computing an estimated tax figure, and merely *displaying* one next to the existing gross/net tip amounts (`MASTERPLAN.md`, "Pilot-Ready Product," ADR-029 Decision 2). Becomes answerable only when the Founder has a written answer from a Lithuanian tax/payroll consultant — not a development task, and not something this codebase's own code can close by itself.
+
+---
+
+The two entries below are genuine code/data gaps found while building Sprint 12's own testing (ADR-030) — the E2E test and the load test each drove a real path for the first time and surfaced something no prior test had occasion to see.
+
+## Waiter Role (as seeded) cannot itself hold `payments.manage`, so cannot be the tip recipient ADR-022 assigns by construction
+**What exists:** ADR-022's own mechanism is deliberate and correct on its own terms: whichever Membership holds `payments.manage` and actually calls `POST /payments` is the tip's recipient — *"the person operating the payment terminal for this transaction... by construction. No separate terminal-to-waiter or table-to-waiter attribution mechanism is introduced."* Confirmed live for the first time by `critical-flow.e2e.spec.ts` (Sprint 12): the E2E flow had to invite a Manager, not a Waiter, specifically because `prisma/seed.ts`'s real seeded Waiter Role carries zero Permissions.
+
+**What's genuinely missing:** `MASTERPLAN.md`'s own User Journey names the Waiter specifically as the one who "Receives Tips" through this exact flow, and the product's narrative throughout assumes a literal Waiter operates the terminal — but no Membership holding the seeded Waiter Role can pass `PermissionsGuard`'s own `payments.manage` check today, so nobody holding it can ever be the tip's recipient through the real, permission-checked HTTP path. Not a bug in ADR-022's own mechanism, and not yet a real-money problem (Manager/Owner/Administrator all correctly receive tips when they themselves process a payment) — but a real mismatch between what the product says a Waiter does and what the current seed data actually lets one do. Becomes answerable by an explicit decision: either `payments.manage` belongs on Waiter after all, or tip-recipiency needs its own separate assignment mechanism (a terminal-to-waiter or table-to-waiter link) that ADR-022 deliberately chose not to build. Not decided yet — this entry exists so it isn't decided by accident.
+
+## `IdempotencyInterceptor`'s check-then-act is a real race window, not yet closed
+**What exists:** the database's own unique constraint on `IdempotencyKey.key` is a real backstop, not merely a hoped-for one — Sprint 12's load test (`test/load/payment-ledger.load.spec.ts`) fired 15 truly concurrent requests sharing one Idempotency-Key and got a clean split (one `201`, fourteen `409`s), never more than one `Payment` row, confirmed directly against the database, not inferred from the HTTP responses alone.
+
+**What's genuinely missing:** that clean split is what this particular run happened to produce, not a guarantee the code itself makes. `IdempotencyInterceptor.intercept` does `findUnique` then `create` — a check-then-act, not one atomic `upsert` — so two requests landing close enough together can both see "no existing key" before either has written its own row; the database's constraint then rejects the loser's `create()`, but that specific rejection is never caught or mapped, so a genuinely unlucky interleaving would surface as a raw, unhandled `500` instead of the clean `409 IDEMPOTENCY_KEY_CONFLICT` a sequential replay already gets. Observed as absent this run, not proven absent in general. Becomes answerable by either catching the `create()`'s own unique-constraint violation and mapping it to the same `409`, or an atomic `upsert`-shaped rewrite of the whole check — a real, narrowly-scoped fix, not yet built and not yet the subject of an explicit Founder decision to defer.
 
 ---
 
