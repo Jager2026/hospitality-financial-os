@@ -1,6 +1,6 @@
 ---
 title: EVENT_CATALOG
-version: 1.2.0
+version: 1.3.0
 status: Active
 classification: Internal
 owner: Founder
@@ -87,7 +87,7 @@ The payload is intentionally minimal — an id and the entry's own type, not a d
 
 — Wallet is the only one wired in so far. `dispatch()` handles the projection and marks `published_at` in one atomic transaction, and only increments `attempts` on an actual failure — a change from the old skeleton, which incremented it unconditionally, even on a no-op.
 
-A row whose `attempts` reaches 5 without `published_at` being set still logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag), but this is no longer the expected steady state it was between Sprint 5 and Sprint 7: a `payment_captured`/`tip_allocated`/`refund_issued`/`chargeback` row now gets `published_at` set within one poll cycle under normal operation, the same run of live verification that closed Sprint 7 confirmed this directly. A row that keeps failing past Sprint 7 is a real signal again, not the expected gap it briefly was — with one known, permanent exception: `ledger.service.spec.ts`'s own atomicity test seeds an `OutboxEvent` with no `journalEntryId` on purpose (proving the write lands in the same transaction as the Ledger write, nothing to do with Wallet), which `dispatch()` now rejects immediately rather than silently matching every Membership in the database — expected local test noise, not an alert to chase.
+A row whose `attempts` reaches 5 without `published_at` being set still logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag), and — as of Sprint 13, ADR-031 — also sends one outbound webhook POST to `ALERT_WEBHOOK_URL`, if configured (fired exactly once per event, on the poll that crosses the threshold, not repeated on every later retry). This is no longer the expected steady state it was between Sprint 5 and Sprint 7: a `payment_captured`/`tip_allocated`/`refund_issued`/`chargeback` row now gets `published_at` set within one poll cycle under normal operation, the same run of live verification that closed Sprint 7 confirmed this directly. A row that keeps failing past Sprint 7 is a real signal again, not the expected gap it briefly was — with one known, permanent exception: `ledger.service.spec.ts`'s own atomicity test seeds an `OutboxEvent` with no `journalEntryId` on purpose (proving the write lands in the same transaction as the Ledger write, nothing to do with Wallet), which `dispatch()` now rejects immediately rather than silently matching every Membership in the database — expected local test noise, not an alert to chase.
 
 ---
 

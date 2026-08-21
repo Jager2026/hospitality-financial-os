@@ -1,7 +1,9 @@
 import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { OutboxEvent } from "@prisma/client";
 import { Interval } from "@nestjs/schedule";
 import { PinoLogger } from "nestjs-pino";
+import type { Env } from "../config/env.validation";
 import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 
@@ -26,6 +28,7 @@ export class OutboxPollerService {
     private readonly prisma: PrismaService,
     private readonly walletProjection: WalletProjectionService,
     private readonly logger: PinoLogger,
+    private readonly config: ConfigService<Env, true>,
   ) {
     this.logger.setContext(OutboxPollerService.name);
   }
@@ -81,12 +84,54 @@ export class OutboxPollerService {
           { eventId: event.id, eventType: event.eventType, attempts, err },
           "OutboxEvent has failed repeatedly — operational alert (SYSTEM_ARCHITECTURE.md: Outbox Lag)",
         );
+        // Fires exactly once per event, on the poll that crosses the threshold — not on every
+        // subsequent retry past it, which would page the same incident again every 2 seconds
+        // (POLL_INTERVAL_MS) for as long as the event stays stuck. The log line above still fires
+        // every time, unchanged, for anyone tailing logs directly.
+        if (attempts === MAX_ATTEMPTS_BEFORE_ALERT) {
+          await this.sendAlert(event, attempts, err);
+        }
       } else {
         this.logger.warn(
           { eventId: event.id, eventType: event.eventType, attempts, err },
           "OutboxEvent dispatch failed, will retry on next poll",
         );
       }
+    }
+  }
+
+  /** ADR-031: Outbox Lag as a real, wired alert, not only a log line a human has to be actively
+   * watching to notice — Sprint 13's own DoD ("a monitored, alertable metric from day one, not
+   * added later"). No specific alerting vendor: any endpoint that accepts a plain JSON POST works
+   * (Slack/Discord incoming webhooks both do), configured via `ALERT_WEBHOOK_URL` — unset by
+   * default, so this is inert (log-only, today's exact behavior) until the Founder wires a real
+   * channel, on their own timeline, not a boot-time requirement. Never lets a failed alert POST
+   * itself take down the poller — the Outbox recovering the actual stuck event next cycle matters
+   * more than this notification succeeding. */
+  private async sendAlert(event: OutboxEvent, attempts: number, err: unknown): Promise<void> {
+    const url = this.config.get("ALERT_WEBHOOK_URL", { infer: true });
+    if (!url) return;
+
+    try {
+      const message =
+        `Outbox Lag: OutboxEvent ${event.id} (${event.eventType}) has failed ` +
+        `${attempts} times without publishing. ${err instanceof Error ? err.message : String(err)}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: message }),
+      });
+      if (!response.ok) {
+        this.logger.warn(
+          { eventId: event.id, status: response.status },
+          "Outbox Lag alert webhook responded with a non-2xx status",
+        );
+      }
+    } catch (alertErr) {
+      this.logger.warn(
+        { eventId: event.id, alertErr },
+        "Outbox Lag alert webhook request itself failed — the underlying OutboxEvent failure is still logged above and still retried next poll",
+      );
     }
   }
 }

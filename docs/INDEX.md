@@ -1,6 +1,6 @@
 ---
 title: INDEX
-version: 1.2.1
+version: 1.3.0
 status: Active
 classification: Internal
 owner: Founder
@@ -18,13 +18,13 @@ Regenerate by hand when a doc's version bumps or a new doc is added — it isn't
 | [MASTERPLAN.md](MASTERPLAN.md) | 2.1.0 | Product vision, business model, and scope for the Hospitality Financial Operating System — the top of the document hierarchy everything else refines. Includes "Pilot-Ready Product," two narrow, explicitly scoped exceptions to the Accounting-Integrations Out-of-Scope line (ADR-029). |
 | [AI_WORKFLOW.md](AI_WORKFLOW.md) | 1.0 | The step-by-step process Claude must follow before implementing any feature — read docs in order, understand the problem, then design, then code. |
 | [CLAUDE_RULES.md](CLAUDE_RULES.md) | 2.4.2 | Behavioral and values contract for Claude as AI Technical Co-Founder — engineering culture, review standards, communication rules. Byte-identical to root `CLAUDE.md` per ADR-011. |
-| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | 1.16.0 | The full ADR log — thirty accepted architecture decisions, each with context, decision, and consequences; the canonical record of *why*, including in-place revisions to earlier decisions (e.g. ADR-009, ADR-014, ADR-023, ADR-026). |
-| [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) | 2.1.0 | The system's components, modules, and how they fit together — the technical shape the ADRs decided into. |
+| [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) | 1.17.0 | The full ADR log — thirty-one accepted architecture decisions, each with context, decision, and consequences; the canonical record of *why*, including in-place revisions to earlier decisions (e.g. ADR-009, ADR-014, ADR-023, ADR-026). Sprint 13 (ADR-031): Railway hosting, the pnpm-monorepo `rootDirectory` trap, Stripe Connect webhook scoping, Outbox Lag alerting. |
+| [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) | 2.2.0 | The system's components, modules, and how they fit together — the technical shape the ADRs decided into. Now documents Railway production hosting and the real Outbox Lag alerting mechanism (ADR-031). |
 | [DATABASE.md](DATABASE.md) | 2.9.0 | Every entity, field, and relationship in the data model — the source `schema.prisma` is translated from. |
 | [API_Contract.md](API_Contract.md) (title: API_SPECIFICATION) | 2.10.0 | Every REST endpoint — request/response shape, auth requirements, rate limits — the contract the frontend and backend both build against. |
 | [UX_MAP.md](UX_MAP.md) | 2.1.0 | Every screen, navigation path, and interaction in the product, and what changed on each screen as a result of specific ADRs. |
 | [DOMAIN_GLOSSARY.md](DOMAIN_GLOSSARY.md) | 1.0.0 | One-page dictionary of project-specific terms and confusable pairs, compiled from DATABASE.md/ARCHITECTURE_DECISIONS.md/MASTERPLAN.md — never a new decision of its own. |
-| [EVENT_CATALOG.md](EVENT_CATALOG.md) | 1.2.0 | The concrete catalog of `OutboxEvent` rows the codebase actually produces and their payload shapes, read directly from the code, not designed ahead of it. |
+| [EVENT_CATALOG.md](EVENT_CATALOG.md) | 1.3.0 | The concrete catalog of `OutboxEvent` rows the codebase actually produces and their payload shapes, read directly from the code, not designed ahead of it. Notes the real ADR-031 alerting webhook alongside the pre-existing log-only alert. |
 | [THREAT_MODEL.md](THREAT_MODEL.md) | 1.6.0 | Security threats considered for the platform — organized into Closed Threats, Accepted Risk, and Open, Not Answered, each citing the ADR that resolved or owns it; includes Sprint 11's OWASP Top 10:2025 review and two Sprint 12 (ADR-030) findings — the Waiter/`payments.manage` mismatch with ADR-022 and the `IdempotencyInterceptor` check-then-act race — alongside the ADR-029 waiter-GPM-classification item. |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | 2.4.0 | The sprint-by-sprint build plan — tasks and Definition of Done for each sprint, Sprint 0 through the current one, plus a Deferred/Not-Yet-Scheduled backlog for flagged major-version upgrades. |
 | [SEQUENCE_DIAGRAMS.md](SEQUENCE_DIAGRAMS.md) | 1.0.1 | Prose explanation of what each sequence diagram resolves and the ADRs that came out of walking through the timing (ADR-014, ADR-015, ADR-016). |

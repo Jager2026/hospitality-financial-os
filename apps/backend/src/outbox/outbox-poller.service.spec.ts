@@ -42,6 +42,15 @@ const fakeLogger = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
+// ADR-031: no ALERT_WEBHOOK_URL configured, matching this file's own tests below — none of them
+// drive any single event's attempts up to MAX_ATTEMPTS_BEFORE_ALERT (5), so sendAlert() is never
+// actually exercised by this describe block regardless; a real, configured URL is exercised
+// separately in the dedicated "OutboxPollerService alerting" describe block below.
+const fakeConfigNoAlert = {
+  get: () => undefined,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+} as any;
+
 // Same 30s reasoning as beforeAll's own drain loop below, applied to the individual tests too —
 // verified by fact this session, not assumed from resemblance to a prior incident: a real
 // unpublished-event backlog (measured directly via SQL, not guessed) plus real per-dispatch
@@ -75,7 +84,7 @@ describe("OutboxPollerService (real database)", () => {
       new IndividualTipAllocationStrategy(),
     );
     walletProjection = new WalletProjectionService(prisma);
-    poller = new OutboxPollerService(prisma, walletProjection, fakeLogger);
+    poller = new OutboxPollerService(prisma, walletProjection, fakeLogger, fakeConfigNoAlert);
 
     // This local dev/test database has never had a real consumer before Sprint 7 — every
     // webhook-driven test run all session left its OutboxEvent rows unpublished, since nothing
@@ -366,6 +375,160 @@ describe("OutboxPollerService (real database)", () => {
         where: { membershipId: waiterMembership.id },
       });
       expect(walletAfterExtraPoll?.availableBalance).toBe(300n);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+});
+
+// ADR-031: Outbox Lag alerting. A separate describe block (own PrismaService, own
+// WalletProjectionService, own OutboxPollerService instances per test) rather than reusing the
+// shared `poller` above — each test here needs its own ALERT_WEBHOOK_URL/fetch mock, and the
+// shared poller above is deliberately built with alerting off (fakeConfigNoAlert) so the tests in
+// the first describe block stay unaffected by this one.
+describe("OutboxPollerService alerting (ADR-031)", () => {
+  const prisma = new PrismaService();
+  let walletProjection: WalletProjectionService;
+
+  beforeAll(async () => {
+    await prisma.$connect();
+    walletProjection = new WalletProjectionService(prisma);
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  function buildConfig(url: string | undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { get: () => url } as any;
+  }
+
+  // The real dev database is shared with every other concurrently-running test file/worker in a
+  // full suite run (this file's own pollUntilSettled/pollUntilAttempts comments already document
+  // this) — poll() always dispatches EVERY unpublished row, not just the one this test seeded, so
+  // some unrelated stray row from elsewhere can coincidentally cross the exact attempts===5
+  // boundary while THIS test's poller (with its own mocked fetch) happens to be polling. Counting
+  // raw fetchSpy calls would be flaky by construction; scoping to calls whose body actually
+  // references this test's own event id is immune to that noise, the same "scope to this test's
+  // own ids" discipline this file already applies everywhere else.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function callsForEvent(fetchSpy: any, eventId: string): unknown[] {
+    return fetchSpy.mock.calls.filter(([, init]: [string, RequestInit]) => {
+      const body = JSON.parse(init.body as string) as { text: string };
+      return body.text.includes(eventId);
+    });
+  }
+
+  // A deliberately, permanently malformed event (no valid journalEntryId) — same technique as the
+  // "malformed event" test above — fails dispatch() deterministically on every single poll, with
+  // no dependency on webhook/payment scaffolding, which is all this describe block needs to drive
+  // one event's own `attempts` past MAX_ATTEMPTS_BEFORE_ALERT.
+  async function seedFailingEvent() {
+    return prisma.outboxEvent.create({
+      data: {
+        aggregateType: "JournalEntry",
+        aggregateId: randomUUID(),
+        eventType: "journal_entry.payment_captured",
+        payload: { journalEntryId: "not-a-valid-uuid" },
+      },
+    });
+  }
+
+  // Same bounded-catch-up reasoning as this file's own pollUntilSettled: a shared, continuously
+  // used dev database can have unrelated unpublished rows ahead of this test's own in the
+  // createdAt-ordered queue, so this polls until OUR event's own attempts count reaches the
+  // target, not just once.
+  async function pollUntilAttempts(
+    poller: OutboxPollerService,
+    id: string,
+    minAttempts: number,
+    maxIterations = 40,
+  ): Promise<void> {
+    for (let i = 0; i < maxIterations; i++) {
+      const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+      if (current.attempts >= minAttempts) return;
+      await poller.poll();
+    }
+  }
+
+  it(
+    "does not call fetch when ALERT_WEBHOOK_URL is unset, even once the failure threshold is crossed — discriminating: a naive implementation that alerts unconditionally would call fetch here too",
+    async () => {
+      const poller = new OutboxPollerService(
+        prisma,
+        walletProjection,
+        fakeLogger,
+        buildConfig(undefined),
+      );
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const event = await seedFailingEvent();
+
+      await pollUntilAttempts(poller, event.id, 5);
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(after.attempts).toBeGreaterThanOrEqual(5);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "calls the alert webhook exactly once, on the poll that crosses the threshold, with the event id and attempt count in the body — and does NOT call it again on later retries of the same still-stuck event",
+    async () => {
+      const poller = new OutboxPollerService(
+        prisma,
+        walletProjection,
+        fakeLogger,
+        buildConfig("https://hooks.example.test/incoming"),
+      );
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      const event = await seedFailingEvent();
+
+      await pollUntilAttempts(poller, event.id, 5);
+      // Keep polling well past the threshold — discriminating: a naive implementation that fires
+      // on every attempt >= threshold (instead of exactly attempts === threshold) would call fetch
+      // again here too, re-alerting the same stuck event every poll.
+      await pollUntilAttempts(poller, event.id, 8);
+
+      const calls = callsForEvent(fetchSpy, event.id);
+      expect(calls).toHaveLength(1);
+      const [url, init] = calls[0] as [string, RequestInit];
+      expect(url).toBe("https://hooks.example.test/incoming");
+      const body = JSON.parse(init.body as string) as { text: string };
+      expect(body.text).toContain(event.id);
+      expect(body.text).toContain("5 times");
+
+      fetchSpy.mockRestore();
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a failing alert webhook (rejected fetch) does not crash poll() and does not stop the underlying event's own retry accounting",
+    async () => {
+      const poller = new OutboxPollerService(
+        prisma,
+        walletProjection,
+        fakeLogger,
+        buildConfig("https://hooks.example.test/incoming"),
+      );
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("simulated network failure"));
+      const event = await seedFailingEvent();
+
+      for (let i = 0; i < 8; i++) {
+        await expect(poller.poll()).resolves.toBeUndefined(); // never throws, even while the alert itself is failing
+      }
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(after.attempts).toBeGreaterThanOrEqual(5); // dispatch's own retry accounting is unaffected by the alert failing
+      expect(callsForEvent(fetchSpy, event.id)).toHaveLength(1); // still only attempted once for THIS event, even though it failed
+
+      fetchSpy.mockRestore();
     },
     BACKLOG_SAFE_TIMEOUT_MS,
   );

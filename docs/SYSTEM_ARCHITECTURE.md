@@ -1,6 +1,6 @@
 ---
 title: SYSTEM_ARCHITECTURE
-version: 2.1.0
+version: 2.2.0
 status: Active
 classification: Internal
 owner: Founder
@@ -304,6 +304,10 @@ Developers should clone the repository and start working within minutes.
 Metrics · Logs · Traces · Health Checks: Database Health, Redis Health, Payment Provider Health, Application Health, **Outbox Lag** (count of unpublished events, age of the oldest unpublished event).
 
 Outbox Lag matters specifically: if it grows, projections are going stale even though the Ledger itself is still correct — this failure mode is silent unless it's explicitly monitored.
+
+Sprint 13 (ADR-031) makes Outbox Lag a real, alertable metric, not only a number that exists to be looked up: once an `OutboxEvent` fails 5 times without publishing, `OutboxPollerService` sends one outbound webhook POST (plain JSON body) to `ALERT_WEBHOOK_URL`, if configured — any endpoint that accepts a JSON POST works (Slack/Discord incoming webhooks both do). Fires exactly once per event, on the poll that crosses the threshold, not on every later retry of the same still-stuck event. `ALERT_WEBHOOK_URL` is optional (`env.validation.ts`) — the app runs correctly with alerting inactive (log-only, as before) until an ops channel is wired; wiring one is an ops decision on its own timeline, not a boot-time requirement.
+
+Production hosting: Railway, two services (`backend`, `frontend`) against the one pnpm monorepo, each scoped via explicit `buildCommand`/`startCommand`/`preDeployCommand` (`pnpm --filter <package> run <script>`) rather than a per-service `rootDirectory` — see ADR-031 for why the latter breaks a pnpm workspace's dependency resolution.
 
 ---
 

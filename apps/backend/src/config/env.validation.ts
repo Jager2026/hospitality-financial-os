@@ -35,6 +35,14 @@ const envSchema = z.object({
     .string()
     .min(1, "CORS_ORIGIN is required")
     .transform((v) => v.split(",").map((s) => s.trim())),
+  // Sprint 13 (Deployment), ADR-031: Outbox Lag must be "a monitored, alertable metric from day
+  // one, not added later" (IMPLEMENTATION_PLAN.md). Optional, not required like the secrets
+  // above — which channel (Slack, Discord, a generic incident tool) is an ops choice the Founder
+  // makes on their own timeline, not a boot-time requirement; the app must still start cleanly
+  // with alerting simply inactive until this is set, the same "flexibility on demand of the first
+  // real case" precedent as CORS_ORIGIN's own comma-separated shape. Any endpoint that accepts a
+  // plain JSON POST works — Slack/Discord incoming webhooks both do out of the box.
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

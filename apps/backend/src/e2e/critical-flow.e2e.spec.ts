@@ -222,8 +222,29 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
     // Outbox dispatch (WalletProjectionService's own consumer) runs on its own @Interval poll,
     // not synchronously with the webhook response (ADR-024) — poll it directly here rather than
     // sleeping a guessed duration, matching this codebase's own "explicit over implicit" style.
+    //
+    // A single poll() call is not enough to rely on: poll() dispatches up to BATCH_SIZE (50)
+    // unpublished OutboxEvent rows across the WHOLE shared test database, oldest-createdAt-first —
+    // not just this test's own. Found live in CI (not locally — CI's own concurrency/timing made
+    // this event miss the first batch two runs in a row), the same "bounded catch-up, not a bare
+    // single poll() call" reasoning outbox-poller.service.spec.ts's own pollUntilSettled already
+    // documents for exactly this shared-database contention. Scoped to this payment's own
+    // JournalEntry-derived OutboxEvent rows specifically, not a blind retry count.
     const outboxPoller = app.get(OutboxPollerService);
-    await outboxPoller.poll();
+    const transactionForPayment = await prisma.transaction.findFirstOrThrow({
+      where: { paymentId: paymentId },
+    });
+    const journalEntriesForPayment = await prisma.journalEntry.findMany({
+      where: { transactionId: transactionForPayment.id },
+    });
+    const outboxEventIds = journalEntriesForPayment.map((e) => e.id);
+    for (let i = 0; i < 20; i++) {
+      const remaining = await prisma.outboxEvent.count({
+        where: { aggregateId: { in: outboxEventIds }, publishedAt: null },
+      });
+      if (remaining === 0) break;
+      await outboxPoller.poll();
+    }
 
     // 9. Manager's own Wallet reflects the tip
     const walletRes = await request(app.getHttpServer())
