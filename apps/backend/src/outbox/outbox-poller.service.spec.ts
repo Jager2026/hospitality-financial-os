@@ -37,6 +37,7 @@ function buildEvent(type: string, dataObject: Record<string, unknown>) {
 
 const fakeLogger = {
   setContext: () => undefined,
+  info: () => undefined,
   warn: () => undefined,
   error: () => undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

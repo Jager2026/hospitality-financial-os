@@ -126,6 +126,14 @@ export class OutboxPollerService {
           { eventId: event.id, status: response.status },
           "Outbox Lag alert webhook responded with a non-2xx status",
         );
+      } else {
+        // Explicit success log, not just the absence of a warning above — Sprint 13's own
+        // closeout needs to confirm actual delivery from logs alone, not merely that sendAlert()
+        // was invoked (ADR-031).
+        this.logger.info(
+          { eventId: event.id, status: response.status },
+          "Outbox Lag alert webhook delivered successfully",
+        );
       }
     } catch (alertErr) {
       this.logger.warn(
