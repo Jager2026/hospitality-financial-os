@@ -454,7 +454,12 @@ describe("OutboxPollerService alerting (ADR-031)", () => {
   it(
     "does not call fetch when ALERT_WEBHOOK_URL is unset, even once the failure threshold is crossed — discriminating: a naive implementation that alerts unconditionally would call fetch here too",
     async () => {
-      const poller = new OutboxPollerService(prisma, walletProjection, fakeLogger, buildConfig(undefined));
+      const poller = new OutboxPollerService(
+        prisma,
+        walletProjection,
+        fakeLogger,
+        buildConfig(undefined),
+      );
       const fetchSpy = vi.spyOn(globalThis, "fetch");
       const event = await seedFailingEvent();
 
