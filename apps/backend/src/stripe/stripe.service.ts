@@ -33,6 +33,11 @@ export interface CreatedPaymentIntent {
   currency: string;
 }
 
+export interface RetrievedPaymentIntent {
+  id: string;
+  status: Stripe.PaymentIntent.Status;
+}
+
 // ADR-009 / ADR-014 (revised): Accounts v2, dashboard: "full" (Standard-equivalent) — the
 // platform bears no fraud/chargeback liability for a restaurant's own payments (confirmed
 // empirically: `losses_collector: "stripe"` is the ONLY accepted value paired with
@@ -125,6 +130,23 @@ export class StripeService {
       amount: intent.amount,
       currency: intent.currency,
     };
+  }
+
+  /** Sprint 13 (Deployment follow-up), ADR-032: PaymentReconciliationService's own read against
+   * Stripe's real, current state for a Payment stuck in PENDING — never trusted from a cached
+   * value, the same "ask the source of truth directly" reasoning as everywhere else Stripe is the
+   * system of record. Direct charge, same `{ stripeAccount }` request-option as createPaymentIntent
+   * — this PaymentIntent lives on the connected account, not the platform account. */
+  async retrievePaymentIntent(
+    stripeAccountId: string,
+    paymentIntentId: string,
+  ): Promise<RetrievedPaymentIntent> {
+    const intent = await this.stripe.paymentIntents.retrieve(
+      paymentIntentId,
+      {},
+      { stripeAccount: stripeAccountId },
+    );
+    return { id: intent.id, status: intent.status };
   }
 
   /** ADR-004 / API_Contract.md, Incoming Webhooks: "Verifies the Stripe signature before any

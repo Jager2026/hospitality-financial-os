@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppException } from "../common/exceptions/app.exception";
 import { AuthService } from "./auth.service";
 import { hashPassword } from "./password.util";
@@ -192,14 +192,31 @@ describe("AuthService — login", () => {
 // DoD (IMPLEMENTATION_PLAN.md, Sprint 2): "Owner can register." register.schema.spec.ts only
 // covers Zod validating the request shape — this covers the service actually creating the user.
 describe("AuthService — register", () => {
+  // No test in this codebase makes a live network call (same precedent as FakeStripeService) —
+  // register() now calls isPasswordBreached() (ADR-032) for every registration, so every test in
+  // this block needs fetch stubbed by default; the one test that specifically exercises a breach
+  // overrides this locally.
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("hashes the password before storing it and never persists the plaintext", async () => {
     const findUnique = vi.fn().mockResolvedValue(null);
-    let createdData: { email: string; passwordHash: string; locale: string } | undefined;
+    let createdData:
+      { email: string; displayName: string; passwordHash: string; locale: string } | undefined;
     const create = vi.fn().mockImplementation(({ data }) => {
       createdData = data;
       return Promise.resolve({
         id: "33333333-3333-3333-3333-333333333333",
         email: data.email,
+        displayName: data.displayName,
         passwordHash: data.passwordHash,
         locale: data.locale,
       });
@@ -216,6 +233,7 @@ describe("AuthService — register", () => {
     const result = await authService.register({
       email: "new-owner@example.com",
       password: "SuperSecret123",
+      displayName: "New Owner",
       locale: "en",
     });
 
@@ -247,6 +265,7 @@ describe("AuthService — register", () => {
       await authService.register({
         email: "taken@example.com",
         password: "whatever123",
+        displayName: "Taken User",
         locale: "en",
       });
     } catch (err) {
@@ -255,6 +274,41 @@ describe("AuthService — register", () => {
 
     expect(caught).toBeInstanceOf(AppException);
     expect((caught as AppException).getStatus()).toBe(409);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("rejects registration with a known-breached password, without creating a user", async () => {
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const create = vi.fn();
+    const fakePrisma = { user: { findUnique, create } } as unknown as PrismaService;
+    const fakeTokenService = { issueTokenPair: vi.fn() } as unknown as TokenService;
+    // Overrides the beforeEach's default "not breached" stub. "password" -> SHA-1
+    // 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8 (prefix 5BAA6, real fixture, matches
+    // hibp.util.spec.ts's own).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve("1E4C9B93F3F0682250B6CF8331B7EE68FD8:3730471"),
+      }),
+    );
+
+    const authService = new AuthService(fakePrisma, fakeTokenService);
+
+    let caught: unknown;
+    try {
+      await authService.register({
+        email: "new-owner@example.com",
+        password: "password",
+        displayName: "New Owner",
+        locale: "en",
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(AppException);
+    expect((caught as AppException).code).toBe("PASSWORD_BREACHED");
     expect(create).not.toHaveBeenCalled();
   });
 });

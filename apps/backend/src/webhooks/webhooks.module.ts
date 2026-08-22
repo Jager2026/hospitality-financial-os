@@ -10,5 +10,7 @@ import { WebhooksService } from "./webhooks.service";
   imports: [StripeModule, LedgerModule, RestaurantModule, TipModule],
   controllers: [WebhooksController],
   providers: [WebhooksService],
+  // ADR-032: PaymentReconciliationModule reuses captureFromPaymentIntentId for self-healing.
+  exports: [WebhooksService],
 })
 export class WebhooksModule {}

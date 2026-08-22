@@ -3,7 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import Stripe from "stripe";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../app.module";
 import { OutboxPollerService } from "../outbox/outbox-poller.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -103,6 +103,17 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
   beforeAll(async () => {
     await prisma.$connect();
 
+    // register()/accept() both call isPasswordBreached() (ADR-032) — this test's own fixture
+    // passwords are XKCD's famous example phrase, plausibly present in a real breach corpus, and
+    // no test in this codebase makes a live network call regardless (same precedent as
+    // FakeStripeService). supertest talks to the in-process server directly via Node's http
+    // module, never through global fetch, so this doesn't interfere with the real HTTP requests
+    // this test makes.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") }),
+    );
+
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(StripeService)
       .useValue(new FakeStripeService())
@@ -116,6 +127,7 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
   });
 
   afterAll(async () => {
+    vi.unstubAllGlobals();
     await app.close();
     await prisma.$disconnect();
   });
@@ -125,9 +137,12 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
     const ownerPassword = "correct horse battery staple";
 
     // 1. Register
-    const registerRes = await request(app.getHttpServer())
-      .post("/api/v1/auth/register")
-      .send({ email: ownerEmail, password: ownerPassword, locale: "en" });
+    const registerRes = await request(app.getHttpServer()).post("/api/v1/auth/register").send({
+      email: ownerEmail,
+      password: ownerPassword,
+      displayName: "Test Owner",
+      locale: "en",
+    });
     expect(registerRes.status).toBe(201);
     expect(registerRes.body.data.accessToken).toBeTruthy();
 
@@ -178,8 +193,15 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
     // 5. Manager accepts the invitation (creates User + password + Membership)
     const acceptRes = await request(app.getHttpServer())
       .post("/api/v1/memberships/invitations/accept")
-      .send({ email: managerEmail, token: invitationToken, password: managerPassword });
+      .send({
+        email: managerEmail,
+        token: invitationToken,
+        password: managerPassword,
+        displayName: "Test Manager",
+      });
     expect(acceptRes.status).toBe(200);
+    const managerMembershipId: string = acceptRes.body.data.id;
+    expect(managerMembershipId).toBeTruthy();
 
     // 6. Manager logs in
     const managerLoginRes = await request(app.getHttpServer())
@@ -190,12 +212,20 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
 
     // 7. Manager captures a payment with a tip — real permission check (payments.manage), real
     // billAmount/fee split, real Payment row write; only the outbound Stripe PaymentIntent
-    // creation is stubbed.
+    // creation is stubbed. waiterMembershipId (ADR-033): the Manager selects THEMSELVES via the
+    // terminal's own staff picker (a real, legitimate case now that selection isn't restricted to
+    // any one Role) — this flow tests end-to-end payment/tip/wallet plumbing, not the picker's own
+    // selection logic (membership.service.spec.ts covers that).
     const paymentRes = await request(app.getHttpServer())
       .post("/api/v1/payments")
       .set("Authorization", `Bearer ${managerAccessToken}`)
       .set("Idempotency-Key", randomUUID())
-      .send({ restaurantId, amount: 2000, tipAmount: 500 }); // billAmount=1500, tip=500
+      .send({
+        restaurantId,
+        amount: 2000,
+        tipAmount: 500,
+        waiterMembershipId: managerMembershipId,
+      }); // billAmount=1500, tip=500
     expect(paymentRes.status).toBe(201);
     const paymentId: string = paymentRes.body.data.id;
     expect(paymentId).toBeTruthy();

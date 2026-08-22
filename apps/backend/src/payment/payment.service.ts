@@ -13,6 +13,12 @@ export interface CreatedPayment {
   restaurantId: string;
   amount: string; // bigint -> string at the source; see bigint-json.polyfill for the general case
   tipAmount: string;
+  // ADR-033: included so AuditLogInterceptor's own generic response-shape extraction (writeSuccess
+  // looking for a `waiterMembershipId` field, the same convention it already uses for `id`) can
+  // record the selected tip recipient alongside the automatically-captured, already-logged
+  // request.user.id — "who was selected" and "who was logged in" are two independently recorded
+  // facts, never inferred from one another.
+  waiterMembershipId: string | null;
   currency: string;
   status: Payment["status"];
   clientSecret: string;
@@ -41,7 +47,11 @@ export class PaymentService {
     user: AuthenticatedUser,
   ): Promise<CreatedPayment> {
     const restaurant = await this.getReachableRestaurantOrThrow(dto.restaurantId, user);
-    const waiterMembership = this.getGrantingMembershipOrThrow(user, restaurant, "payments.manage");
+    // Authorization only (ADR-033) — confirms the caller is allowed to process a payment at this
+    // Restaurant. No longer the source of Payment.waiterMembershipId (below); "who is logged in"
+    // and "who is selected as the tip recipient" are independent facts now, not the same one.
+    this.getGrantingMembershipOrThrow(user, restaurant, "payments.manage");
+    const waiterMembershipId = await this.validateWaiterMembershipOrThrow(dto, restaurant);
 
     if (!restaurant.stripeAccountId) {
       throw new AppException(
@@ -82,7 +92,7 @@ export class PaymentService {
         processorPaymentId: intent.id,
         amount,
         tipAmount,
-        waiterMembershipId: waiterMembership.id,
+        waiterMembershipId,
         currency: restaurant.currency,
         status: "PENDING",
         paymentMethod: "card",
@@ -95,6 +105,7 @@ export class PaymentService {
       restaurantId: payment.restaurantId,
       amount: payment.amount.toString(),
       tipAmount: payment.tipAmount.toString(),
+      waiterMembershipId: payment.waiterMembershipId,
       currency: payment.currency,
       status: payment.status,
       clientSecret: intent.clientSecret,
@@ -209,11 +220,43 @@ export class PaymentService {
     return restaurant;
   }
 
+  /** ADR-033: validates a client-submitted waiterMembershipId is a real, ACTIVE, non-deleted
+   * Membership reachable at this Restaurant (same reachability rule as everywhere else, ADR-005)
+   * — never trusted as a bare string. Undefined is valid on its own (createPaymentSchema's own
+   * .refine() already guarantees it's only undefined when tipAmount is 0 — nobody to attribute).
+   * Deliberately NOT restricted to any one Role (Founder decision) — "who actually served this
+   * table," not "who holds the Waiter Role." */
+  private async validateWaiterMembershipOrThrow(
+    dto: CreatePaymentDto,
+    restaurant: Restaurant,
+  ): Promise<string | null> {
+    if (!dto.waiterMembershipId) return null;
+
+    const membership = await this.prisma.membership.findFirst({
+      where: {
+        id: dto.waiterMembershipId,
+        deletedAt: null,
+        status: "ACTIVE",
+        OR: [
+          { restaurantId: restaurant.id },
+          { restaurantId: null, organizationId: restaurant.organizationId },
+        ],
+      },
+    });
+    if (!membership) {
+      throw new AppException(
+        "VALIDATION_ERROR",
+        "waiterMembershipId is not a valid staff member at this restaurant.",
+        400,
+      );
+    }
+    return membership.id;
+  }
+
   // Same defense-in-depth split as restaurant.service.ts/membership.service.ts: PermissionsGuard
-  // is the fast global reject, this is the resource-scoped second layer. Returns the specific
-  // granting Membership, not just a boolean (ADR-022) — its id becomes Payment.waiterMembershipId,
-  // the tip recipient, captured from the same reachability check that already authorizes the
-  // request rather than a second, separate lookup.
+  // is the fast global reject, this is the resource-scoped second layer — confirms the caller
+  // themselves may process a payment at this Restaurant (ADR-033: authorization only, no longer
+  // the source of Payment.waiterMembershipId — see validateWaiterMembershipOrThrow above for that).
   private getGrantingMembershipOrThrow(
     user: AuthenticatedUser,
     restaurant: Restaurant,

@@ -111,6 +111,7 @@ describe("AnalyticsService (real database)", () => {
     const user = await prisma.user.create({
       data: {
         email: `${roleName.toLowerCase()}-${randomUUID()}@example.com`,
+        displayName: `Test ${roleName}`,
         passwordHash: "not-a-real-hash",
         locale: "en",
       },

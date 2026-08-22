@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrismaService } from "../prisma/prisma.service";
 import { MembershipInvitationService } from "./membership-invitation.service";
 
@@ -12,6 +12,20 @@ describe("MembershipInvitationService (real database)", () => {
   let roleId: string;
   let organizationId: string;
   let inviterUserId: string;
+
+  // No test in this codebase makes a live network call (same precedent as FakeStripeService) —
+  // accept() now calls isPasswordBreached() (ADR-032) for every new-user path, so every test here
+  // needs fetch stubbed by default, not just the one test that specifically exercises a breach.
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   beforeAll(async () => {
     await prisma.$connect();
@@ -27,6 +41,7 @@ describe("MembershipInvitationService (real database)", () => {
     const inviter = await prisma.user.create({
       data: {
         email: `inviter-${randomUUID()}@example.com`,
+        displayName: "Test Inviter",
         passwordHash: "not-a-real-hash",
         locale: "en",
       },
@@ -54,7 +69,12 @@ describe("MembershipInvitationService (real database)", () => {
     const email = `new-person-${randomUUID()}@example.com`;
     const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
 
-    const membership = await service.accept({ email, token, password: "SetMyOwnPassword!2026" });
+    const membership = await service.accept({
+      email,
+      token,
+      password: "SetMyOwnPassword!2026",
+      displayName: "New Waiter",
+    });
 
     expect(membership.organizationId).toBe(organizationId);
     expect(membership.restaurantId).toBeNull(); // org-wide, no restaurantId given at invite
@@ -81,7 +101,12 @@ describe("MembershipInvitationService (real database)", () => {
   it("accept() for an email that already has a User attaches a Membership WITHOUT creating a duplicate User row", async () => {
     const email = `existing-${randomUUID()}@example.com`;
     const existingUser = await prisma.user.create({
-      data: { email, passwordHash: "already-has-a-real-hash", locale: "en" },
+      data: {
+        email,
+        displayName: "Existing User",
+        passwordHash: "already-has-a-real-hash",
+        locale: "en",
+      },
     });
 
     const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
@@ -101,7 +126,12 @@ describe("MembershipInvitationService (real database)", () => {
     const email = `replay-${randomUUID()}@example.com`;
     const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
 
-    await service.accept({ email, token, password: "FirstAccept!2026xyz" });
+    await service.accept({
+      email,
+      token,
+      password: "FirstAccept!2026xyz",
+      displayName: "Replay Test User",
+    });
 
     await expect(
       service.accept({ email, token, password: "SecondAccept!2026xyz" }),
@@ -137,8 +167,35 @@ describe("MembershipInvitationService (real database)", () => {
       organizationId,
       inviterUserId,
     );
-    const membership = await service.accept({ email, token, password: "ScopedAccept!2026xyz" });
+    const membership = await service.accept({
+      email,
+      token,
+      password: "ScopedAccept!2026xyz",
+      displayName: "Scoped Test User",
+    });
 
     expect(membership.restaurantId).toBe(restaurant.id);
+  });
+
+  it("rejects accepting an invitation with a known-breached password, without creating a user", async () => {
+    const email = `breached-${randomUUID()}@example.com`;
+    const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
+    // Overrides the beforeEach's default "not breached" stub. Same real HIBP fixture as
+    // hibp.util.spec.ts/auth.service.spec.ts: "password" -> prefix 5BAA6, suffix
+    // 1E4C9B93F3F0682250B6CF8331B7EE68FD8.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve("1E4C9B93F3F0682250B6CF8331B7EE68FD8:3730471"),
+      }),
+    );
+
+    await expect(
+      service.accept({ email, token, password: "password", displayName: "Breached User" }),
+    ).rejects.toMatchObject({ code: "PASSWORD_BREACHED" });
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    expect(user).toBeNull();
   });
 });

@@ -41,6 +41,51 @@ export class MembershipService {
     return this.getReachableOrThrow(id, user);
   }
 
+  /** ADR-033: the terminal's own staff picker — "who actually served this table," not "who holds
+   * a specific Role." Every ACTIVE, non-deleted Membership reachable at this Restaurant (an
+   * org-wide Membership in the same Organization, or one scoped to this exact Restaurant — the
+   * same reachability rule ADR-005 already establishes everywhere else), regardless of Role.
+   * displayName (ADR-032) is what the picker actually shows — email is returned alongside it only
+   * as a stable secondary identifier, never the primary label. */
+  async findStaffForRestaurant(
+    restaurantId: string,
+    user: AuthenticatedUser,
+  ): Promise<Array<{ id: string; displayName: string; email: string; roleName: string }>> {
+    const restaurant = await this.prisma.restaurant.findFirst({
+      where: { id: restaurantId, deletedAt: null },
+    });
+    if (!restaurant) {
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+    }
+    const reachable = user.memberships.some(
+      (m) =>
+        m.restaurantId === restaurant.id ||
+        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
+    );
+    if (!reachable) {
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+    }
+
+    const staff = await this.prisma.membership.findMany({
+      where: {
+        deletedAt: null,
+        status: "ACTIVE",
+        OR: [
+          { restaurantId: restaurant.id },
+          { restaurantId: null, organizationId: restaurant.organizationId },
+        ],
+      },
+      include: { user: true, role: true },
+    });
+
+    return staff.map((m) => ({
+      id: m.id,
+      displayName: m.user.displayName,
+      email: m.user.email,
+      roleName: m.role.name,
+    }));
+  }
+
   async update(id: string, dto: { roleId?: string }, user: AuthenticatedUser): Promise<Membership> {
     const membership = await this.getReachableOrThrow(id, user);
     this.assertPermission(user, membership, "membership.manage");

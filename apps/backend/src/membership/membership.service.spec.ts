@@ -58,7 +58,12 @@ describe("MembershipService (real database)", () => {
 
   async function createUser() {
     return prisma.user.create({
-      data: { email: `${randomUUID()}@example.com`, passwordHash: "not-a-real-hash", locale: "en" },
+      data: {
+        email: `${randomUUID()}@example.com`,
+        displayName: "Test User",
+        passwordHash: "not-a-real-hash",
+        locale: "en",
+      },
     });
   }
 

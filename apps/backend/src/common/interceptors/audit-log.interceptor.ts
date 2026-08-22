@@ -95,6 +95,13 @@ export class AuditLogInterceptor implements NestInterceptor {
         entity,
         entityId,
         action: request.method.toLowerCase(),
+        // ADR-033: userId (above) is already "who was logged in" for every mutating request,
+        // unconditionally — nothing new needed for that half. This generically picks up a
+        // waiterMembershipId field when a response happens to include one (the same
+        // opt-in-by-response-shape convention extractId already uses for `id`, not a
+        // Payment-specific special case wired into this shared interceptor by route/entity name)
+        // — "who was selected" as a genuinely separate, independently recorded fact.
+        metadata: this.extractWaiterMembershipId(data),
         ipAddress: request.ip,
         userAgent: request.headers["user-agent"] ?? null,
       },
@@ -133,5 +140,21 @@ export class AuditLogInterceptor implements NestInterceptor {
       return data.id;
     }
     return null;
+  }
+
+  /** Returns undefined (Prisma: field omitted, column stays its default null) whenever the
+   * response has no waiterMembershipId field at all, or it's explicitly null (a payment with no
+   * tip — nobody to attribute) — a genuinely present, non-null value is the only case worth a
+   * metadata row at all. */
+  private extractWaiterMembershipId(data: unknown): { waiterMembershipId: string } | undefined {
+    if (
+      data &&
+      typeof data === "object" &&
+      "waiterMembershipId" in data &&
+      typeof data.waiterMembershipId === "string"
+    ) {
+      return { waiterMembershipId: data.waiterMembershipId };
+    }
+    return undefined;
   }
 }

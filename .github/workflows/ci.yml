@@ -98,6 +98,20 @@ jobs:
       - name: Format check
         run: pnpm run format
 
+      # THREAT_MODEL.md, "No automated, recurring check for known-vulnerable dependencies"
+      # (OWASP A03:2025) — closes it. High/critical severity fails the build; moderate/low stay
+      # visible in the step's own output without blocking every PR (many have no available fix
+      # yet or aren't exploitable in this app's actual usage — a gate that blocks on those trains
+      # everyone to ignore it). Runs through check-audit.js rather than a bare `pnpm audit
+      # --audit-level=high` — the pnpm version this project is pinned to (9.12.0) has no working
+      # way to ignore a specific advisory (`audit.ignore`/`--ignore` need pnpm 10.11+, confirmed
+      # directly, not assumed), and this project isn't bumping pnpm itself just to unblock this
+      # gate (pnpm's own version drives Railway's package-manager detection, ADR-031). See that
+      # script's own comment for exactly which advisories are explicitly ignored and why — a new
+      # high/critical finding anywhere else still fails this step.
+      - name: Dependency vulnerability scan
+        run: node .github/scripts/check-audit.js
+
       - name: Validate Prisma schema
         run: pnpm run prisma:validate
 

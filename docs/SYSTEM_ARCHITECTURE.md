@@ -1,6 +1,6 @@
 ---
 title: SYSTEM_ARCHITECTURE
-version: 2.2.0
+version: 2.3.0
 status: Active
 classification: Internal
 owner: Founder
@@ -306,6 +306,10 @@ Metrics · Logs · Traces · Health Checks: Database Health, Redis Health, Payme
 Outbox Lag matters specifically: if it grows, projections are going stale even though the Ledger itself is still correct — this failure mode is silent unless it's explicitly monitored.
 
 Sprint 13 (ADR-031) makes Outbox Lag a real, alertable metric, not only a number that exists to be looked up: once an `OutboxEvent` fails 5 times without publishing, `OutboxPollerService` sends one outbound webhook POST (plain JSON body) to `ALERT_WEBHOOK_URL`, if configured — any endpoint that accepts a JSON POST works (Slack/Discord incoming webhooks both do). Fires exactly once per event, on the poll that crosses the threshold, not on every later retry of the same still-stuck event. `ALERT_WEBHOOK_URL` is optional (`env.validation.ts`) — the app runs correctly with alerting inactive (log-only, as before) until an ops channel is wired; wiring one is an ops decision on its own timeline, not a boot-time requirement.
+
+Sprint 13 (ADR-032) generalizes the alert delivery itself into a shared `AlertService` (`common/alerting/`) once a second real consumer needed it: `PaymentReconciliationService` (below) uses the identical mechanism for a stuck-Payment alert, fired at most once per Payment. `OutboxPollerService` now calls this shared service rather than posting the webhook itself; the alerting behavior described above is otherwise unchanged.
+
+**Payment reconciliation** (ADR-032, Sprint 13): a `PaymentReconciliationService` runs every 5 minutes, checking any `Payment` stuck `PENDING` for over 15 minutes directly against Stripe (never assumed from this system's own stale copy) — closing three related `THREAT_MODEL.md` entries (Stripe unreachable at the moment of payment; bank/issuer timeout; webhook and client-side confirmation diverging). If Stripe already confirms success, it self-heals by running the same capture logic the webhook itself would have; otherwise, or if Stripe itself can't be reached, it alerts through the shared `AlertService` above.
 
 Production hosting: Railway, two services (`backend`, `frontend`) against the one pnpm monorepo, each scoped via explicit `buildCommand`/`startCommand`/`preDeployCommand` (`pnpm --filter <package> run <script>`) rather than a per-service `rootDirectory` — see ADR-031 for why the latter breaks a pnpm workspace's dependency resolution.
 

@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import type { Membership, MembershipInvitation } from "@prisma/client";
+import { isPasswordBreached } from "../auth/hibp.util";
 import { hashPassword } from "../auth/password.util";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
@@ -86,9 +87,23 @@ export class MembershipInvitationService {
           400,
         );
       }
+      if (!dto.displayName) {
+        throw new AppException(
+          "VALIDATION_ERROR",
+          "Display name is required to accept this invitation.",
+          400,
+        );
+      }
+      if (await isPasswordBreached(dto.password)) {
+        throw new AppException(
+          "PASSWORD_BREACHED",
+          "This password has appeared in a known data breach. Please choose a different one.",
+          400,
+        );
+      }
       const passwordHash = await hashPassword(dto.password);
       user = await this.prisma.user.create({
-        data: { email: dto.email, passwordHash, locale: "en" },
+        data: { email: dto.email, displayName: dto.displayName, passwordHash, locale: "en" },
       });
     }
 

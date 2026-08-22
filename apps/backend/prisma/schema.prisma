@@ -237,6 +237,12 @@ model Restaurant {
 model User {
   id                String    @id @default(uuid()) @db.Uuid
   email             String    @unique
+  // Sprint 13 (Deployment follow-up), ADR-032: the staff-selection picker ("who actually served
+  // this table") needs a human name to show, not an email address — User had no name field of any
+  // kind before this. Required, no default: zero real Users existed in production at the moment
+  // this migration was written (confirmed directly against the database, not assumed), so there
+  // was nothing to backfill and no reason to make this nullable "just in case."
+  displayName       String    @map("display_name")
   passwordHash      String    @map("password_hash")
   emailVerified     Boolean   @default(false) @map("email_verified")
   twoFactorEnabled  Boolean   @default(false) @map("two_factor_enabled")
@@ -409,10 +415,12 @@ model Payment {
   // request time). `amount` itself never changes meaning — the bill/tip split lives here, not by
   // splitting `amount` into two fields.
   tipAmount          BigInt   @default(0) @map("tip_amount")
-  // Sprint 6, ADR-022: captured from the authenticated caller's own Membership at POST /payments
-  // time — the same Membership that grants them payments.manage reachability to the Restaurant.
-  // No separate terminal/table/waiter-assignment mechanism. Always populated; only read when
-  // tipAmount > 0.
+  // Sprint 6, ADR-022, revised Sprint 13 (ADR-032): the staff member picked via the terminal's own
+  // "who served this table" selection at POST /payments time — NOT derived from the authenticated
+  // caller (req.user) since ADR-032; the caller and the tip recipient are now two independently
+  // tracked facts (AuditLogInterceptor records both). Reachable to the same Restaurant, no role
+  // restriction. Required when tipAmount > 0 (enforced in PaymentService, fail-fast); null when
+  // tipAmount is 0 — no recipient to select.
   waiterMembershipId String?  @map("waiter_membership_id") @db.Uuid
   currency           String   @db.Char(3)
   status             PaymentStatus @default(PENDING)
@@ -420,6 +428,13 @@ model Payment {
   idempotencyKey     String   @unique @map("idempotency_key")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
+  // Sprint 13 (Deployment follow-up), ADR-032: PaymentReconciliationService's own "fired once"
+  // marker — same reasoning as OutboxPollerService's own attempts === MAX_ATTEMPTS_BEFORE_ALERT
+  // exact-match check (ADR-031): without this, a genuinely stuck Payment would re-alert every
+  // reconciliation cycle (5 min) for as long as it stays stuck, training whoever receives it to
+  // ignore the channel. Set once, on the first alert; never read as a status, only as "already
+  // notified."
+  reconciliationAlertSentAt DateTime? @map("reconciliation_alert_sent_at")
   // ADR-018 (Accepted), resolving the Sprint 0 audit's open question: "Immutable once created"
   // (DATABASE.md) describes the payment's identity and economic facts — amount, tipAmount,
   // waiterMembershipId, restaurant_id, processor, processor_payment_id, currency, payment_method,

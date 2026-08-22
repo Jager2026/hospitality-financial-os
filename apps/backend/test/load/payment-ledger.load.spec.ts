@@ -92,6 +92,9 @@ interface LoadTestContext {
   url: string;
   restaurantId: string;
   accessToken: string;
+  // ADR-033: every request below that carries a tip must submit this as waiterMembershipId —
+  // no longer derived from the caller automatically.
+  membershipId: string;
 }
 
 async function bootLoadTestApp(label: string): Promise<LoadTestContext> {
@@ -131,9 +134,14 @@ async function bootLoadTestApp(label: string): Promise<LoadTestContext> {
   const email = `manager-load-${randomUUID()}@example.com`;
   const password = "load test password 123";
   const user = await prisma.user.create({
-    data: { email, passwordHash: await hashPassword(password), locale: "en" },
+    data: {
+      email,
+      displayName: "Load Test Manager",
+      passwordHash: await hashPassword(password),
+      locale: "en",
+    },
   });
-  await prisma.membership.create({
+  const membership = await prisma.membership.create({
     data: {
       userId: user.id,
       organizationId: org.id,
@@ -150,7 +158,14 @@ async function bootLoadTestApp(label: string): Promise<LoadTestContext> {
   });
   const loginBody = (await loginRes.json()) as { data: { accessToken: string } };
 
-  return { prisma, app, url, restaurantId: restaurant.id, accessToken: loginBody.data.accessToken };
+  return {
+    prisma,
+    app,
+    url,
+    restaurantId: restaurant.id,
+    accessToken: loginBody.data.accessToken,
+    membershipId: membership.id,
+  };
 }
 
 async function teardown(ctx: LoadTestContext): Promise<void> {
@@ -171,7 +186,7 @@ describe("Payment/Ledger load test: concurrent distinct payments + Ledger reconc
   it(
     `${CONCURRENT_DISTINCT_PAYMENTS} concurrent distinct payments all succeed and the Ledger reconciles exactly`,
     async () => {
-      const { url, restaurantId, accessToken } = ctx;
+      const { url, restaurantId, accessToken, membershipId } = ctx;
       const paymentAmount = 2000;
       const tipAmount = 500;
 
@@ -184,7 +199,12 @@ describe("Payment/Ledger load test: concurrent distinct payments + Ledger reconc
               Authorization: `Bearer ${accessToken}`,
               "Idempotency-Key": randomUUID(),
             },
-            body: JSON.stringify({ restaurantId, amount: paymentAmount, tipAmount }),
+            body: JSON.stringify({
+              restaurantId,
+              amount: paymentAmount,
+              tipAmount,
+              waiterMembershipId: membershipId,
+            }),
           }).then(async (r) => ({
             status: r.status,
             body: (await r.json()) as { data: { id: string } },
@@ -325,12 +345,17 @@ describe("Payment/Ledger load test: throughput within the real, intentional rate
       // application. Rather than keep debugging a third-party library's internals for a
       // throughput number, this reuses the exact `Promise.all` + `fetch` pattern the first
       // describe block above already proved correct, and reports real measured latency itself.
-      const { url, restaurantId, accessToken } = ctx;
+      const { url, restaurantId, accessToken, membershipId } = ctx;
       const headers = {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       };
-      const body = JSON.stringify({ restaurantId, amount: 1500, tipAmount: 200 });
+      const body = JSON.stringify({
+        restaurantId,
+        amount: 1500,
+        tipAmount: 200,
+        waiterMembershipId: membershipId,
+      });
 
       const timings: number[] = [];
       const started = performance.now();
