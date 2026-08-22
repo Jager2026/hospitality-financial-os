@@ -1,4 +1,5 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import type { Request } from "express";
 import { Observable, from, of, throwError } from "rxjs";
 import { switchMap, map, catchError } from "rxjs/operators";
@@ -54,7 +55,32 @@ export class IdempotencyInterceptor implements NestInterceptor {
                 expiresAt: new Date(Date.now() + KEY_TTL_MS),
               },
             }),
-          ).pipe(switchMap(() => this.runHandler(next, key)));
+          ).pipe(
+            // THREAT_MODEL.md: the real race this whole method's own findUnique-then-create shape
+            // leaves open — two requests can both pass the `!existing` check above before either
+            // create() lands. Only ONE create() can actually succeed (the DB's own unique
+            // constraint on `key` guarantees that); this catchError closes the race architecturally
+            // by mapping the LOSER's constraint violation to the same controlled 409 the
+            // IN_PROGRESS branch below already returns for a slower duplicate — not a raw,
+            // unhandled 500. Same shape as WebhooksService.claimEvent()'s own
+            // find-then-create-then-catch pattern for the identical problem, just precise about
+            // which error it catches (P2002 specifically) rather than a catch-all, since this path
+            // guards a financial endpoint.
+            catchError((err: unknown) => {
+              if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+                return throwError(
+                  () =>
+                    new AppException(
+                      "IDEMPOTENCY_KEY_CONFLICT",
+                      "A request with this Idempotency-Key is already being processed.",
+                      409,
+                    ),
+                );
+              }
+              return throwError(() => err);
+            }),
+            switchMap(() => this.runHandler(next, key)),
+          );
         }
 
         if (existing.requestFingerprint !== fingerprint) {

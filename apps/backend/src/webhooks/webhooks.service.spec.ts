@@ -127,6 +127,7 @@ describe("WebhooksService (real database, real signature verification)", () => {
     const user = await prisma.user.create({
       data: {
         email: `waiter-${randomUUID()}@example.com`,
+        displayName: "Test Waiter",
         passwordHash: "not-a-real-hash",
         locale: "en",
       },

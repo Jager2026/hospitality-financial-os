@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.4.0
+version: 2.5.0
 status: Active
 classification: Critical
 priority: Highest
@@ -242,7 +242,8 @@ Only then is MVP complete.
 Dependency-audit findings that require a major-version bump are never mixed into a routine audit or another sprint's own task list — each earns its own focused task with its own live verification (typecheck, tests, both builds, and a real running-app check where the surface is user-facing), the same discipline `@nestjs/core` 10→11 got once assigned to Sprint 11 above. Listed here until a Sprint claims them, so the decision isn't only recoverable from chat history:
 
 - **Prisma 5→7.** Two majors at once (5→6, 6→7) — flagged during the pre-Sprint-10 dependency audit, deliberately not bundled into Sprint 11 (rate-limit tuning and Prisma's own breaking changes shouldn't compete for review attention in the same PR). Needs its own scoped plan before it gets a Sprint.
-- **vitest 2→3.** Flagged the same audit pass. Not yet assigned to a Sprint.
+- **vitest 2→3.** Flagged the same audit pass. Not yet assigned to a Sprint. Newly relevant as of Sprint 13 (ADR-032): this is the actual fix for the 4 high/critical `pnpm audit` advisories CI's new dependency-scan step currently ignores by explicit id (`check-audit.js`) — all four are in the `vitest@2.1.9` dependency chain (`vite`/`nanoid`/`glob`), all dev-only.
+- **Multi-factor authentication.** Sprint 13 (ADR-032/ADR-033) closed the breached-password half of `THREAT_MODEL.md`'s combined "no MFA and no breached-password check" entry, deliberately leaving MFA itself untouched — Founder's own explicit instruction: a large, standalone feature, not a point fix alongside five narrower ones. Needs its own scoped plan (which factor(s), enrollment/recovery UX, whether it's mandatory or opt-in per Role) before it gets a Sprint.
 
 ---
 

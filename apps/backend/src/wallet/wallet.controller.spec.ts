@@ -53,10 +53,20 @@ describe("WalletController.requestWithdrawal (real database)", () => {
     const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
     const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
     const waiterUser = await prisma.user.create({
-      data: { email: `waiter-${randomUUID()}@example.com`, passwordHash: "x", locale: "en" },
+      data: {
+        email: `waiter-${randomUUID()}@example.com`,
+        displayName: "Test Waiter",
+        passwordHash: "x",
+        locale: "en",
+      },
     });
     const managerUser = await prisma.user.create({
-      data: { email: `manager-${randomUUID()}@example.com`, passwordHash: "x", locale: "en" },
+      data: {
+        email: `manager-${randomUUID()}@example.com`,
+        displayName: "Test Manager",
+        passwordHash: "x",
+        locale: "en",
+      },
     });
     const waiter = await prisma.membership.create({
       data: {

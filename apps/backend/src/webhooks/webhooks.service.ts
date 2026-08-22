@@ -106,8 +106,13 @@ export class WebhooksService {
     }
   }
 
-  /** ADR-015: the Ledger write happens here, asynchronously, driven by this webhook — never
-   * synchronously in POST /payments' response. The platform-fee split (Founder decision,
+  private async handlePaymentIntentSucceeded(event: Stripe.Event): Promise<void> {
+    const intent = event.data.object as Stripe.PaymentIntent;
+    return this.captureFromPaymentIntentId(intent.id);
+  }
+
+  /** ADR-015: the Ledger write happens here, asynchronously — never synchronously in POST
+   * /payments' response. The platform-fee split (Founder decision,
    * DEFAULT_PLATFORM_FEE_BASIS_POINTS) is computed by the SAME splitPlatformFee() call as
    * PaymentService used at PaymentIntent creation time, on the same billAmount (ADR-022:
    * payment.amount - payment.tipAmount — the fee excludes tips), so the amount Stripe actually
@@ -116,14 +121,20 @@ export class WebhooksService {
    * Transaction.create + both Ledger writes (PAYMENT_CAPTURED, and TIP_ALLOCATED when there's a
    * tip) are one atomic transaction (LedgerService's tx param) — a crash partway through would
    * otherwise leave a Transaction with no financial trail, or a tip credited to the general
-   * TIP_PAYABLE liability with no entry ever attributing it to anyone. */
-  private async handlePaymentIntentSucceeded(event: Stripe.Event): Promise<void> {
-    const intent = event.data.object as Stripe.PaymentIntent;
+   * TIP_PAYABLE liability with no entry ever attributing it to anyone.
+   *
+   * Public (ADR-032): the real webhook is the normal caller (handlePaymentIntentSucceeded, above),
+   * but PaymentReconciliationService also calls this directly when it discovers, by actively
+   * asking Stripe, that a Payment stuck in PENDING actually succeeded and the webhook that should
+   * have told us so never arrived — self-healing, not just alerting. Takes a bare id, not a
+   * Stripe.PaymentIntent, because that's the only field this method has ever actually used from
+   * one — amount/currency/etc. all come from our OWN stored Payment row, never Stripe's copy. */
+  async captureFromPaymentIntentId(paymentIntentId: string): Promise<void> {
     const payment = await this.prisma.payment.findFirst({
-      where: { processorPaymentId: intent.id },
+      where: { processorPaymentId: paymentIntentId },
     });
     if (!payment) {
-      this.logger.warn(`payment_intent.succeeded for unknown PaymentIntent ${intent.id}`);
+      this.logger.warn(`payment_intent.succeeded for unknown PaymentIntent ${paymentIntentId}`);
       return;
     }
     if (payment.status === "SUCCEEDED") return; // defensive no-op; claimEvent already dedupes the normal case

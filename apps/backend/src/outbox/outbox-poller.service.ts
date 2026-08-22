@@ -1,9 +1,8 @@
 import { Injectable } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import type { OutboxEvent } from "@prisma/client";
 import { Interval } from "@nestjs/schedule";
 import { PinoLogger } from "nestjs-pino";
-import type { Env } from "../config/env.validation";
+import { AlertService } from "../common/alerting/alert.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 
@@ -28,7 +27,7 @@ export class OutboxPollerService {
     private readonly prisma: PrismaService,
     private readonly walletProjection: WalletProjectionService,
     private readonly logger: PinoLogger,
-    private readonly config: ConfigService<Env, true>,
+    private readonly alertService: AlertService,
   ) {
     this.logger.setContext(OutboxPollerService.name);
   }
@@ -89,7 +88,23 @@ export class OutboxPollerService {
         // (POLL_INTERVAL_MS) for as long as the event stays stuck. The log line above still fires
         // every time, unchanged, for anyone tailing logs directly.
         if (attempts === MAX_ATTEMPTS_BEFORE_ALERT) {
-          await this.sendAlert(event, attempts, err);
+          // AlertService itself never throws (it catches its own delivery failures) — this
+          // try/catch is defense in depth anyway, not redundancy: a throw here would otherwise
+          // propagate out of dispatch() entirely, and poll()'s own for-loop has no per-event
+          // try/catch, so one alert failure would abort the WHOLE batch, silently skipping every
+          // other unpublished event this cycle — found by this class's own discriminating test,
+          // not assumed safe from AlertService's current implementation.
+          try {
+            const message =
+              `Outbox Lag: OutboxEvent ${event.id} (${event.eventType}) has failed ` +
+              `${attempts} times without publishing. ${err instanceof Error ? err.message : String(err)}`;
+            await this.alertService.sendAlert(message, { eventId: event.id });
+          } catch (alertErr) {
+            this.logger.warn(
+              { eventId: event.id, alertErr },
+              "AlertService.sendAlert() itself threw",
+            );
+          }
         }
       } else {
         this.logger.warn(
@@ -97,49 +112,6 @@ export class OutboxPollerService {
           "OutboxEvent dispatch failed, will retry on next poll",
         );
       }
-    }
-  }
-
-  /** ADR-031: Outbox Lag as a real, wired alert, not only a log line a human has to be actively
-   * watching to notice — Sprint 13's own DoD ("a monitored, alertable metric from day one, not
-   * added later"). No specific alerting vendor: any endpoint that accepts a plain JSON POST works
-   * (Slack/Discord incoming webhooks both do), configured via `ALERT_WEBHOOK_URL` — unset by
-   * default, so this is inert (log-only, today's exact behavior) until the Founder wires a real
-   * channel, on their own timeline, not a boot-time requirement. Never lets a failed alert POST
-   * itself take down the poller — the Outbox recovering the actual stuck event next cycle matters
-   * more than this notification succeeding. */
-  private async sendAlert(event: OutboxEvent, attempts: number, err: unknown): Promise<void> {
-    const url = this.config.get("ALERT_WEBHOOK_URL", { infer: true });
-    if (!url) return;
-
-    try {
-      const message =
-        `Outbox Lag: OutboxEvent ${event.id} (${event.eventType}) has failed ` +
-        `${attempts} times without publishing. ${err instanceof Error ? err.message : String(err)}`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: message }),
-      });
-      if (!response.ok) {
-        this.logger.warn(
-          { eventId: event.id, status: response.status },
-          "Outbox Lag alert webhook responded with a non-2xx status",
-        );
-      } else {
-        // Explicit success log, not just the absence of a warning above — Sprint 13's own
-        // closeout needs to confirm actual delivery from logs alone, not merely that sendAlert()
-        // was invoked (ADR-031).
-        this.logger.info(
-          { eventId: event.id, status: response.status },
-          "Outbox Lag alert webhook delivered successfully",
-        );
-      }
-    } catch (alertErr) {
-      this.logger.warn(
-        { eventId: event.id, alertErr },
-        "Outbox Lag alert webhook request itself failed — the underlying OutboxEvent failure is still logged above and still retried next poll",
-      );
     }
   }
 }

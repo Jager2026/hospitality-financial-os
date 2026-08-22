@@ -24,8 +24,11 @@ import { updateMembershipSchema, type UpdateMembershipDto } from "./dto/update-m
 import { MembershipInvitationService } from "./membership-invitation.service";
 import { MembershipService } from "./membership.service";
 
-// API_Contract.md, MEMBERSHIPS.
-@Controller("memberships")
+// API_Contract.md, MEMBERSHIPS. No controller-level prefix (unlike most controllers) — same
+// reasoning as TipController: this controller owns both /memberships/... routes AND
+// /restaurants/:id/staff (ADR-033), and NestJS has no way to escape a controller-level prefix
+// per-route, so every method path is written out in full instead.
+@Controller()
 export class MembershipController {
   constructor(
     private readonly membershipService: MembershipService,
@@ -39,7 +42,7 @@ export class MembershipController {
   // permissioned-but-possibly-compromised account could otherwise flood the table with rows. 20/
   // min still comfortably covers onboarding a whole shift's worth of staff in one sitting. Revisit
   // this number once a real delivery provider exists and email-spam becomes the actual risk.
-  @Post()
+  @Post("memberships")
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission("membership.invite")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
@@ -79,26 +82,39 @@ export class MembershipController {
   // low"): an unauthenticated endpoint that does a DB lookup by email plus a hash-compare per
   // candidate is the same cost/risk shape as a login attempt, so it gets the same 10/min rather
   // than the global 100/min baseline (ADR-010).
-  @Post("invitations/accept")
+  @Post("memberships/invitations/accept")
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   acceptInvitation(@Body(new ZodValidationPipe(acceptInvitationSchema)) dto: AcceptInvitationDto) {
     return this.invitationService.accept(dto);
   }
 
-  @Get()
+  @Get("memberships")
   @UseGuards(JwtAuthGuard)
   findAll(@CurrentUser() user: AuthenticatedUser) {
     return this.membershipService.findAllForUser(user);
   }
 
-  @Get(":id")
+  // ADR-033: the terminal's own "who actually served this table" picker — every Membership
+  // reachable at this Restaurant (the same reachability rule as everywhere else, ADR-005), not
+  // filtered to any one Role. Founder decision: "кто реально обслужил стол", not "у кого
+  // RBAC-роль Waiter" — a Manager or Owner can be picked exactly like anyone else.
+  @Get("restaurants/:id/staff")
+  @UseGuards(JwtAuthGuard)
+  findStaffForRestaurant(
+    @Param("id") restaurantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.membershipService.findStaffForRestaurant(restaurantId, user);
+  }
+
+  @Get("memberships/:id")
   @UseGuards(JwtAuthGuard)
   findOne(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.membershipService.findOne(id, user);
   }
 
-  @Patch(":id")
+  @Patch("memberships/:id")
   @UseGuards(JwtAuthGuard)
   @AuditEntity("Membership")
   update(
@@ -109,7 +125,7 @@ export class MembershipController {
     return this.membershipService.update(id, dto, user);
   }
 
-  @Patch(":id/disable")
+  @Patch("memberships/:id/disable")
   @UseGuards(JwtAuthGuard)
   @AuditEntity("Membership")
   disable(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {

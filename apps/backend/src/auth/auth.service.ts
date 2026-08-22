@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import type { User } from "@prisma/client";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
+import { isPasswordBreached } from "./hibp.util";
 import type { LoginDto } from "./dto/login.schema";
 import type { RegisterDto } from "./dto/register.schema";
 import { hashPassword, verifyPassword } from "./password.util";
@@ -58,9 +59,19 @@ export class AuthService {
       throw new AppException("VALIDATION_ERROR", "Unable to register with these details.", 409);
     }
 
+    // THREAT_MODEL.md (OWASP A07:2025): only at password-SET time, never on login — the password
+    // already exists by then, and an external call on every sign-in adds latency for no benefit.
+    if (await isPasswordBreached(dto.password)) {
+      throw new AppException(
+        "PASSWORD_BREACHED",
+        "This password has appeared in a known data breach. Please choose a different one.",
+        400,
+      );
+    }
+
     const passwordHash = await hashPassword(dto.password);
     const user = await this.prisma.user.create({
-      data: { email: dto.email, passwordHash, locale: dto.locale },
+      data: { email: dto.email, displayName: dto.displayName, passwordHash, locale: dto.locale },
     });
 
     const tokens = await this.tokenService.issueTokenPair(user.id);

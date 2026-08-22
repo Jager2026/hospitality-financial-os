@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.6.0
+version: 1.7.0
 status: Active
 classification: Critical
 owner: Founder
@@ -161,6 +161,31 @@ Entries 9–15 below are Sprint 11's OWASP Top 10:2025 review (`IMPLEMENTATION_P
 
 **Closed by, as an ongoing practice with concrete evidence rather than a one-time answer:** this document's own existence and the discipline behind it — every entry above cites a real ADR that made an explicit security tradeoff *at design time*, not after an incident. Representative examples of the practice, not an exhaustive list: ADR-002's two independent layers (application check + database trigger) so no single bypass compromises the Ledger's one invariant; ADR-004's idempotency designed in before Sprint 5 had a single real caller; ADR-028's rate limits chosen by each endpoint's actual cost/abuse shape rather than one uniform number; fail-closed as the default throughout (`PermissionsGuard` throws if `request.user` is missing rather than defaulting to allow; `AllExceptionsFilter`'s fallback is a rejection, never a silent 200).
 
+## 17. A Payment stuck in PENDING because Stripe was unreachable, a bank/issuer timed out, or the confirming webhook was lost or delayed
+**Threat:** Three previously-separate "Open, Not Answered" entries, closed together because one real mechanism answers all three: "Stripe unreachable at the moment of payment," "Bank or card issuer (EMI) timeout during confirmation," and "Webhook and client-side confirmation diverging by more than the expected lag." In every one of these, the customer's own card may or may not have actually been charged, and this system has no way to find out on its own — it just waits.
+
+**Closed by:** ADR-032 Decision 5. `PaymentReconciliationService` (`@Interval`, 5 minutes) finds any `Payment` still `PENDING` after 15 minutes and asks Stripe directly what actually happened (`StripeService.retrievePaymentIntent`) — never assumed from this system's own possibly-stale copy. If Stripe confirms `succeeded`, this **self-heals**: it runs the real capture logic itself (`WebhooksService.captureFromPaymentIntentId`), exactly as if the missing webhook had arrived. If Stripe can't be reached, or genuinely still shows the payment unresolved, a human is alerted (the same `AlertService` mechanism ADR-031 built for Outbox Lag) — fired once per Payment, not every cycle. Not yet live-verified against a genuinely real Stripe outage (nothing this session could fabricate on purpose) — verified via full unit coverage of every branch (`payment-reconciliation.service.spec.ts`: self-heal, alert-without-self-heal, Stripe-unreachable, capture-failure-not-misreported-as-connectivity-failure, one payment's failure not blocking the rest of the batch) and the mechanism's own design directly mirrors the Outbox Lag alert this exact pattern already proved live in production (ADR-031).
+
+## 18. No automated, recurring check for known-vulnerable dependencies (OWASP A03:2025, Software Supply Chain Failures)
+**Threat:** As stated in the entry this closes — a new CVE against an already-installed dependency produced no signal until someone thought to run `pnpm audit` by hand.
+
+**Closed by:** ADR-032 Decision 2. CI now runs a real `Dependency vulnerability scan` step (`.github/scripts/check-audit.js`) on every PR — high/critical severity fails the build. Confirmed working both directions before merging: currently green (with 4 known, explicitly-justified, dev-tooling-only advisories ignored by id), and confirmed to genuinely fail when a covered advisory is *not* in the ignore list.
+
+## 19. No breached-password check at registration (OWASP A07:2025, Authentication Failures)
+**Threat:** Half of the original combined entry ("no MFA and no breached-password check") — a user could pick a password already known to be in a public breach corpus, with no way for this system to know. The MFA half is **not** closed by this — see the Open, Not Answered entry below, which now stands on its own.
+
+**Closed by:** ADR-032 Decision 4. `hibp.util.ts` checks the HaveIBeenPwned k-anonymity range API (only a 5-character hash prefix ever leaves this process) at both places a password is actually set — `AuthService.register()` and `MembershipInvitationService.accept()`'s new-user branch. Fails open on any HIBP API error — a third-party outage must never block registration.
+
+## 20. Waiter Role (as seeded) cannot itself hold `payments.manage`, so cannot be the tip recipient ADR-022 assigns by construction
+**Threat:** As stated in the entry this closes — nobody holding the seeded Waiter Role could ever be a tip's recipient through the real, permission-checked HTTP path, contradicting `MASTERPLAN.md`'s own User Journey.
+
+**Closed by:** ADR-033. Tip recipiency is now an explicit terminal selection (`Payment.waiterMembershipId`, validated, any reachable Membership regardless of Role), independent of who is authenticated and calling `POST /payments`. `AuditLogInterceptor` records both the logged-in caller and the selected recipient as two independent facts, verified by a real dual-identity test using two genuinely different people (`payment.controller.spec.ts`), not the same person read twice under two names.
+
+## 21. `IdempotencyInterceptor`'s check-then-act is a real race window, not yet closed
+**Threat:** As stated in the entry this closes — a genuinely unlucky concurrent-request interleaving could surface as a raw, unhandled `500` instead of the intended `409 IDEMPOTENCY_KEY_CONFLICT`.
+
+**Closed by:** ADR-032 Decision 3. The `create()` call inside `intercept()`'s `!existing` branch is now wrapped in a `catchError` that maps a real Postgres unique-constraint violation (`Prisma.PrismaClientKnownRequestError`, `code === "P2002"`) to the same controlled `409` — closed architecturally, not merely "not observed to fail" under one load-test run. Verified by forcing the exact race deterministically (`idempotency.interceptor.spec.ts`: pre-create the winning row directly, then stub `findUnique()` to still return `null`, so this request's own `create()` hits the real constraint on every single run), not by relying on `Promise.all` timing luck.
+
 ---
 
 # Accepted Risk (Not Closed — Deliberately Left Open)
@@ -176,36 +201,22 @@ This is listed here, separately from the Closed Threats above, on purpose: it is
 
 # Open, Not Answered
 
-Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet. Listed honestly rather than filled in with a guess, per the Founder's own instruction. Each becomes answerable at Sprint 5 (Payments & Ledger, `IMPLEMENTATION_PLAN.md`) — the sprint where a real Payment Intent, a real Stripe webhook handler, and the first real `LedgerService` caller are actually built.
+Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet, or the answer depends on a decision outside this codebase entirely. Listed honestly rather than filled in with a guess, per the Founder's own instruction.
 
-## Stripe unreachable at the moment of payment
-What the terminal shows the customer, what state the `Payment` row ends up in, and whether/how the flow retries — all depend on the real Payment Intent + webhook code that Sprint 5 builds. No answer exists today because there is no `POST /payments` handler to have an answer.
-
-## Bank or card issuer (EMI) timeout during confirmation
-Distinct from Stripe itself being down: Stripe is reachable, but the customer's own bank or e-money issuer doesn't respond to the authorization request in time. Whether this surfaces as `Payment.status = FAILED` (ADR-018 already has the state for it) versus something needing its own handling depends on Sprint 5's actual webhook-handling code, not written yet.
-
-## Webhook and client-side confirmation diverging by more than the expected lag
-ADR-015 already establishes the *normal* case: the customer's receipt shows immediately (client-side), the Ledger write happens asynchronously via webhook a moment later — an intended, short eventual-consistency gap, not a defect. Genuinely open: what happens if that gap grows far past normal (webhook lost, delayed by Stripe, or never arrives at all) — does the customer's receipt ever get contradicted, does staff get an alert, is there a reconciliation sweep. ADR-015 answers the expected case; it does not answer the pathological one, and no code answers it either yet.
+The two entries below are grouped together deliberately (Sprint 13, ADR-032 Decision 1): both are economically real, and both are genuinely blocked on the same not-yet-built feature — `Withdrawal`/`Settlement` (`DATABASE.md`, Future Entities) — rather than on missing analysis.
 
 ## PROCESSOR_CLEARING is never reversed by a refund or a chargeback
-Neither `handleChargeRefunded` (ADR-008, revised by ADR-023) nor `handleDisputeCreated`/`handleDisputeClosed` (ADR-016) ever posts a compensating line against `PROCESSOR_CLEARING` — only `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and (for refunds, as of ADR-023) `TIP_PAYABLE` are reversed. Older than Sprint 6 and not tip-specific — noticed while fixing ADR-023's fee/tip gap, not caused by it. Not blocking; a separate decision, deliberately not folded into ADR-023.
+Neither `handleChargeRefunded` (ADR-008, revised by ADR-023) nor `handleDisputeCreated`/`handleDisputeClosed` (ADR-016) ever posts a compensating line against `PROCESSOR_CLEARING` — only `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE`, and (for refunds, as of ADR-023) `TIP_PAYABLE` are reversed. Investigated in depth for Sprint 13 (ADR-032 Decision 1), not fixed: reversing it now would either break historical consistency across every refund/chargeback already posted (replacing `REFUND_CONTRA`) or record the same fact twice via a redundant parallel account-pair (adding a new account alongside `REFUND_CONTRA`) — and nothing in the system reads `PROCESSOR_CLEARING`'s post-refund balance for anything today, since `Withdrawal` doesn't exist yet. **The future-correct shape is recorded in ADR-032 Decision 1 for whenever `Withdrawal` is designed:** a new `PROCESSOR_CLEARING_CONTRA` contra-asset account (additive, touches no existing row), not a replacement of `REFUND_CONTRA`.
 
 ## A Wallet's "Available" balance can still be clawed back after the fact
 ADR-023 already makes `TIP_PAYABLE` reversible — a chargeback opened after a tip was allocated debits the waiter's own credit line back out, and `WalletProjectionService` (ADR-024, Sprint 7) would correctly recompute a lower balance the next time it runs. Not a bug: the projection is doing exactly what it's supposed to, deriving the truth from the Ledger. The open question is what "Available" is allowed to promise the person looking at it — today nothing can be withdrawn at all (`Withdrawal` doesn't exist, ADR-024 Decision 2), so a number labeled "Available" that could still shrink tomorrow is not yet a real-money risk, only a display one. It becomes a real one the moment `Withdrawal` ships: money genuinely paid out against an "Available" balance that a later chargeback then reverses is a real loss with no obvious owner (the waiter already has the cash; does the restaurant eat it, does the platform, is there a clawback mechanism at all). Must be answered as part of designing `Withdrawal`, not discovered after it ships.
 
 ---
 
-The two entries below are Sprint 11's own honest OWASP Top 10:2025 findings (`IMPLEMENTATION_PLAN.md`) — genuinely unanswered for reasons distinct from the five above (those wait on Sprint 5-era code that now exists; these wait on a recurring process and a Sprint 13 deployment surface, neither built yet).
+## No multi-factor authentication (OWASP A07:2025, Authentication Failures)
+**What exists:** the brute-force/credential-stuffing threat itself is closed (Closed Threats #4–#5) — rate limiting, refresh-token rotation with reuse detection, account-status enforcement on every request. Password policy requires a minimum of 8 characters with no forced complexity rule, the current NIST 800-63B-recommended shape. The breached-password half of what was originally one combined entry here is now separately closed — Closed Threats #19 (ADR-032 Decision 4).
 
-## No automated, recurring check for known-vulnerable dependencies (OWASP A03:2025, Software Supply Chain Failures)
-**What exists:** `pnpm-lock.yaml` is committed and CI installs with `--frozen-lockfile` (`.github/workflows/ci.yml`) — a real, working guard against silent dependency substitution or drift between what was reviewed and what actually gets installed. `pnpm audit` has been run and acted on manually at least once (the `sharp` GHSA-f88m-g3jw-g9cj fix, `pnpm.overrides`) — a real closed instance, not a hypothetical.
-
-**What's genuinely missing:** none of that is a recurring, automated gate. A new CVE disclosed against an already-installed dependency produces no signal at all until someone thinks to run `pnpm audit` by hand again — no CI step, no Dependabot/Renovate equivalent. Becomes answerable when CI gains its own dependency-audit step (or an equivalent scheduled job) with an explicit severity threshold for what fails a build versus what's merely logged — not decided yet, and guessing a threshold now would be exactly the kind of unforced assumption this document exists to avoid.
-
-## No multi-factor authentication and no breached-password check (OWASP A07:2025, Authentication Failures)
-**What exists:** the brute-force/credential-stuffing threat itself is closed (Closed Threats #4–#5) — rate limiting, refresh-token rotation with reuse detection, account-status enforcement on every request (`JwtAuthGuard` re-checks `deletedAt`/`status` from the database on every call, never trusts a stale JWT claim). Password policy requires a minimum of 8 characters (`register.schema.ts`) with no forced complexity rule, which is the current NIST 800-63B-recommended shape, not an oversight.
-
-**What's genuinely missing:** no second factor of any kind, and no check against a known-breached-password list (e.g., a Have I Been Pwned-style k-anonymity lookup) at registration or login — a user can pick a password that appears in a public breach corpus and the system has no way to know. Neither has ever been the subject of an explicit Founder decision to defer (unlike the Redis-flush risk in Accepted Risk above, which was); listed here as genuinely open, not assumed acceptable, until it is one.
+**What's genuinely missing:** no second factor of any kind. Sprint 13 (ADR-032/ADR-033) deliberately did not attempt this — the Founder's own instruction was explicit: MFA is a large, standalone feature, not a point fix alongside five narrower ones, and is tracked separately in `IMPLEMENTATION_PLAN.md`'s Deferred/Not-Yet-Scheduled backlog rather than attempted here.
 
 ---
 
@@ -215,20 +226,6 @@ The entry below is a different kind of open item from every one above it — not
 **What exists:** none — this is not a code gap. It is a legal-classification question this document cannot answer and no line of code can decide on the platform's behalf.
 
 **What's genuinely missing:** whether a waiter receiving tips through this platform is, for GPM purposes, an employee of the restaurant, self-employed, or something else is undecided — and that classification determines the applicable rate, the legal basis for any tax treatment, and who (if anyone) is the tax agent. This blocks two distinct things, not one: actually computing an estimated tax figure, and merely *displaying* one next to the existing gross/net tip amounts (`MASTERPLAN.md`, "Pilot-Ready Product," ADR-029 Decision 2). Becomes answerable only when the Founder has a written answer from a Lithuanian tax/payroll consultant — not a development task, and not something this codebase's own code can close by itself.
-
----
-
-The two entries below are genuine code/data gaps found while building Sprint 12's own testing (ADR-030) — the E2E test and the load test each drove a real path for the first time and surfaced something no prior test had occasion to see.
-
-## Waiter Role (as seeded) cannot itself hold `payments.manage`, so cannot be the tip recipient ADR-022 assigns by construction
-**What exists:** ADR-022's own mechanism is deliberate and correct on its own terms: whichever Membership holds `payments.manage` and actually calls `POST /payments` is the tip's recipient — *"the person operating the payment terminal for this transaction... by construction. No separate terminal-to-waiter or table-to-waiter attribution mechanism is introduced."* Confirmed live for the first time by `critical-flow.e2e.spec.ts` (Sprint 12): the E2E flow had to invite a Manager, not a Waiter, specifically because `prisma/seed.ts`'s real seeded Waiter Role carries zero Permissions.
-
-**What's genuinely missing:** `MASTERPLAN.md`'s own User Journey names the Waiter specifically as the one who "Receives Tips" through this exact flow, and the product's narrative throughout assumes a literal Waiter operates the terminal — but no Membership holding the seeded Waiter Role can pass `PermissionsGuard`'s own `payments.manage` check today, so nobody holding it can ever be the tip's recipient through the real, permission-checked HTTP path. Not a bug in ADR-022's own mechanism, and not yet a real-money problem (Manager/Owner/Administrator all correctly receive tips when they themselves process a payment) — but a real mismatch between what the product says a Waiter does and what the current seed data actually lets one do. Becomes answerable by an explicit decision: either `payments.manage` belongs on Waiter after all, or tip-recipiency needs its own separate assignment mechanism (a terminal-to-waiter or table-to-waiter link) that ADR-022 deliberately chose not to build. Not decided yet — this entry exists so it isn't decided by accident.
-
-## `IdempotencyInterceptor`'s check-then-act is a real race window, not yet closed
-**What exists:** the database's own unique constraint on `IdempotencyKey.key` is a real backstop, not merely a hoped-for one — Sprint 12's load test (`test/load/payment-ledger.load.spec.ts`) fired 15 truly concurrent requests sharing one Idempotency-Key and got a clean split (one `201`, fourteen `409`s), never more than one `Payment` row, confirmed directly against the database, not inferred from the HTTP responses alone.
-
-**What's genuinely missing:** that clean split is what this particular run happened to produce, not a guarantee the code itself makes. `IdempotencyInterceptor.intercept` does `findUnique` then `create` — a check-then-act, not one atomic `upsert` — so two requests landing close enough together can both see "no existing key" before either has written its own row; the database's constraint then rejects the loser's `create()`, but that specific rejection is never caught or mapped, so a genuinely unlucky interleaving would surface as a raw, unhandled `500` instead of the clean `409 IDEMPOTENCY_KEY_CONFLICT` a sequential replay already gets. Observed as absent this run, not proven absent in general. Becomes answerable by either catching the `create()`'s own unique-constraint violation and mapping it to the same `409`, or an atomic `upsert`-shaped rewrite of the whole check — a real, narrowly-scoped fix, not yet built and not yet the subject of an explicit Founder decision to defer.
 
 ---
 

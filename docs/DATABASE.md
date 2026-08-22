@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.9.0
+version: 2.10.0
 status: Active
 classification: Internal
 owner: Founder
@@ -81,11 +81,11 @@ User
 ############################################################
 **Purpose:** Authentication identity.
 
-**Fields:** id, email, password_hash, email_verified, two_factor_enabled, locale, last_login, status, created_at, updated_at
+**Fields:** id, email, display_name, password_hash, email_verified, two_factor_enabled, locale, last_login, status, created_at, updated_at
 
 **Relationships:** User → many Membership (across Organizations and Restaurants)
 
-**Rules:** Email unique. Passwords never stored in plaintext or logged. A User with zero Memberships is valid (mid-invitation). `locale` is the language this person sees the Restaurant Portal or Waiter Portal in — English or Lithuanian at MVP (ADR-013).
+**Rules:** Email unique. Passwords never stored in plaintext or logged. A User with zero Memberships is valid (mid-invitation). `locale` is the language this person sees the Restaurant Portal or Waiter Portal in — English or Lithuanian at MVP (ADR-013). `display_name` (ADR-033, Sprint 13): required, set at registration or invitation-accept — the name the terminal's own staff-selection picker shows; before this, `User` had no name field at all. Required rather than nullable because production had zero real `User` rows at the moment this field was added (confirmed directly, not assumed) — nothing to backfill.
 
 ---
 
@@ -181,11 +181,11 @@ Payment
 
 **Fields:** id, restaurant_id, processor, processor_payment_id, amount, tip_amount, waiter_membership_id (nullable), currency, status, payment_method, idempotency_key, created_at, updated_at
 
-**Relationships:** Payment → Restaurant · Payment → one Transaction (on success) · Payment → IdempotencyKey · Payment → Membership (`waiter_membership_id`, nullable — the caller who created this Payment, ADR-022)
+**Relationships:** Payment → Restaurant · Payment → one Transaction (on success) · Payment → IdempotencyKey · Payment → Membership (`waiter_membership_id`, nullable — the explicitly-selected tip recipient, ADR-033; not necessarily the caller — see Tip fields below)
 
 **Rules:** Immutable once created, with one exception (ADR-018): `status` transitions exactly once, from `pending` to a terminal state — `succeeded` / `failed` / `canceled` / `declined` — recorded via `updated_at`. `failed` (processing error or timeout) and `declined` (card issuer rejected the charge) are distinct states, since MASTERPLAN.md's Fraud Prevention treats repeated failures as a signal. Every other field — `amount`, `tip_amount`, `waiter_membership_id`, `restaurant_id`, `processor`, `processor_payment_id`, `currency`, `payment_method`, `idempotency_key` — never changes after creation. `idempotency_key` must reference a row in `IdempotencyKey` (ADR-004) — every Payment-creating request must supply one.
 
-**Tip fields (ADR-022):** `amount` is the full amount charged to the card — bill and tip combined, matching the single "Card Payment" step in UX_MAP.md's Payment Flow — never split into two client-facing fields. `tip_amount` is the caller-submitted tip portion of it (`tip_amount <= amount`, validated at request time); `amount - tip_amount` is the bill-only amount every platform-fee computation must use (ADR-021: fee excludes tips). `waiter_membership_id` is captured automatically from the authenticated caller's own Membership at creation time — the same Membership that grants them `payments.manage` reachability to the Restaurant — never a separate terminal/table/waiter-assignment step. Always populated, whether or not `tip_amount` is nonzero; only read when it is.
+**Tip fields (ADR-022, revised ADR-033):** `amount` is the full amount charged to the card — bill and tip combined, matching the single "Card Payment" step in UX_MAP.md's Payment Flow — never split into two client-facing fields. `tip_amount` is the caller-submitted tip portion of it (`tip_amount <= amount`, validated at request time); `amount - tip_amount` is the bill-only amount every platform-fee computation must use (ADR-021: fee excludes tips). `waiter_membership_id` (ADR-033, Sprint 13) is an explicit terminal selection — "who actually served this table" — validated as a real, `ACTIVE`, reachable Membership at the Restaurant, with no Role restriction (any staff member, not only one holding a Waiter Role). No longer derived from the authenticated caller (ADR-022's original mechanism) — the caller and the tip recipient are two independently tracked facts now (`AuditLog` records both, ADR-033 Decision 4). Required when `tip_amount > 0` (enforced at the request boundary, before Stripe is ever called); `null` when `tip_amount` is 0 — nobody to attribute.
 
 ---
 

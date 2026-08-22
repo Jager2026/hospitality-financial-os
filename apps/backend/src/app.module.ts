@@ -24,6 +24,7 @@ import { WalletModule } from "./wallet/wallet.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
+import { PaymentReconciliationModule } from "./payment-reconciliation/payment-reconciliation.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { AuditEntityResolverGuard } from "./common/guards/audit-entity-resolver.guard";
 import { ResponseInterceptor } from "./common/interceptors/response.interceptor";
@@ -68,6 +69,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     DashboardModule,
     AnalyticsModule,
     WebhooksModule,
+    PaymentReconciliationModule,
   ],
   providers: [
     // Must run before ThrottlerGuard (registration order = execution order among global guards)

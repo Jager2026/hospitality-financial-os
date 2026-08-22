@@ -51,6 +51,7 @@ describe("WalletService (real database)", () => {
     const user = await prisma.user.create({
       data: {
         email: `member-${randomUUID()}@example.com`,
+        displayName: "Test Member",
         passwordHash: "not-a-real-hash",
         locale: "en",
       },
