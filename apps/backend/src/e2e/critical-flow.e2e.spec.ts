@@ -137,14 +137,12 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
     const ownerPassword = "correct horse battery staple";
 
     // 1. Register
-    const registerRes = await request(app.getHttpServer())
-      .post("/api/v1/auth/register")
-      .send({
-        email: ownerEmail,
-        password: ownerPassword,
-        displayName: "Test Owner",
-        locale: "en",
-      });
+    const registerRes = await request(app.getHttpServer()).post("/api/v1/auth/register").send({
+      email: ownerEmail,
+      password: ownerPassword,
+      displayName: "Test Owner",
+      locale: "en",
+    });
     expect(registerRes.status).toBe(201);
     expect(registerRes.body.data.accessToken).toBeTruthy();
 
