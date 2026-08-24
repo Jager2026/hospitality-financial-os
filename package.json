@@ -19,7 +19,10 @@
     "prisma:generate": "pnpm --filter backend run prisma:generate",
     "prisma:validate": "pnpm --filter backend run prisma:validate",
     "prisma:migrate:deploy": "pnpm --filter backend run prisma:migrate:deploy",
-    "db:reset": "pnpm --filter backend run db:reset"
+    "db:reset": "pnpm --filter backend run db:reset",
+    "preflight:deploy": "node scripts/preflight-deploy.js",
+    "deploy:backend": "pnpm run preflight:deploy && railway up --service backend --detach",
+    "deploy:frontend": "pnpm run preflight:deploy && railway up --service frontend --detach"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",
