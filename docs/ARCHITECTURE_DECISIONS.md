@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.19.0
-status: Active — thirty-four ADRs, all Accepted
+version: 1.20.0
+status: Active — thirty-five ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -620,6 +620,46 @@ Two separate files rather than one, because both services deliberately run with 
 **Known limitation, stated rather than papered over: `rootDirectory` cannot be expressed in the config file at all** — confirmed against Railway's own published schema (`railway.schema.json`), not assumed. It determines *where the config file is read from*, so it is necessarily a service-level setting. This means ADR-031's single hardest-won finding — that `rootDirectory` must be `""` and that `null` does not clear it — is the one thing config-as-code cannot protect. It stays recoverable only from ADR-031's own text.
 
 **Consequences:** `docker/docker-compose.yml` (image, mount path, and an obsolete `version:` attribute removed — it emitted a deprecation warning on every invocation) and `.github/workflows/ci.yml` both on `postgres:18`. New `railway.backend.json` / `railway.frontend.json`. No `schema.prisma` change and no application-code change of any kind — this ADR moves no logic, it aligns environments and records configuration. Production backups themselves remain a separate, open item: this ADR came out of that investigation but does not close it.
+
+---
+
+## ADR-035 — Staging Environment: Shape Decided Now, Built Later; Production Data May Never Be Copied Into It
+**Status:** Accepted (Founder decision) — decision recorded, implementation deliberately deferred (`IMPLEMENTATION_PLAN.md`, Deferred/Not-Yet-Scheduled)
+
+**Context:** Surfaced while investigating production backups (ADR-034's own investigation), not as a planned item: the project has exactly one Railway environment, `production` (confirmed by API — `environments` returns a single node). Everything that is not a developer's local machine *is* live production. That single fact is the common root of several things this project has already been doing and quietly tolerating: opening an SSH tunnel into the production database to verify Outbox alerting, creating throwaway test restaurants and users in the real production database, seeding production reference data by hand, and — found in the same investigation — having nowhere at all to rehearse a database restore.
+
+This is tolerable *today* for exactly one reason, and it is worth naming precisely so nobody mistakes it for a design property: there are no customers. The production database contains no real person's data and no real money. The moment the first pilot restaurant is onboarded, every one of those same activities becomes an intervention in a database holding someone else's money — the same actions, unchanged, become unacceptable.
+
+**Decision 1 — a separate Railway *environment* within the existing project, not a separate project.** Railway's model, read from the API rather than marketing material: a `serviceInstance` is addressed by the pair `(serviceId, environmentId)`, and a volume carries per-environment `volumeInstances`. Services are therefore defined at project level while their configuration *and their data* are scoped per environment — a second environment gets its own volumes, its own database, its own Redis. A separate *project* would give the same data isolation at the cost of duplicated secret management and a second place to keep configuration in sync. A separate environment keeps one console, one repository, one config-as-code source (ADR-034). Revisit only if access control ever needs to differ between the two (e.g. granting someone staging without production) — that is the one requirement a shared project cannot satisfy.
+
+**Decision 2 — production data may never be copied into staging. This is a prohibition, not a preference.** Staging is seeded synthetically. A production dump restored into staging is forbidden outright — not "discouraged," not "avoid if convenient," and not satisfied by anonymisation-in-passing. **Recorded here explicitly so that a future reader cannot mistake it for a stylistic choice made for convenience:** staging is, by construction, the environment with weaker access control, looser operational discipline, and more people touching it. Copying real customers' personal and financial records into it is a real transfer of real people's data into a less protected system. That reasoning does not weaken as the project matures — it strengthens, because the data gets more valuable. GDPR is the legal name for this, but the reason stands without it.
+
+The honest consequence, stated rather than glossed: a synthetic seed proves less than real data would. Volume-shaped bugs and data-shaped edge cases will not appear in staging. That cost is accepted deliberately, and it is the correct trade — a staging environment that leaks customer data is a worse outcome than a staging environment that catches fewer bugs.
+
+**Decision 3 — what is strictly separate, what is shared, and why.**
+
+| Strictly separate | Shared with production |
+|---|---|
+| Postgres, Redis, and their volumes | The git repository |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Build configuration (`railway.backend.json` / `railway.frontend.json`, ADR-034) |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Container images / build pipeline |
+| `ALERT_WEBHOOK_URL` | |
+| `CORS_ORIGIN` | |
+| Public domain | |
+
+**Decision 4 — a separate Stripe sandbox, not a shared one.** The shared option is cheaper in setup and worse in practice: staging's test connected accounts and webhook traffic would interleave with the very sandbox whose `invalid_v2_key` failure this project is actively diagnosing with Stripe support. Sharing would make that diagnosis harder, not easier. A second sandbox means a second `STRIPE_SECRET_KEY`, a second webhook endpoint, and a second signing secret — accepted.
+
+**Decision 5 — JWT secrets are strictly separate, and this one is not a trade-off at all.** A shared signing secret means a token minted in staging authenticates against production. That is not a convenience with a downside; it is an authentication bypass with extra steps.
+
+**Decision 6 — `*.up.railway.app` for now; no `staging.plaintabs.com`.** Railway's generated domain is sufficient and free. A custom subdomain would make staging publicly addressable and discoverable for no benefit anyone can currently name. Revisit when there is a concrete reason, not preemptively.
+
+**Decision 7 — a separate alerting channel.** Staging noise delivered into the production alert channel does not merely annoy: it trains whoever reads that channel to ignore it, and the failure that causes is invisible until the day a real production alert is scrolled past. `ALERT_WEBHOOK_URL` (ADR-031) points somewhere else in staging.
+
+**Decision 8 — `CORS_ORIGIN` is staging's own frontend origin**, following ADR-028's own rule that this is never silently defaulted.
+
+**Why this is decided now but built later.** Not cost: the entire production stack (four services, two volumes) bills at roughly **$1.83/month** at current near-zero traffic — a duplicated idle environment is a rounding error, and it would be dishonest to present money as the reason. The real reasons are two: **it is blocked**, since Decision 4 requires a second Stripe sandbox and Stripe integration is currently non-functional against `invalid_v2_key`, so half of staging could not be exercised even if it existed; and **it is premature**, because staging's whole purpose is to stop us from touching a database holding customer data, and there is no customer data yet. Deferred with a named trigger rather than a vague intention — see `IMPLEMENTATION_PLAN.md`.
+
+**Consequences:** No infrastructure created, no environment provisioned, no cost incurred by this ADR. `IMPLEMENTATION_PLAN.md` gains the deferred entry and its trigger. The prohibition in Decision 2 is binding from the moment staging exists, not from the moment someone remembers it. ADR-034's config-as-code work is a direct prerequisite that already landed: it is what keeps a future staging environment from silently drifting away from production's build configuration.
 
 ---
 
