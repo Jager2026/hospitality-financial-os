@@ -44,7 +44,10 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        # ADR-034: same major as production (Railway, 18.x) and as docker/docker-compose.yml.
+        # CI is where migrations are actually proven to apply — proving that against a different
+        # major than production runs is proving the wrong thing. Keep these three in lockstep.
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
