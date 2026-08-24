@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.5.0
+version: 2.6.0
 status: Active
 classification: Critical
 priority: Highest
@@ -244,6 +244,10 @@ Dependency-audit findings that require a major-version bump are never mixed into
 - **Prisma 5→7.** Two majors at once (5→6, 6→7) — flagged during the pre-Sprint-10 dependency audit, deliberately not bundled into Sprint 11 (rate-limit tuning and Prisma's own breaking changes shouldn't compete for review attention in the same PR). Needs its own scoped plan before it gets a Sprint.
 - **vitest 2→3.** Flagged the same audit pass. Not yet assigned to a Sprint. Newly relevant as of Sprint 13 (ADR-032): this is the actual fix for the 4 high/critical `pnpm audit` advisories CI's new dependency-scan step currently ignores by explicit id (`check-audit.js`) — all four are in the `vitest@2.1.9` dependency chain (`vite`/`nanoid`/`glob`), all dev-only.
 - **Multi-factor authentication.** Sprint 13 (ADR-032/ADR-033) closed the breached-password half of `THREAT_MODEL.md`'s combined "no MFA and no breached-password check" entry, deliberately leaving MFA itself untouched — Founder's own explicit instruction: a large, standalone feature, not a point fix alongside five narrower ones. Needs its own scoped plan (which factor(s), enrollment/recovery UX, whether it's mandatory or opt-in per Role) before it gets a Sprint.
+
+Not a dependency upgrade, but deferred by the same rule — an explicit decision with a named trigger, so it stays recoverable from this document rather than only from chat history:
+
+- **Off-platform database backup.** Every backup mechanism available today (Railway PITR, volume snapshots, the volume itself) lives inside Railway. Together they protect against disk failure and against our own mistakes, but not against losing access to the Railway account itself. For a system whose whole premise is an authoritative financial Ledger, one copy outside the platform is the reasonable end state. **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The reason to defer is honest and time-bound — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how the restore is rehearsed). The moment real money moves through it, that calculus inverts. Founder decision, taken with the in-platform backup gap found and reported alongside it (ADR-034's own context).
 
 ---
 

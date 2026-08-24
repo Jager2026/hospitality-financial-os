@@ -1,8 +1,13 @@
-version: "3.9"
-
 services:
   postgres:
-    image: postgres:16
+    # ADR-034: must stay on the same MAJOR version as production (Railway, 18.x — confirmed from
+    # the production server's own startup log, not assumed). Major versions are not data-format
+    # compatible, so a mismatch here means every migration and every test validates against a
+    # different engine than the one holding the real Ledger. Major-only tag (not 18.6) is
+    # deliberate: minor versions within a major are format-compatible, so tracking 18.x is fine —
+    # it's the major that must never drift. Changing this line requires `pnpm db:reset`, since an
+    # existing PGDATA directory from another major will not start under a new one.
+    image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_USER: hospitality
@@ -11,7 +16,14 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # ADR-034: mount point is /var/lib/postgresql, NOT /var/lib/postgresql/data — the postgres
+      # Docker image changed this convention in 18+. From 18 on, the image stores data in a
+      # major-version-specific subdirectory (so `pg_upgrade --link` can work across a single mount
+      # boundary), and a volume mounted at the old .../data path is detected as a foreign data
+      # directory: the container refuses to start with "there appears to be PostgreSQL data in:
+      # /var/lib/postgresql/data (unused mount/volume)". Found by actually running the upgrade,
+      # not from the changelog — the 16→18 bump crash-looped on the first `up` until this changed.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hospitality"]
       interval: 5s
