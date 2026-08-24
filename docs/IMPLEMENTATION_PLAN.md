@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.6.0
+version: 2.7.0
 status: Active
 classification: Critical
 priority: Highest
@@ -246,6 +246,8 @@ Dependency-audit findings that require a major-version bump are never mixed into
 - **Multi-factor authentication.** Sprint 13 (ADR-032/ADR-033) closed the breached-password half of `THREAT_MODEL.md`'s combined "no MFA and no breached-password check" entry, deliberately leaving MFA itself untouched — Founder's own explicit instruction: a large, standalone feature, not a point fix alongside five narrower ones. Needs its own scoped plan (which factor(s), enrollment/recovery UX, whether it's mandatory or opt-in per Role) before it gets a Sprint.
 
 Not a dependency upgrade, but deferred by the same rule — an explicit decision with a named trigger, so it stays recoverable from this document rather than only from chat history:
+
+- **Staging environment (ADR-035).** The project has exactly one Railway environment: `production`. Everything that is not a developer's laptop is live production — which is the shared root of tunnelling into the production database to verify alerting, creating throwaway test restaurants in it, and having nowhere to rehearse a restore. Its full shape is already decided (ADR-035: separate Railway environment, separate Stripe sandbox, separate JWT/webhook secrets, separate alert channel, synthetic seed with production dumps **prohibited**), so this is scheduling, not design. **Deferred with the same trigger: before the first real pilot restaurant is onboarded.** Deferred for two specific reasons, neither of which is cost — the entire production stack currently bills around $1.83/month, so a duplicated idle environment is a rounding error. It is **blocked**: ADR-035 requires a second Stripe sandbox, and Stripe integration is currently non-functional (`invalid_v2_key`, open with Stripe support), so half of staging could not be exercised even if it existed. And it is **premature**: staging exists to stop us touching a database holding customer data, and there is no customer data yet. That second reason expires exactly when the trigger fires.
 
 - **Off-platform database backup.** Every backup mechanism available today (Railway PITR, volume snapshots, the volume itself) lives inside Railway. Together they protect against disk failure and against our own mistakes, but not against losing access to the Railway account itself. For a system whose whole premise is an authoritative financial Ledger, one copy outside the platform is the reasonable end state. **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The reason to defer is honest and time-bound — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how the restore is rehearsed). The moment real money moves through it, that calculus inverts. Founder decision, taken with the in-platform backup gap found and reported alongside it (ADR-034's own context).
 
