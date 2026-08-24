@@ -7,6 +7,7 @@
   "deploy": {
     "startCommand": "pnpm --filter backend run start",
     "preDeployCommand": ["pnpm --filter backend run prisma:migrate:deploy"],
-    "restartPolicyType": "ON_FAILURE"
+    "restartPolicyType": "ON_FAILURE",
+    "healthcheckPath": "/health"
   }
 }
