@@ -11,15 +11,17 @@
 //
 // Each entry here needs its own real justification, not just "it's noisy" — see the comment next
 // to it. Revisit this list whenever `pnpm audit` output changes or the underlying package upgrades.
+//
+// EMPTY, and that is the point (ADR-037). This list previously carried four entries — all four in
+// the vitest 2.1.9 dependency chain, every one justified as dev-only-and-not-exploitable-here.
+// They are gone now because the underlying packages were actually upgraded rather than
+// permanently excused: vitest 2 -> 3 removed the critical one outright, and `pnpm.overrides`
+// pulled vite/glob/nanoid up to their patched versions. An ignore list is a promise to come back,
+// not a place to file things forever; keeping it empty is what makes the gate mean something.
+// Adding an entry here again should feel like a decision, not a reflex.
 const { execSync } = require("node:child_process");
 
-const IGNORED_ADVISORIES = {
-  "GHSA-5xrq-8626-4rwp":
-    "vitest UI server arbitrary file read — this project never starts `vitest --ui`",
-  "GHSA-5j98-mcp5-4vw2": "glob CLI command injection — CLI usage, not invoked by this project",
-  "GHSA-fx2h-pf6j-xcff": "vite server.fs.deny bypass — dev-only test tooling, not the served app",
-  "GHSA-2v37-7h3g-55p8": "nanoid infinite loop on size=0 — not how this project calls it",
-};
+const IGNORED_ADVISORIES = {};
 
 function runAudit() {
   try {

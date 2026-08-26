@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.21.0
-status: Active — thirty-six ADRs, all Accepted
+version: 1.22.0
+status: Active — thirty-seven ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -689,6 +689,32 @@ Stated honestly rather than glossed: the hatch remains bypassable by calling `ra
 **What the reconnect did and did not do automatically:** connecting the repository through the Dashboard created a deployment trigger for `backend` on its own — but with `checkSuites: false`, which would have let a deploy race its own CI run. Updated to `true` via `deploymentTriggerUpdate`. `frontend` received **no** trigger from the UI flow at all and needed one created explicitly (`deploymentTriggerCreate`, also `checkSuites: true`) — which the API accepted without further manual action, confirming the GitHub connection was genuinely repaired rather than merely appearing so for the one service that had been reconnected by hand.
 
 **Consequences:** Both services deploy from `main` on push, gated on CI. `railway up` remains available and gated by the preflight script. `frontend`, which had been stuck on commit `eb6710a` from 16 August because nothing had redeployed it since, catches up on the first triggered deploy — and its `railway.frontend.json` gets resolved for the first time, closing the config-as-code verification left open in ADR-034. **One limitation is explicitly not claimed as verified:** that a deploy genuinely *waits* for a green check suite could only be proven by deliberately pushing a red CI run to `main`, which would mean holding the main branch broken against a live production service with no staging environment (ADR-035, deferred). The flag is confirmed set to `true`; the waiting behaviour itself is trusted from Railway's own documented semantics and remains unverified by this project. Stated as an open gap rather than folded into the verified results.
+
+---
+
+## ADR-037 — vitest 2→3, and Emptying the Audit Ignore List Rather Than Re-Justifying It
+**Status:** Accepted (Founder decision)
+
+**Context:** ADR-032 Decision 2 added a real CI dependency-scan gate, and in the same breath had to excuse four high/critical advisories to make it pass — all four in the `vitest@2.1.9` chain (`vite`, `nanoid`, `glob`, plus a critical one in vitest's own UI server), each with a genuine dev-only justification written next to it in `.github/scripts/check-audit.js`. That was the honest thing to do at the time, and it was explicitly recorded as temporary: the real fix was a vitest major upgrade, deferred to `IMPLEMENTATION_PLAN.md` because a test-tooling major is separate, possibly config-breaking work that should not ride along inside another sprint's PR.
+
+The risk worth naming: an ignore list is a promise to come back. Left alone, it quietly becomes permanent, and the gate around it becomes decoration — everyone learns that the scan "always has those four" and stops reading its output. The purpose of this task was therefore never "upgrade vitest"; it was **empty the list**.
+
+**Decision 1 — vitest 2.1.9 → 3.2.7, not 4.x.** vitest 4 exists (4.1.11), but 2→4 is two majors in one step, and `IMPLEMENTATION_PLAN.md`'s own rule for flagged upgrades is one focused change with its own verification. 3.2.7 was taken as agreed and 4 deliberately not attempted here.
+
+**Decision 2 — the upgrade alone did not achieve the goal, and that had to be measured rather than assumed.** After moving to 3.2.7, the advisory count went from four to **three**: only the critical vitest-UI one (`GHSA-5xrq-8626-4rwp`) disappeared, because it lived in vitest's own code. Tracing the remaining three by their real dependency paths — not by guessing — showed all of them still arriving through vitest 3's own tree: `vite@5.4.21` (the fix needs `>=6.4.3`), `nanoid` beneath that vite's `postcss`, and `glob@10.4.5` beneath `@vitest/coverage-v8`'s `test-exclude`. Upgrading vitest and stopping there would have left three entries in the list and let the task look finished while failing its actual purpose.
+
+**Decision 3 — `pnpm.overrides` for the three transitive packages, following this repository's own existing precedent.** `vite: ^6.4.3`, `glob: ^10.5.0`, `nanoid: ^3.3.18` added to the root `pnpm.overrides` block, which already contained eight entries doing exactly this for other transitive dependencies (`multer`, `lodash`, `postcss`, …). This is not a new mechanism invented for the occasion; it is the mechanism this project already uses for this exact problem. Checked before relying on it that nothing constrained vite to 5 — `unplugin-swc` declares no vite dependency at all, and no package in this workspace depends on vite directly; version 5 was simply what the lockfile had resolved to earlier.
+
+**Verified by fact at every step, not by the upgrade exiting zero:**
+- Full suite on vitest 3.2.7 alone: 43 files, 231 tests, all passing.
+- Full suite again with vite forced to 6: **43 files, 231 tests, all passing.** The specific risk flagged in advance — that the `unplugin-swc` plugin and its `decoratorMetadata` emission (ADR-030 Decision 3, the thing NestJS constructor injection depends on under test) would break — did not materialise, and was checked rather than hoped.
+- `vitest.load.config.ts`, flagged as the other likely breakage, runs: 1 file, 3 tests passing.
+- `@vitest/coverage-v8` 3.x still produces a real report.
+- `pnpm audit`: **zero** high/critical, and zero at every other severity — with `metadata.dependencies: 769` in the response confirming the scan genuinely walked the tree rather than returning an empty result.
+- `check-audit.js` with an **empty** ignore list: exits 0.
+- And the gate proved still capable of failing, not merely silent: a synthetic high advisory injected into a throwaway copy of the script produced `1 high/critical advisory(ies) not covered by an explicit ignore` and exit 1. An empty list makes the gate strictly stronger than before — `!(id in {})` is unconditionally true, so any future high/critical fails the build with nothing to fall through.
+
+**Consequences:** `check-audit.js`'s `IGNORED_ADVISORIES` is `{}`, with a comment explaining why it is empty and that adding an entry again should feel like a decision rather than a reflex. `apps/backend/package.json` moves to `vitest`/`@vitest/coverage-v8` `^3.2.7`. Root `package.json` gains three `pnpm.overrides` entries. `IMPLEMENTATION_PLAN.md`'s deferred vitest item closes. No application code, no `schema.prisma` change, no test rewritten — the suite that passed on vitest 2 passes unchanged on vitest 3, which is itself the evidence that this was a tooling upgrade and not a behavioural one. **Not attempted and still open:** vitest 4, which remains a future decision with no current advisory pressure behind it.
 
 ---
 
