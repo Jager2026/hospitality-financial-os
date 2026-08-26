@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.23.0
+version: 1.24.0
 status: Active — thirty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -620,6 +620,16 @@ Two separate files rather than one, because both services deliberately run with 
 **Known limitation, stated rather than papered over: `rootDirectory` cannot be expressed in the config file at all** — confirmed against Railway's own published schema (`railway.schema.json`), not assumed. It determines *where the config file is read from*, so it is necessarily a service-level setting. This means ADR-031's single hardest-won finding — that `rootDirectory` must be `""` and that `null` does not clear it — is the one thing config-as-code cannot protect. It stays recoverable only from ADR-031's own text.
 
 **Consequences:** `docker/docker-compose.yml` (image, mount path, and an obsolete `version:` attribute removed — it emitted a deprecation warning on every invocation) and `.github/workflows/ci.yml` both on `postgres:18`. New `railway.backend.json` / `railway.frontend.json`. No `schema.prisma` change and no application-code change of any kind — this ADR moves no logic, it aligns environments and records configuration. Production backups themselves remain a separate, open item: this ADR came out of that investigation but does not close it.
+
+**Addendum — production was still minor-pinned, and this ADR's own rule is what says to unpin it.** Decision 1 above states the rule plainly: *"The tag stays major-only, deliberately … it is the major that must never drift."* Dev and CI were moved to `postgres:18` accordingly. What was not checked at the time — because the investigation was looking for a *major* mismatch and found one — is that Railway's own image was pinned to the **minor**, `18.6`. Both sides read "18.6" when queried, so nothing looked wrong; the difference is that dev/CI track `18.x` while production was frozen at one point release.
+
+That turned out to matter for a reason unrelated to version skew. Railway reports it as a hard blocker on the backups screen: *"Minor version pinning is not supported with PITR … Remove the minor pin and use `:18` so the image keeps tracking Railway's Postgres rebuilds and pgBackRest fixes."* Confirmed from the API rather than the screen alone — `railway postgres pitr status` returns `blockers: ["Image is pinned to a minor version -- unpin to the major tag before enabling PITR."]` alongside `enabled: true`. **PITR is implemented on pgBackRest, and PITR is currently the only backup mechanism this project has** (volume snapshot schedules queried directly: still an empty list). A pin that freezes pgBackRest fixes therefore freezes the only thing standing between us and total data loss.
+
+**The risk of unpinning is materially different from the 16→18 move, and was checked rather than assumed.** The crash-loop in Decision 2 happened because the data-directory convention changed *between majors*. Within a major it cannot: `PGDATA` in the running container is `/var/lib/postgresql/18/docker` — the directory is named by the **major**, so every 18.x shares it. Production is further insulated, since Railway sets `PGDATA=/var/lib/postgresql/data/pgdata` explicitly rather than relying on the image's default at all. A minor bump inside 18 changes neither path.
+
+**Decision:** remove the minor pin on Railway; production tracks `:18`, matching dev and CI. This is not a departure from this ADR — it is the first time all three surfaces actually follow the rule it already stated. Recorded here rather than as a new ADR because the decision was already made; only its application to production was incomplete.
+
+**Known observation, unresolved and deliberately not smoothed over:** the CLI reports `maxRestoreTime: 2026-08-26 12:15:01` while `archiverLastArchivedAt` reads `20:20:30`, and Railway's own dashboard shows a coverage window ending later still. The same response carries `backupCoverageError: "SSH command failed (exit code 31)"`, which plausibly explains a stale reading rather than a genuinely eight-hour-behind restore point — but that is inference, not measurement. Which figure is authoritative cannot be settled from the API alone. It should be re-checked after the pin is removed, and the restore rehearsal (`pg_dump`/`pg_restore` into an isolated PG18 container, still pending Founder approval) is what would actually settle it.
 
 ---
 
