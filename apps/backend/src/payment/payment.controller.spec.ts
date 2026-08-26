@@ -418,4 +418,117 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
     );
     expect(auditRow?.userId).not.toBe(waiterMembership.id);
   });
+
+  // Sprint 13 audit finding: validateWaiterMembershipOrThrow's own reject branch had zero coverage
+  // anywhere in the suite — a naive implementation that dropped the `if (!membership)` check
+  // entirely (or inverted it) would still pass every other test in this file, since they all submit
+  // a genuinely valid waiterMembershipId. Discriminating: a random UUID that matches no real
+  // Membership row at all, not merely one at the wrong Restaurant — proves the lookup's own
+  // not-found case is actually reached and rejected, not just its reachability filter.
+  it("POST /payments: a nonexistent waiterMembershipId is rejected with 400 VALIDATION_ERROR before Stripe is ever called, and no Payment row is created", async () => {
+    const restaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(restaurant);
+
+    const res = await request(app.getHttpServer())
+      .post("/payments")
+      .set("Idempotency-Key", `key-invalid-waiter-${randomUUID()}`)
+      .send({
+        restaurantId: restaurant.id,
+        amount: 1500,
+        tipAmount: 300,
+        waiterMembershipId: randomUUID(), // syntactically valid, matches no real Membership
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(stripeMocks.paymentIntentsCreate).not.toHaveBeenCalled();
+
+    const stored = await prisma.payment.findFirst({ where: { restaurantId: restaurant.id } });
+    expect(stored).toBeNull();
+  });
+
+  // Sprint 13 audit finding: PaymentController's three read endpoints had zero coverage — every
+  // existing test in this file exercises POST only. Reachability on a read path is exactly the bug
+  // shape CLAUDE.md's Architecture Review paragraph calls out (RestaurantService.findAllForUser,
+  // Sprint 4), so the discriminating case is a caller whose Membership is org-wide in a DIFFERENT
+  // Organization: an implementation that accepted any org-wide Membership as proof of reach —
+  // rather than comparing organizationId — would return the payment instead of 404ing.
+  it("GET /payments/:id and /:id/status: a payment in another Organization is 404, not readable — discriminating against an org-wide Membership that reaches somewhere else", async () => {
+    const restaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(restaurant);
+
+    stripeMocks.paymentIntentsCreate.mockResolvedValueOnce({
+      id: "pi_fake_read_test",
+      client_secret: "pi_fake_read_secret",
+      amount: 900,
+      currency: "eur",
+    });
+
+    const created = await request(app.getHttpServer())
+      .post("/payments")
+      .set("Idempotency-Key", `key-read-${randomUUID()}`)
+      .send({ restaurantId: restaurant.id, amount: 900 });
+    expect(created.status).toBe(201);
+    const paymentId = created.body.id;
+
+    // The owner who created it can read it, through both read routes.
+    const mine = await request(app.getHttpServer()).get(`/payments/${paymentId}`);
+    expect(mine.status).toBe(200);
+    expect(mine.body.id).toBe(paymentId);
+
+    const mineStatus = await request(app.getHttpServer()).get(`/payments/${paymentId}/status`);
+    expect(mineStatus.status).toBe(200);
+    expect(mineStatus.body.status).toBe("PENDING");
+
+    // A different Organization entirely, with its own org-wide Owner. Org-wide "somewhere" must
+    // never mean org-wide "here" — the exact gap that shipped in Sprint 4 and was caught live.
+    const otherRestaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(otherRestaurant);
+
+    const stranger = await request(app.getHttpServer()).get(`/payments/${paymentId}`);
+    expect(stranger.status).toBe(404);
+    expect(stranger.body.code).toBe("PAYMENT_NOT_FOUND");
+
+    const strangerStatus = await request(app.getHttpServer()).get(`/payments/${paymentId}/status`);
+    expect(strangerStatus.status).toBe(404);
+    expect(strangerStatus.body.code).toBe("PAYMENT_NOT_FOUND");
+  });
+
+  // GET /payments (list) — same reachability rule, different failure mode: a leak here returns
+  // someone else's rows rather than one row, so the discriminating assertion is that the stranger's
+  // own list is empty of this payment while the owner's contains it. A naive implementation that
+  // skipped scoping entirely (returning every Payment) passes the owner half and fails this one.
+  it("GET /payments: scoped to reachable restaurants only — a caller in another Organization does not see the payment", async () => {
+    const restaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(restaurant);
+
+    stripeMocks.paymentIntentsCreate.mockResolvedValueOnce({
+      id: "pi_fake_list_test",
+      client_secret: "pi_fake_list_secret",
+      amount: 700,
+      currency: "eur",
+    });
+
+    const created = await request(app.getHttpServer())
+      .post("/payments")
+      .set("Idempotency-Key", `key-list-${randomUUID()}`)
+      .send({ restaurantId: restaurant.id, amount: 700 });
+    expect(created.status).toBe(201);
+    const paymentId = created.body.id;
+
+    const ownerList = await request(app.getHttpServer()).get("/payments");
+    expect(ownerList.status).toBe(200);
+    expect((ownerList.body.data as Array<{ id: string }>).some((p) => p.id === paymentId)).toBe(
+      true,
+    );
+
+    const otherRestaurant = await seedRestaurant();
+    currentUser = await ownerUserFor(otherRestaurant);
+
+    const strangerList = await request(app.getHttpServer()).get("/payments");
+    expect(strangerList.status).toBe(200);
+    expect((strangerList.body.data as Array<{ id: string }>).some((p) => p.id === paymentId)).toBe(
+      false,
+    );
+  });
 });
