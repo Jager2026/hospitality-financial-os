@@ -160,4 +160,127 @@ describe("MembershipService (real database)", () => {
       service.update(targetMembership.id, { roleId: waiterRoleId }, managerAsAuthenticatedUser),
     ).rejects.toMatchObject({ code: "MEMBERSHIP_NOT_FOUND" });
   });
+
+  // Sprint 13 audit finding: getReachableOrThrow had no test covering its cross-Organization
+  // rejection, so findOne() was uncovered entirely. Discriminating by construction: the caller
+  // holds a genuinely ORG-WIDE Membership (restaurantId null) — just in a different Organization.
+  // The exact implementation this catches is the one CLAUDE.md's Architecture Review paragraph
+  // names by name: treating `restaurantId === null` alone as proof of reach, without comparing
+  // organizationId. Under that version an org-wide Owner of any Organization reads every
+  // Membership in every other one; under the correct version this is a 404.
+  it("findOne: an org-wide Membership in a DIFFERENT Organization cannot reach this Membership — org-wide 'somewhere' is not org-wide 'here'", async () => {
+    const { organization, first } = await createOrgWithTwoRestaurants();
+
+    const targetUser = await createUser();
+    const targetMembership = await prisma.membership.create({
+      data: {
+        userId: targetUser.id,
+        organizationId: organization.id,
+        restaurantId: first.id,
+        roleId: waiterRoleId,
+        status: "ACTIVE",
+      },
+    });
+
+    // A completely unrelated Organization, whose Owner is org-wide within it.
+    const outsiderOrg = await createOrgWithTwoRestaurants();
+    const outsiderUser = await createUser();
+    const outsiderMembership = await prisma.membership.create({
+      data: {
+        userId: outsiderUser.id,
+        organizationId: outsiderOrg.organization.id,
+        restaurantId: null, // org-wide — but in the WRONG Organization
+        roleId: managerRoleId,
+        status: "ACTIVE",
+      },
+    });
+
+    const outsider: AuthenticatedUser = {
+      id: outsiderUser.id,
+      email: outsiderUser.email,
+      locale: "en",
+      memberships: [
+        {
+          id: outsiderMembership.id,
+          organizationId: outsiderOrg.organization.id,
+          restaurantId: null,
+          role: { id: managerRoleId, name: "Manager", permissions: ["membership.manage"] },
+        },
+      ],
+    };
+
+    await expect(service.findOne(targetMembership.id, outsider)).rejects.toMatchObject({
+      code: "MEMBERSHIP_NOT_FOUND",
+    });
+
+    // And the same caller CAN reach a Membership inside their own Organization — proving the
+    // rejection above is real scoping, not a blanket denial that would pass for the wrong reason.
+    const insiderUser = await createUser();
+    const insiderMembership = await prisma.membership.create({
+      data: {
+        userId: insiderUser.id,
+        organizationId: outsiderOrg.organization.id,
+        restaurantId: outsiderOrg.first.id,
+        roleId: waiterRoleId,
+        status: "ACTIVE",
+      },
+    });
+    const reachable = await service.findOne(insiderMembership.id, outsider);
+    expect(reachable.id).toBe(insiderMembership.id);
+  });
+
+  // Sprint 13 audit finding: disable() was uncovered, and it is the one write path that both
+  // resolves reachability AND checks a permission. Discriminating on the permission half: the
+  // caller genuinely reaches the target (same Organization, org-wide) but holds no
+  // membership.manage at all — an implementation that checked only reachability and skipped
+  // assertPermission would disable the Membership instead of throwing.
+  it("disable: reachability alone is not enough — a caller without membership.manage is rejected, and the Membership stays ACTIVE", async () => {
+    const { organization, first } = await createOrgWithTwoRestaurants();
+
+    const targetUser = await createUser();
+    const targetMembership = await prisma.membership.create({
+      data: {
+        userId: targetUser.id,
+        organizationId: organization.id,
+        restaurantId: first.id,
+        roleId: waiterRoleId,
+        status: "ACTIVE",
+      },
+    });
+
+    const weakUser = await createUser();
+    const weakMembership = await prisma.membership.create({
+      data: {
+        userId: weakUser.id,
+        organizationId: organization.id,
+        restaurantId: null, // org-wide in the RIGHT Organization — genuinely reaches the target
+        roleId: waiterRoleId,
+        status: "ACTIVE",
+      },
+    });
+
+    const weakCaller: AuthenticatedUser = {
+      id: weakUser.id,
+      email: weakUser.email,
+      locale: "en",
+      memberships: [
+        {
+          id: weakMembership.id,
+          organizationId: organization.id,
+          restaurantId: null,
+          role: { id: waiterRoleId, name: "Waiter", permissions: [] }, // no membership.manage
+        },
+      ],
+    };
+
+    await expect(service.disable(targetMembership.id, weakCaller)).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+    });
+
+    // The rejection must be real, not merely thrown after the write already happened.
+    const untouched = await prisma.membership.findUniqueOrThrow({
+      where: { id: targetMembership.id },
+    });
+    expect(untouched.status).toBe("ACTIVE");
+  });
 });
