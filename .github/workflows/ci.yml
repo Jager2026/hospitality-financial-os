@@ -91,6 +91,11 @@ jobs:
         run: |
           RAND_KEY=$(head -c 400 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 99)
           RAND_WHSEC=$(head -c 200 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
+          # Masked purely for log hygiene, not because these are sensitive — Actions echoes the
+          # whole env block in every step header, and a 107-character key-shaped string scrolling
+          # past on each step is exactly the kind of noise that makes a real leak harder to spot.
+          echo "::add-mask::sk_test_${RAND_KEY}"
+          echo "::add-mask::whsec_${RAND_WHSEC}"
           echo "STRIPE_SECRET_KEY=sk_test_${RAND_KEY}" >> "$GITHUB_ENV"
           echo "STRIPE_WEBHOOK_SECRET=whsec_${RAND_WHSEC}" >> "$GITHUB_ENV"
 
