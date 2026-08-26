@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.22.0
-status: Active — thirty-seven ADRs, all Accepted
+version: 1.23.0
+status: Active — thirty-eight ADRs; thirty-seven Accepted, ADR-038 Proposed
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -715,6 +715,45 @@ The risk worth naming: an ignore list is a promise to come back. Left alone, it 
 - And the gate proved still capable of failing, not merely silent: a synthetic high advisory injected into a throwaway copy of the script produced `1 high/critical advisory(ies) not covered by an explicit ignore` and exit 1. An empty list makes the gate strictly stronger than before — `!(id in {})` is unconditionally true, so any future high/critical fails the build with nothing to fall through.
 
 **Consequences:** `check-audit.js`'s `IGNORED_ADVISORIES` is `{}`, with a comment explaining why it is empty and that adding an entry again should feel like a decision rather than a reflex. `apps/backend/package.json` moves to `vitest`/`@vitest/coverage-v8` `^3.2.7`. Root `package.json` gains three `pnpm.overrides` entries. `IMPLEMENTATION_PLAN.md`'s deferred vitest item closes. No application code, no `schema.prisma` change, no test rewritten — the suite that passed on vitest 2 passes unchanged on vitest 3, which is itself the evidence that this was a tooling upgrade and not a behavioural one. **Not attempted and still open:** vitest 4, which remains a future decision with no current advisory pressure behind it.
+
+---
+
+## ADR-038 — Secrets Transferred by Hand Are Corrupted Silently: Fail at Boot, Not Days Later on a Real Call
+**Status:** Proposed — the technical shape below is described and costed, but which of the two mechanisms to adopt (and whether the stronger one may block a boot) is a Founder decision, not one to make silently
+
+**Context — three for three, and the pattern is the point.** Every secret that has been transferred by hand into Railway's environment on this project has arrived corrupted:
+
+| # | Secret | Corruption | How it was eventually found | Cost |
+|---|---|---|---|---|
+| 1 | `STRIPE_WEBHOOK_SECRET` | wrapped in angle brackets — `<whsec_…>` | a real webhook rejected in production | hours |
+| 2 | `STRIPE_SECRET_KEY` | wrapped in angle brackets — `<sk_test_…>` | restaurant creation failing in production | hours |
+| 3 | `STRIPE_SECRET_KEY` | **one character silently deleted** (107 → 106) | ~11 days, a support ticket with Stripe, and a full session of diagnosis | days |
+
+The third is the one that matters for design, because it is the one no amount of care would have caught. Angle brackets are visible if you look closely. **A key missing exactly one character out of 107, in the middle of a random alphanumeric string, is not visible to any human review — and it was, in fact, looked at directly more than once during this saga and passed as correct each time.** The value was byte-compared and confirmed free of brackets and whitespace; the length was even printed (`106`) and read past, because nobody had a `107` to compare it to.
+
+What made it expensive is not that it broke, but *where* it broke: the corrupted value passed `env.validation.ts` (`z.string().min(1)`), the app booted cleanly, health checks went green, and the failure surfaced only later on a real business call — as `invalid_v2_key`, an error that points at the *permissions of the key*, not at its *integrity*. Every hypothesis it invited was wrong: v2 API not enabled, wrong Stripe sandbox, account-level restriction, SDK version, IP allowlisting, network path. Stripe's own message was literally accurate the whole time — *"ensure you provided the full key"* — and was read as boilerplate.
+
+**The generalisable failure, stated so it outlives this particular secret:** a configuration error that a process cannot detect at startup becomes a *business* error at runtime, and business errors point at business causes. The distance between the corruption and its symptom is what costs days, not the corruption itself.
+
+**Decision 1 (recommended, low cost, no trade-off worth arguing) — validate the *shape* of every known secret at boot.** `env.validation.ts` already validates everything else meaningfully (`JWT_*` ≥ 32 chars, `DEFAULT_PLATFORM_FEE_BASIS_POINTS` an integer 0–10 000, `ALERT_WEBHOOK_URL` a real URL); the Stripe secrets are the only ones still at `min(1)`, which is exactly why they are the ones that broke. Add, for each:
+- a required prefix (`sk_test_`/`sk_live_`/`rk_…` for the API key, `whsec_` for the webhook secret) — catches corruption #1 and #2 outright, at boot, with a message naming the variable;
+- a charset constraint (`^[A-Za-z0-9_]+$`) — catches whitespace, newlines, quotes, and brackets generally rather than only the two shapes already seen;
+- a minimum length that reflects a real key rather than `1`.
+
+**Honest limitation, stated rather than glossed: none of this would have caught corruption #3.** A 106-character key has the right prefix, the right charset, and passes any sane minimum. Shape validation closes two of the three incidents and the whole class of "someone pasted the surrounding punctuation" — it does not close truncation. Presenting it as the fix would be exactly the kind of false confidence this ADR exists to argue against.
+
+**Decision 2 (the one that actually closes truncation — and the one with a real trade-off) — prove the secret works at boot instead of inferring it from its shape.** A single authenticated read against Stripe during startup (`GET /v1/account`, or the v2 equivalent) answers the only question that matters — *does this credential actually work* — and is indifferent to how it was corrupted. Truncation, substitution, a revoked key, a key from the wrong account, a rotated key nobody updated: all fail identically and immediately, at the moment and place where the cause is obvious.
+
+The trade-off is real and should be decided rather than assumed:
+
+- **If a failed probe refuses the boot,** the failure is impossible to miss — and Stripe's availability becomes this service's availability. That is not automatically wrong: the `/health` gate added alongside this already blocks a deploy when Postgres or Redis is unreachable, and this platform's entire purpose is moving money through Stripe. But it is a genuine new coupling to an external vendor, and it would mean a Stripe incident can block an unrelated deploy.
+- **If a failed probe only alerts loudly** (via the `AlertService` that already exists, ADR-031/032) **and lets the app start,** availability is unchanged and the discovery time still collapses from days to seconds — but the signal can be missed, which is precisely the failure mode `THREAT_MODEL.md` #13 is about.
+
+**Recommendation, for the Founder to accept or reject:** Decision 1 unconditionally, plus Decision 2 in the alerting form, and *not* boot-refusal — the discovery-time problem is fully solved by either variant, and only one of them buys that with a vendor-availability coupling this project does not otherwise have. Reconsider boot-refusal if an alert is ever demonstrably missed.
+
+**A prerequisite worth flagging, because it is the same class of gap found twice this session:** CI's placeholder is `sk_test_ci_placeholder_not_a_real_key` — prefix-valid and charset-valid, but far shorter than a real key. Any minimum-length rule tightens CI too, so the placeholder must be lengthened to a realistic dummy rather than the rule being weakened or environment-gated around it. The same reasoning as the BigInt polyfill fix in `test/setup.ts`: when the test environment differs in shape from production, the difference eventually hides a real defect rather than merely being untidy.
+
+**Consequences if accepted:** `env.validation.ts` gains per-secret shape rules and a corresponding test asserting that each of the three real historical corruptions is rejected — a discriminating test by construction, since all three values genuinely exist and are known. `.github/workflows/ci.yml`'s Stripe placeholders lengthen. Decision 2, if taken, adds a startup probe in `StripeService` (production only) routed through `AlertService`. No schema change, no business logic touched. **Nothing here is implemented yet** — this ADR records the problem and the options while the third incident is still fresh, deliberately ahead of the code, per `CLAUDE.md`'s Documentation First rule.
 
 ---
 
