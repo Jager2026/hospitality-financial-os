@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.24.0
+version: 1.25.0
 status: Active — thirty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -544,6 +544,10 @@ This is provably `SUM(billAmount)` net of refunds, not merely defined to equal i
 **Consequences:** `IMPLEMENTATION_PLAN.md` Sprint 13's DoD is met: production is online (backend and frontend both live on Railway, both verified with real HTTP 200 responses on their public domains), and Outbox Lag is now a real, wired, alertable mechanism, not merely a metric that exists in documentation. `env.validation.ts` gains `ALERT_WEBHOOK_URL` (optional). `OutboxPollerService` gains a fourth constructor dependency (`ConfigService<Env, true>`) and a `sendAlert()` method. `outbox-poller.service.spec.ts` gains three new tests (7 tests total in the file, across two `describe` blocks); the full suite stays green (39 files, 204 tests, up from 201 before this Sprint), confirmed stable across two consecutive full runs. No `schema.prisma` change. No new dependency — `fetch` is a Node/NestJS runtime global already.
 
 **Revised by ADR-032:** `sendAlert()` and the `ALERT_WEBHOOK_URL` config read moved out of `OutboxPollerService` entirely, into a shared `AlertService` — `OutboxPollerService`'s fourth constructor dependency is `AlertService` now, not `ConfigService<Env, true>` directly. Behavior described above is otherwise unchanged.
+
+**A second instance of Decision 2's own lesson, worth recording here because it is the same trap wearing different clothes.** Decision 2 above is about Railway's API silently ignoring a value and the fix being to *query the field back* rather than trust the write. The mirror case: **`railway volume list` does not output `isPendingDeletion` or `deletedAt` at all.** A volume deleted through the Dashboard enters a roughly 48-hour deferred deletion and, for that entire window, the CLI lists it as `Ready` — indistinguishable from a live volume. Confirmed directly: the same volume reported `isPendingDeletion: true, deletedAt: <two days ahead>` through the GraphQL API while the CLI showed it as healthy and present.
+
+Nothing is wrong in either tool; the CLI simply prints a subset. But the failure mode is the dangerous one — **a confident wrong conclusion drawn from a complete-looking but partial output**, which is worse than an error, because an error prompts a second look and this does not. The habit that covers both cases: when Railway's state matters, read it from the API and read back the specific field, rather than from whichever summary view is most convenient.
 
 ---
 
