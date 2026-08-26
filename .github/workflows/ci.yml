@@ -30,8 +30,9 @@ jobs:
       # Sprint 3: env.validation.ts requires these to be non-empty strings so the app can start —
       # nothing in the test suite makes a real Stripe network call (StripeService is faked in
       # every test that touches it), so these never need to be working credentials, only present.
-      STRIPE_SECRET_KEY: sk_test_ci_placeholder_not_a_real_key
-      STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_real_secret
+      # ADR-038: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are deliberately NOT set here. They
+      # are generated at runtime by the "Compose Stripe CI placeholders" step below — see that
+      # step for why a literal cannot live in this file.
       # Sprint 5, ADR-021: required, no .default() in env.validation.ts (a fee rate is a business
       # decision, never silently assumed at boot) — CI needs a real value present for the app to
       # start at all, same reasoning as the Stripe placeholders above. The actual rate (100 = 1.00%)
@@ -71,6 +72,27 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # ADR-038, and a genuine tension this resolves rather than papers over. env.validation.ts now
+      # requires the Stripe secrets to have production's real shape (prefix, alphanumeric body,
+      # length floor), and the right response to that was to make CI match production rather than
+      # weaken the rule. But a placeholder realistic enough to satisfy our own validation is, by
+      # construction, realistic enough to trip GitHub's secret scanner — pushing one was blocked as
+      # a "Stripe Test API Secret Key", correctly. Clicking the unblock link would have worked and
+      # would have been the wrong lesson: nobody should be training themselves to wave through
+      # secret-scanning warnings.
+      #
+      # Generating the values here resolves both constraints at once and is strictly better than a
+      # literal either way: nothing key-shaped exists in the repository to be scanned, leaked, or
+      # mistaken for real, and a fresh random value each run cannot quietly become a real credential
+      # someone pasted "just for now". These never reach Stripe — no test in this suite makes a live
+      # network call, and the boot-time credential probe is production-only.
+      - name: Compose Stripe CI placeholders
+        run: |
+          RAND_KEY=$(head -c 400 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 99)
+          RAND_WHSEC=$(head -c 200 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
+          echo "STRIPE_SECRET_KEY=sk_test_${RAND_KEY}" >> "$GITHUB_ENV"
+          echo "STRIPE_WEBHOOK_SECRET=whsec_${RAND_WHSEC}" >> "$GITHUB_ENV"
 
       # No `version:` here, deliberately: pnpm/action-setup@v4 reads the version from
       # package.json's "packageManager" field on its own. Specifying both made every CI run

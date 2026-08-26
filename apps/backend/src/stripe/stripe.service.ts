@@ -1,6 +1,9 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, type OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { PinoLogger } from "nestjs-pino";
 import Stripe from "stripe";
+import { AlertService } from "../common/alerting/alert.service";
+import type { Env } from "../config/env.validation";
 
 export interface CreateConnectAccountParams {
   contactEmail: string;
@@ -44,13 +47,84 @@ export interface RetrievedPaymentIntent {
 // `dashboard: "full"`; the API rejects `"application"` for that pairing, not the other way
 // around, which is why this isn't Express's shape).
 @Injectable()
-export class StripeService {
+export class StripeService implements OnModuleInit {
   private readonly stripe: Stripe;
   private readonly webhookSecret: string;
+  private readonly nodeEnv: string;
 
-  constructor(config: ConfigService) {
+  constructor(
+    config: ConfigService<Env, true>,
+    private readonly alerts: AlertService,
+    private readonly logger: PinoLogger,
+  ) {
     this.stripe = new Stripe(config.getOrThrow<string>("STRIPE_SECRET_KEY"));
     this.webhookSecret = config.getOrThrow<string>("STRIPE_WEBHOOK_SECRET");
+    this.nodeEnv = config.getOrThrow<string>("NODE_ENV");
+    this.logger.setContext(StripeService.name);
+  }
+
+  /** ADR-038 Decision 2 — the boot-time liveness probe, and the only mechanism in this codebase
+   * that catches a *silently corrupted* credential rather than a malformed-looking one.
+   *
+   * Why it exists: a `STRIPE_SECRET_KEY` missing exactly one character out of 107 passed every
+   * shape rule, booted cleanly, went green on /health, and surfaced eleven days later on a real
+   * business call as `invalid_v2_key` — an error naming the key's permissions, not its integrity,
+   * which sent the investigation everywhere except the actual cause. This asks the only question
+   * that matters, at the one moment where the answer is unambiguous: does this credential work?
+   *
+   * **It MUST call a v2 endpoint. Do not "optimize" this to a cheaper v1 call.** Not for the
+   * reason originally assumed — a v1 call does reject the truncated key too (verified directly
+   * against the real corrupted value, contradicting what this project had earlier told Stripe
+   * support). The real reason is narrower and survives that correction: v2 Accounts access is
+   * enabled per Stripe account and can be absent while the key is otherwise perfectly valid. Only
+   * a v2 call proves the credential can do the thing restaurant onboarding actually needs
+   * (`v2.core.accounts.create`, ADR-009/ADR-014). A v1 probe would report a healthy key for an
+   * account that cannot create a single connected account.
+   *
+   * Alerts, never blocks (Founder decision): the problem being solved is *time to discovery*, not
+   * a bad boot. Refusing to start would couple this service's availability to Stripe's, which is
+   * disproportionate for an application that today serves every non-payment route without Stripe
+   * at all. The ERROR log is unconditional and deliberately separate from `sendAlert()`, which
+   * returns early when `ALERT_WEBHOOK_URL` is unset (optional by ADR-031) — the same "log always,
+   * webhook additionally" split `OutboxPollerService` already uses, so an unconfigured channel
+   * degrades to a loud log rather than to silence.
+   *
+   * Production only, gated on `NODE_ENV` — deliberately NOT a dedicated on/off flag. A bypass flag
+   * is a thing that can be set correctly everywhere and wrongly in one place, and the one place
+   * that matters is the one where nobody would notice. `NODE_ENV` already exists, is already a
+   * validated enum, and is already load-bearing for far more than this: a wrong value there breaks
+   * so much else that it cannot fail quietly the way a bespoke flag could. */
+  async onModuleInit(): Promise<void> {
+    if (this.nodeEnv !== "production") return;
+    await this.verifyCredentialOrAlert();
+  }
+
+  private async verifyCredentialOrAlert(): Promise<void> {
+    try {
+      await this.stripe.v2.core.accounts.list({ limit: 1 });
+      this.logger.info("Stripe credential verified at boot (v2 Accounts reachable)");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string })?.code;
+      // Unconditional, and first: this must survive ALERT_WEBHOOK_URL being unset.
+      this.logger.error(
+        { err, code },
+        "STRIPE CREDENTIAL REJECTED AT BOOT — the configured STRIPE_SECRET_KEY does not work " +
+          "against the Stripe v2 Accounts API. Payments and restaurant onboarding will fail. " +
+          "Check the value for truncation or corruption in transit; compare its length and last " +
+          "characters against the key shown in the Stripe Dashboard.",
+      );
+      try {
+        await this.alerts.sendAlert(
+          `Stripe credential rejected at boot: ${code ?? "unknown"} — ${detail}`,
+          { code },
+        );
+      } catch (alertErr) {
+        // Defensive, matching PaymentReconciliationService/OutboxPollerService (ADR-032): a
+        // throwing AlertService must never turn a diagnostic into a crashed boot.
+        this.logger.warn({ err: alertErr }, "Failed to dispatch the Stripe credential alert");
+      }
+    }
   }
 
   async createConnectAccount(params: CreateConnectAccountParams): Promise<string> {
