@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.10.0
+version: 2.11.0
 status: Active
 classification: Internal
 owner: Founder
@@ -404,6 +404,24 @@ Soft delete where the business needs recovery: `Organization`, `Restaurant`, `Us
 Never soft delete — permanent financial history: `Payment`, `Transaction`, `JournalEntry`, `LedgerLine`, `Tip`, `Refund`, `Chargeback`, `Adjustment`, `AuditLog`.
 
 Purge on a retention schedule — operational, not financial history: `OutboxEvent` (after `published_at` + N days), `IdempotencyKey` (after `expires_at`), `MembershipInvitation` (after `expires_at`, once accepted or expired).
+
+## One recorded exception to the rule above, and the larger part of it is what was NOT deleted
+
+**2026-08-26.** Two `Payment` rows were hard-deleted from production, along with the `Organization`, `Restaurant`, two `Membership` rows, one `MembershipInvitation` and ten `IdempotencyKey` rows created during Sprint 13's live verification. Recorded here, next to the rule it departs from, so a later reader does not find the rule and the action and have to reconcile them from git archaeology.
+
+**Why the exception is legitimate.** The rule protects records of *real money movement* — that is what makes financial history immutable and worth defending. These two payments describe nothing that happened: the `PaymentIntent`s were created but never confirmed with a card, so they never reached `succeeded`, never produced a `Transaction`, and never wrote a single `JournalEntry` or `LedgerLine`. All money-bearing tables were verified empty before and after (`transaction`, `journal_entry`, `ledger_line`, `tip`, `refund`, `chargeback`, `wallet` — zero rows throughout). Nothing was reversed, because nothing had happened.
+
+**The decisive argument was about backups, not tidiness.** These rows would be captured by PITR and by every volume snapshot, and a future reader restoring a backup would find payments with real amounts, real Stripe PaymentIntent ids and a real connected account — indistinguishable from genuine ones without reconstructing this session's history. Synthetic financial records that survive into backups are worse than clutter; they are a trap for whoever reads them next.
+
+**What was deliberately NOT deleted, which matters more than what was — read this before "finishing the cleanup".**
+
+`User` rows and `AuditLog` were left completely untouched, and re-deleting them later would be a mistake, not a continuation:
+
+- **`AuditLog` is append-only** by this document's own rule, and by its purpose (`THREAT_MODEL.md` Closed Threat #14). It contains genuine external security telemetry — a Leakix vulnerability scanner probing production for exposed GraphQL endpoints on 2026-08-20, plus real crawler and Stripe webhook traffic. Those are records of things that genuinely happened to a live system, not test residue.
+- **`audit_log.user_id` → `user` is `ON DELETE SET NULL`.** This is the sharp edge: deleting the test users would not fail and would not remove any audit row — it would **silently blank the actor on eighteen of them**, leaving records that say *something was done* with *who did it* erased. That is corruption wearing the appearance of integrity, and it is strictly worse than an honest deletion, because nothing about the result looks wrong.
+- The justification used for the payments does not transfer. Those accounts *were* really created and really authenticated; the `AuditLog` is the record of it. And they are not confusable with real data the way a phantom payment is: every address is `@example.com`, a domain reserved by RFC 2606 that can never belong to a real person.
+
+**Root cause, not to be mistaken for carelessness:** test data reaches production because there is nowhere else for a live verification to run. The project has exactly one Railway environment, so anything that is not a developer's laptop *is* production (ADR-035, staging deliberately deferred). Until staging exists, every live verification leaves a trace like this, and cleaning it up by hand each time is the cost of that deferral — not a process failure to fix by being more careful.
 
 ---
 

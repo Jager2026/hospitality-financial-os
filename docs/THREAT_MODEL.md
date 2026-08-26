@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.10.0
+version: 1.11.0
 status: Active
 classification: Critical
 owner: Founder
@@ -144,6 +144,17 @@ Entries 9–15 below are Sprint 11's OWASP Top 10:2025 review (`IMPLEMENTATION_P
 **Closed by:** ADR-010 — audit logging as a Sprint 1 foundation, not an afterthought. `AuditLogInterceptor` covers requests that reach a handler; `AllExceptionsFilter`'s own `auditGuardRejection` fallback specifically covers the gap NestJS's own pipeline ordering creates — Guards run *before* Interceptors, so a request rejected by `JwtAuthGuard`/`PermissionsGuard`/`ThrottlerGuard` never reaches `AuditLogInterceptor` at all; the filter is the only place in the pipeline that sees every exception regardless of where it was thrown. Sensitive fields never reach the log in the first place: pino's own `redact` list (`app.module.ts`) strips `Authorization`/cookie headers and `password`/`refreshToken`/`card` body fields before a log line is even written (CLAUDE_RULES.md, Logging Philosophy).
 
 **Mechanism, already proven live (existing entries):** `refresh_token_reuse_detected` written to `AuditLog` with correct `user_id`/`familyId`/IP/user-agent (Closed Threat #4); the login-throttle test's `429` and its preceding `401`s both correctly `AuditLog`-ed (Closed Threat #5).
+
+**Proven against real hostile traffic, not only against our own tests — and found by accident, which is the strongest form of this evidence.** While inventorying production data for an unrelated cleanup, the `AuditLog` turned out to already contain records of the live system being scanned from the internet:
+
+```
+2026-08-20 22:40:58–59  Mozilla/5.0 (l9scan/2.0.33e27393…)   → /graphql  /api  /api/graphql  /graphql/api  /api/gql
+2026-08-22 05:08:35–36  Amazonbot/0.1 · Amzn-SearchBot        → /graphql  /api/graphql  /v1/graphql  /graphql/console
+```
+
+The first is **Leakix**, a real internet-wide vulnerability scanner, walking a list of common GraphQL endpoint paths against production inside a two-second burst. Every probe was rejected (`post_failed`) and every one of them was recorded with its path, IP and user-agent. Nobody set this up as a test; the mechanism simply worked, and the evidence was sitting there waiting to be read. **This is the difference between a logging system that passes its own tests and one that has actually caught something** — and it is the concrete reason `AuditLog` was excluded from that cleanup rather than treated as test residue (`DATABASE.md`, the recorded exception under Soft Deletes).
+
+Worth stating plainly since it is now a matter of record: **production is already being probed by strangers.** Nothing was exposed — the paths do not exist and the API has no GraphQL surface at all — but the interval between "deployed publicly" and "scanned by automated tooling" was measured in days, not months, and that is the correct default assumption for every future deployment rather than a surprise.
 
 ---
 
