@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.8.0
+version: 2.9.0
 status: Active
 classification: Critical
 priority: Highest
@@ -249,7 +249,11 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
 
 - **Staging environment (ADR-035).** The project has exactly one Railway environment: `production`. Everything that is not a developer's laptop is live production — which is the shared root of tunnelling into the production database to verify alerting, creating throwaway test restaurants in it, and having nowhere to rehearse a restore. Its full shape is already decided (ADR-035: separate Railway environment, separate Stripe sandbox, separate JWT/webhook secrets, separate alert channel, synthetic seed with production dumps **prohibited**), so this is scheduling, not design. **Deferred with the same trigger: before the first real pilot restaurant is onboarded.** Deferred for two specific reasons, neither of which is cost — the entire production stack currently bills around $1.83/month, so a duplicated idle environment is a rounding error. It is **blocked**: ADR-035 requires a second Stripe sandbox, and Stripe integration is currently non-functional (`invalid_v2_key`, open with Stripe support), so half of staging could not be exercised even if it existed. And it is **premature**: staging exists to stop us touching a database holding customer data, and there is no customer data yet. That second reason expires exactly when the trigger fires.
 
-- **Off-platform database backup.** Every backup mechanism available today (Railway PITR, volume snapshots, the volume itself) lives inside Railway. Together they protect against disk failure and against our own mistakes, but not against losing access to the Railway account itself. For a system whose whole premise is an authoritative financial Ledger, one copy outside the platform is the reasonable end state. **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The reason to defer is honest and time-bound — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how the restore is rehearsed). The moment real money moves through it, that calculus inverts. Founder decision, taken with the in-platform backup gap found and reported alongside it (ADR-034's own context).
+- **Off-platform database backup.** **The reason for this item has narrowed, and the narrowing is the point** — an earlier version of this entry leaned partly on retention depth, and that argument is now closed: PITR plus Daily/Weekly/Monthly volume snapshots (6 / 27 / 89 days, `THREAT_MODEL.md` entry 22) cover both fine-grained recent recovery and damage discovered months later, through two mechanisms independent enough that one failing does not take the other with it. Depth is no longer the gap.
+
+  What remains is the one thing no in-platform mechanism can address by construction: **every copy lives inside Railway.** PITR, all three snapshot tiers and the volume itself share a single point of failure that is not a disk — losing access to the account, or the account's own data being lost, takes all of them at once. For a system whose entire premise is an authoritative financial Ledger, one copy outside that blast radius is the reasonable end state, and it is now the *only* remaining reason to build this.
+
+  **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The deferral reason is honest and time-bound and has not changed — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how its own restore gets rehearsed). The moment real money moves through it, that calculus inverts. Founder decision.
 
 ---
 

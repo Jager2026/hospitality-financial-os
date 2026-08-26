@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.7.0
+version: 1.9.0
 status: Active
 classification: Critical
 owner: Founder
@@ -185,6 +185,56 @@ Entries 9–15 below are Sprint 11's OWASP Top 10:2025 review (`IMPLEMENTATION_P
 **Threat:** As stated in the entry this closes — a genuinely unlucky concurrent-request interleaving could surface as a raw, unhandled `500` instead of the intended `409 IDEMPOTENCY_KEY_CONFLICT`.
 
 **Closed by:** ADR-032 Decision 3. The `create()` call inside `intercept()`'s `!existing` branch is now wrapped in a `catchError` that maps a real Postgres unique-constraint violation (`Prisma.PrismaClientKnownRequestError`, `code === "P2002"`) to the same controlled `409` — closed architecturally, not merely "not observed to fail" under one load-test run. Verified by forcing the exact race deterministically (`idempotency.interceptor.spec.ts`: pre-create the winning row directly, then stub `findUnique()` to still return `null`, so this request's own `create()` hits the real constraint on every single run), not by relying on `Promise.all` timing luck.
+
+## 22. Total, unrecoverable loss of the production database — no backup existed at all, and no restore had ever been attempted
+**Threat:** The single largest one on this list by consequence, and it was open silently. Production ran with **zero backups of any kind** — found by direct API query during the Sprint 13 backup audit, not by suspicion: `pitr status` returned `enabled: false, bucketWired: false`, volume backup schedules returned `[]`, existing snapshots returned `[]`, and the project had no storage bucket for PITR to write to. Losing the Postgres volume would have meant losing the Ledger permanently, with nothing to restore from.
+
+A second, subtler half of the same threat: even once backups exist, a backup nobody has ever restored from is a belief, not a capability. The failure modes that matter — a dump that will not load, a schema restored without its constraints, a "point in time" that silently lands hours earlier than requested — are all invisible until someone actually tries.
+
+**Closed by:** ADR-034's addendum (production's minor version pin removed — Railway reports minor pinning as a hard blocker for PITR, and PITR is implemented on pgBackRest), plus PITR enabled with a wired bucket. **Verified by an actual restore rehearsal**, not by the feature reporting itself healthy — the distinction this entry exists to make.
+
+**Mechanism, live-verified against a real restore into an isolated service (never touching production — `volumeInstancePITRRestore` takes a `newServiceName` and creates a separate service, unlike volume-snapshot restore, which swaps the volume under the live one):** a restore targeted at `2026-08-26 12:20 UTC` was checked four ways.
+
+- **The Ledger invariant holds** — zero unbalanced `JournalEntry` rows in the restored database.
+- **The Ledger's own defences came back with it, not just its rows** — `journal_entry_compensating_fk_matches_type` (`CHECK`, ADR-017), `ledger_line_balanced` (deferred trigger, ADR-002) and its `check_journal_entry_balanced()` function all confirmed present by direct catalog query. A restore that returned data without the trigger would have looked successful while leaving the Ledger undefended.
+- **Row counts match production exactly** across all nine key tables, and the specific rows known to exist at that moment were all present and correct — the restaurant with its real Stripe account id, both payments with their amounts and `waiter_membership_id`, and the `AuditLog` row still carrying both identities separately (ADR-033).
+- **The restore point is accurate to the second, proven by a discriminating check rather than by counting rows.** The newest *created* row was from `11:56`, so row counts alone could not distinguish a restore at 12:20 from one at 11:57. But the 12:15 reconciliation cycle *updated* existing rows rather than creating any — so `reconciliation_alert_sent_at` is the field that separates the two. It came back populated, byte-identical to production (`12:15:00.819` / `12:15:01.537`). The restore genuinely captured writes up to at least `12:15:01.5`.
+
+That last check also resolved an open question this audit had been carrying: `maxRestoreTime: 12:15:01` had disagreed with `archiverLastArchivedAt: 20:20:30` by eight hours, and it was unclear whether that meant a stale restore horizon. It did not. `12:15:01` was honest — it was the timestamp of the last real write to the database, after which production was idle, so the archiver was alive with nothing left to archive (`archived=0` in pgBackRest's own watcher output). The two numbers answer different questions: how far a restore can reach, and when the archiver last ran. Separately, the dashboard's coverage window and the CLI's figures reconciled once timezone was accounted for — the dashboard renders local time (+3), the CLI UTC; the window's start matched pgBackRest's `last_full` exactly.
+
+**What this rehearsal did NOT prove, stated as prominently as what it did.** The production Ledger is empty — `journal_entry`, `ledger_line` and `transaction` all hold zero rows, because no payment has ever been captured in production. **The invariant check therefore passed trivially, over nothing.** It demonstrates that the mechanism restores, that the schema and its constraints survive, and that the point in time is accurate; it demonstrates nothing about whether debits equal credits across real financial history, because there is no real financial history yet. Re-running this rehearsal is a genuine, non-optional prerequisite once real money has moved — the check that passes today is not the check that will matter then.
+
+**Volume snapshots are now configured alongside PITR, all three schedules, verified through the API rather than from the UI's own labels.** Railway's guidance is that they are independent of PITR — a separate mechanism against a separate class of failure — and both are now in place. The actual values differ from the round numbers the presets suggest, which is exactly why they were read back:
+
+| Schedule | Runs | `retentionSeconds` | Real depth | First automatic snapshot |
+|---|---|---|---|---|
+| Daily | `44 2 * * *` (02:44 UTC) | 518 400 | **6.00 days** | 2026-08-27 02:44 UTC |
+| Weekly | `28 2 * * 6` (Sat 02:28 UTC) | 2 332 800 | **27.00 days** — not 30 | 2026-08-29 02:28 UTC |
+| Monthly | `44 17 1 * *` (1st, 17:44 UTC) | 7 689 600 | **89.00 days** — not 90 | 2026-09-01 17:44 UTC |
+
+Only the Daily figure matches its label exactly. "A month" is 27 days and "three months" is 89 — small differences, but the kind that matter when someone reasons "we can always go back three months" during an incident. One **manual** snapshot also already exists (`2026-08-26 21:22 UTC`, `referencedMB: 1223`, `usedMB: 69`) with `expiresAt: null` — it is outside every retention policy and will never be pruned automatically, so it is both a real recovery point available today and a line item that stays on the bill until someone deletes it deliberately.
+
+**What each layer actually covers, and what none of them does:**
+- **PITR** — any second within its window, on a short horizon. The finest granularity, and the only one that can land between snapshots.
+- **Daily** — six discrete points, independent of pgBackRest. This matters because it is a *different mechanism*: corruption of the pgBackRest repository itself, or a fault in WAL archiving, takes PITR with it and leaves these untouched.
+- **Weekly / Monthly** — 27 and 89 days of depth, for damage discovered long after it was done. This is the case PITR structurally cannot cover: a destructive change made by a correct-looking transaction is replayed faithfully by point-in-time recovery, because from WAL's perspective nothing went wrong.
+
+**The layering is real but not yet in place — it accrues.** As of this entry only the manual snapshot and PITR exist; the first Weekly is three days out and the first Monthly six. Until 2026-09-01 there is no monthly-depth recovery point at all, and describing the coverage as though all three tiers already exist would be wrong today even though it will be right shortly.
+
+**One residual gap, unchanged in substance:** every mechanism above lives inside Railway. Together they defend against disk failure, against our own mistakes, and — because snapshots and PITR are independent — against one backup system failing on its own. None of them defends against losing access to the Railway account itself. The off-platform copy stays deliberately deferred with a named trigger (`IMPLEMENTATION_PLAN.md`: before the first real pilot restaurant).
+
+---
+
+## 23. Restoring from a volume snapshot has never been tried, and cannot be tried safely against production
+**Threat:** Entry 22 above closed the "no backups, never restored" threat *for PITR specifically*, by an actual rehearsal. Volume snapshots are now configured too — and it would be easy, and wrong, to read entry 22 as covering them by analogy. **It does not.** They are a different mechanism with a different restore path, and that path has never been executed on this project.
+
+The distinction is not academic. PITR restore is safe by construction: `volumeInstancePITRRestore` takes a `newServiceName` and stands up a *separate* service, leaving production untouched — which is exactly why rehearsing it was possible. Volume-snapshot restore does not work that way: per Railway's own documentation it creates a new volume from the snapshot and mounts it **on the same service** in place of the current one, detaching (but retaining) the old volume, and requires a redeploy to take effect. It additionally **permanently deletes every snapshot newer than the one being restored**. Performing that against the live production service is not a rehearsal — it is an outage plus irreversible loss of newer recovery points.
+
+**Why this stays open rather than being quietly closed:** the failure modes a rehearsal exists to catch are the same ones as for PITR — a snapshot that will not mount, a volume restored without the Ledger's constraints and trigger, a "restore" that silently lands on the wrong point. Entry 22 exists precisely because those are invisible until someone tries. Assuming they are absent here because they were absent for PITR is the reasoning `CLAUDE.md` warns against by name: diagnosing by resemblance to a prior case rather than from this one's own evidence.
+
+**What would actually close it, none of which is available today:** a throwaway service with its own volume and its own snapshot, restored and verified in isolation — which requires the staging environment that ADR-035 deliberately defers, since the project has exactly one Railway environment and everything that is not a laptop *is* production. The API signature (`volumeInstanceBackupRestore` takes `volumeInstanceId` and `volumeInstanceBackupId` as separate arguments) *suggests* a snapshot might be restorable into a different volume than its source, which would make an isolated rehearsal possible — but that is inference from a parameter list, not documented behaviour, and testing an inference against production infrastructure is itself the risk being avoided.
+
+**Status:** genuinely open. Snapshots are configured and accumulating, and are worth having on the strength of the mechanism alone — but until one has been restored and checked, they are the same kind of belief PITR was before its rehearsal. Closing this is a real task for whenever staging exists (ADR-035), not something to mark done because entry 22 looks similar.
 
 ---
 
