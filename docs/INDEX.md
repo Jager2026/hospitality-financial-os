@@ -1,6 +1,6 @@
 ---
 title: INDEX
-version: 1.8.0
+version: 1.9.0
 status: Active
 classification: Internal
 owner: Founder
@@ -25,7 +25,7 @@ Regenerate by hand when a doc's version bumps or a new doc is added — it isn't
 | [UX_MAP.md](UX_MAP.md) | 2.1.0 | Every screen, navigation path, and interaction in the product, and what changed on each screen as a result of specific ADRs. |
 | [DOMAIN_GLOSSARY.md](DOMAIN_GLOSSARY.md) | 1.0.0 | One-page dictionary of project-specific terms and confusable pairs, compiled from DATABASE.md/ARCHITECTURE_DECISIONS.md/MASTERPLAN.md — never a new decision of its own. |
 | [EVENT_CATALOG.md](EVENT_CATALOG.md) | 1.3.0 | The concrete catalog of `OutboxEvent` rows the codebase actually produces and their payload shapes, read directly from the code, not designed ahead of it. Notes the real ADR-031 alerting webhook alongside the pre-existing log-only alert. |
-| [THREAT_MODEL.md](THREAT_MODEL.md) | 1.7.0 | Security threats considered for the platform — organized into Closed Threats, Accepted Risk, and Open, Not Answered, each citing the ADR that resolved or owns it. Sprint 13 (ADR-032/033) closes five entries (payment reconciliation, dependency scanning, breached-password check, waiter tip-recipiency, idempotency race) and reclassifies PROCESSOR_CLEARING alongside the Wallet-availability entry, both blocked on `Withdrawal`. |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | 1.8.0 | Security threats considered for the platform — organized into Closed Threats, Accepted Risk, and Open, Not Answered, each citing the ADR that resolved or owns it. Sprint 13 (ADR-032/033) closes five entries (payment reconciliation, dependency scanning, breached-password check, waiter tip-recipiency, idempotency race) and reclassifies PROCESSOR_CLEARING alongside the Wallet-availability entry, both blocked on `Withdrawal`. Entry 22 records the production-backup gap and the restore rehearsal that closed it — including, prominently, what that rehearsal did NOT prove. |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | 2.8.0 | The sprint-by-sprint build plan — tasks and Definition of Done for each sprint, Sprint 0 through the current one, plus a Deferred/Not-Yet-Scheduled backlog for Prisma 5→7, MFA, the off-platform backup, and the staging environment (the last two both triggered by the first real pilot restaurant); the vitest 2→3 item is now closed (ADR-037). |
 | [SEQUENCE_DIAGRAMS.md](SEQUENCE_DIAGRAMS.md) | 1.0.1 | Prose explanation of what each sequence diagram resolves and the ADRs that came out of walking through the timing (ADR-014, ADR-015, ADR-016). |
 | [SEQUENCE_ONBOARDING.md](SEQUENCE_ONBOARDING.md) | — (no frontmatter; mermaid source) | Mermaid sequence diagram for restaurant creation through Stripe Connect onboarding to first-payment readiness. |

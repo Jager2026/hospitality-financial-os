@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.7.0
+version: 1.8.0
 status: Active
 classification: Critical
 owner: Founder
@@ -185,6 +185,26 @@ Entries 9–15 below are Sprint 11's OWASP Top 10:2025 review (`IMPLEMENTATION_P
 **Threat:** As stated in the entry this closes — a genuinely unlucky concurrent-request interleaving could surface as a raw, unhandled `500` instead of the intended `409 IDEMPOTENCY_KEY_CONFLICT`.
 
 **Closed by:** ADR-032 Decision 3. The `create()` call inside `intercept()`'s `!existing` branch is now wrapped in a `catchError` that maps a real Postgres unique-constraint violation (`Prisma.PrismaClientKnownRequestError`, `code === "P2002"`) to the same controlled `409` — closed architecturally, not merely "not observed to fail" under one load-test run. Verified by forcing the exact race deterministically (`idempotency.interceptor.spec.ts`: pre-create the winning row directly, then stub `findUnique()` to still return `null`, so this request's own `create()` hits the real constraint on every single run), not by relying on `Promise.all` timing luck.
+
+## 22. Total, unrecoverable loss of the production database — no backup existed at all, and no restore had ever been attempted
+**Threat:** The single largest one on this list by consequence, and it was open silently. Production ran with **zero backups of any kind** — found by direct API query during the Sprint 13 backup audit, not by suspicion: `pitr status` returned `enabled: false, bucketWired: false`, volume backup schedules returned `[]`, existing snapshots returned `[]`, and the project had no storage bucket for PITR to write to. Losing the Postgres volume would have meant losing the Ledger permanently, with nothing to restore from.
+
+A second, subtler half of the same threat: even once backups exist, a backup nobody has ever restored from is a belief, not a capability. The failure modes that matter — a dump that will not load, a schema restored without its constraints, a "point in time" that silently lands hours earlier than requested — are all invisible until someone actually tries.
+
+**Closed by:** ADR-034's addendum (production's minor version pin removed — Railway reports minor pinning as a hard blocker for PITR, and PITR is implemented on pgBackRest), plus PITR enabled with a wired bucket. **Verified by an actual restore rehearsal**, not by the feature reporting itself healthy — the distinction this entry exists to make.
+
+**Mechanism, live-verified against a real restore into an isolated service (never touching production — `volumeInstancePITRRestore` takes a `newServiceName` and creates a separate service, unlike volume-snapshot restore, which swaps the volume under the live one):** a restore targeted at `2026-08-26 12:20 UTC` was checked four ways.
+
+- **The Ledger invariant holds** — zero unbalanced `JournalEntry` rows in the restored database.
+- **The Ledger's own defences came back with it, not just its rows** — `journal_entry_compensating_fk_matches_type` (`CHECK`, ADR-017), `ledger_line_balanced` (deferred trigger, ADR-002) and its `check_journal_entry_balanced()` function all confirmed present by direct catalog query. A restore that returned data without the trigger would have looked successful while leaving the Ledger undefended.
+- **Row counts match production exactly** across all nine key tables, and the specific rows known to exist at that moment were all present and correct — the restaurant with its real Stripe account id, both payments with their amounts and `waiter_membership_id`, and the `AuditLog` row still carrying both identities separately (ADR-033).
+- **The restore point is accurate to the second, proven by a discriminating check rather than by counting rows.** The newest *created* row was from `11:56`, so row counts alone could not distinguish a restore at 12:20 from one at 11:57. But the 12:15 reconciliation cycle *updated* existing rows rather than creating any — so `reconciliation_alert_sent_at` is the field that separates the two. It came back populated, byte-identical to production (`12:15:00.819` / `12:15:01.537`). The restore genuinely captured writes up to at least `12:15:01.5`.
+
+That last check also resolved an open question this audit had been carrying: `maxRestoreTime: 12:15:01` had disagreed with `archiverLastArchivedAt: 20:20:30` by eight hours, and it was unclear whether that meant a stale restore horizon. It did not. `12:15:01` was honest — it was the timestamp of the last real write to the database, after which production was idle, so the archiver was alive with nothing left to archive (`archived=0` in pgBackRest's own watcher output). The two numbers answer different questions: how far a restore can reach, and when the archiver last ran. Separately, the dashboard's coverage window and the CLI's figures reconciled once timezone was accounted for — the dashboard renders local time (+3), the CLI UTC; the window's start matched pgBackRest's `last_full` exactly.
+
+**What this rehearsal did NOT prove, stated as prominently as what it did.** The production Ledger is empty — `journal_entry`, `ledger_line` and `transaction` all hold zero rows, because no payment has ever been captured in production. **The invariant check therefore passed trivially, over nothing.** It demonstrates that the mechanism restores, that the schema and its constraints survive, and that the point in time is accurate; it demonstrates nothing about whether debits equal credits across real financial history, because there is no real financial history yet. Re-running this rehearsal is a genuine, non-optional prerequisite once real money has moved — the check that passes today is not the check that will matter then.
+
+**Two residual gaps, neither closed by this entry.** Volume snapshots remain unconfigured (schedules queried directly: still `[]`) — Railway's own guidance is that they are independent of PITR and worth keeping alongside it, so this is a real second layer that does not yet exist. And every mechanism in place lives inside Railway; an off-platform copy is deliberately deferred with a named trigger (`IMPLEMENTATION_PLAN.md`: before the first real pilot restaurant), which protects against disk failure and our own mistakes but not against losing the Railway account itself.
 
 ---
 
