@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.22.0
-status: Active — thirty-seven ADRs, all Accepted
+version: 1.23.0
+status: Active — thirty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -715,6 +715,78 @@ The risk worth naming: an ignore list is a promise to come back. Left alone, it 
 - And the gate proved still capable of failing, not merely silent: a synthetic high advisory injected into a throwaway copy of the script produced `1 high/critical advisory(ies) not covered by an explicit ignore` and exit 1. An empty list makes the gate strictly stronger than before — `!(id in {})` is unconditionally true, so any future high/critical fails the build with nothing to fall through.
 
 **Consequences:** `check-audit.js`'s `IGNORED_ADVISORIES` is `{}`, with a comment explaining why it is empty and that adding an entry again should feel like a decision rather than a reflex. `apps/backend/package.json` moves to `vitest`/`@vitest/coverage-v8` `^3.2.7`. Root `package.json` gains three `pnpm.overrides` entries. `IMPLEMENTATION_PLAN.md`'s deferred vitest item closes. No application code, no `schema.prisma` change, no test rewritten — the suite that passed on vitest 2 passes unchanged on vitest 3, which is itself the evidence that this was a tooling upgrade and not a behavioural one. **Not attempted and still open:** vitest 4, which remains a future decision with no current advisory pressure behind it.
+
+---
+
+## ADR-038 — Secrets Transferred by Hand Are Corrupted Silently: Fail at Boot, Not Days Later on a Real Call
+**Status:** Accepted (Founder decision) — both mechanisms adopted; the liveness probe alerts rather than blocking the boot
+
+**Context — three for three, and the pattern is the point.** Every secret that has been transferred by hand into Railway's environment on this project has arrived corrupted:
+
+| # | Secret | Corruption | How it was eventually found | Cost |
+|---|---|---|---|---|
+| 1 | `STRIPE_WEBHOOK_SECRET` | wrapped in angle brackets — `<whsec_…>` | a real webhook rejected in production | hours |
+| 2 | `STRIPE_SECRET_KEY` | wrapped in angle brackets — `<sk_test_…>` | restaurant creation failing in production | hours |
+| 3 | `STRIPE_SECRET_KEY` | **one character silently deleted** (107 → 106) | ~11 days, a support ticket with Stripe, and a full session of diagnosis | days |
+
+The third is the one that matters for design, because it is the one no amount of care would have caught. Angle brackets are visible if you look closely. **A key missing exactly one character out of 107, in the middle of a random alphanumeric string, is not visible to any human review — and it was, in fact, looked at directly more than once during this saga and passed as correct each time.** The value was byte-compared and confirmed free of brackets and whitespace; the length was even printed (`106`) and read past, because nobody had a `107` to compare it to.
+
+What made it expensive is not that it broke, but *where* it broke: the corrupted value passed `env.validation.ts` (`z.string().min(1)`), the app booted cleanly, health checks went green, and the failure surfaced only later on a real business call — as `invalid_v2_key`, an error that points at the *permissions of the key*, not at its *integrity*. Every hypothesis it invited was wrong: v2 API not enabled, wrong Stripe sandbox, account-level restriction, SDK version, IP allowlisting, network path. Stripe's own message was literally accurate the whole time — *"ensure you provided the full key"* — and was read as boilerplate.
+
+**The generalisable failure, stated so it outlives this particular secret:** a configuration error that a process cannot detect at startup becomes a *business* error at runtime, and business errors point at business causes. The distance between the corruption and its symptom is what costs days, not the corruption itself.
+
+**Decision 1 (recommended, low cost, no trade-off worth arguing) — validate the *shape* of every known secret at boot.** `env.validation.ts` already validates everything else meaningfully (`JWT_*` ≥ 32 chars, `DEFAULT_PLATFORM_FEE_BASIS_POINTS` an integer 0–10 000, `ALERT_WEBHOOK_URL` a real URL); the Stripe secrets are the only ones still at `min(1)`, which is exactly why they are the ones that broke. Add, for each:
+- a required prefix (`sk_test_`/`sk_live_`/`rk_…` for the API key, `whsec_` for the webhook secret) — catches corruption #1 and #2 outright, at boot, with a message naming the variable;
+- a charset constraint (`^[A-Za-z0-9_]+$`) — catches whitespace, newlines, quotes, and brackets generally rather than only the two shapes already seen;
+- a minimum length that reflects a real key rather than `1`.
+
+**Honest limitation, stated rather than glossed: none of this would have caught corruption #3.** A 106-character key has the right prefix, the right charset, and passes any sane minimum. Shape validation closes two of the three incidents and the whole class of "someone pasted the surrounding punctuation" — it does not close truncation. Presenting it as the fix would be exactly the kind of false confidence this ADR exists to argue against.
+
+**Decision 2 (the one that actually closes truncation — and the one with a real trade-off) — prove the secret works at boot instead of inferring it from its shape.** A single authenticated read against Stripe during startup (`GET /v1/account`, or the v2 equivalent) answers the only question that matters — *does this credential actually work* — and is indifferent to how it was corrupted. Truncation, substitution, a revoked key, a key from the wrong account, a rotated key nobody updated: all fail identically and immediately, at the moment and place where the cause is obvious.
+
+The trade-off is real and should be decided rather than assumed:
+
+- **If a failed probe refuses the boot,** the failure is impossible to miss — and Stripe's availability becomes this service's availability. That is not automatically wrong: the `/health` gate added alongside this already blocks a deploy when Postgres or Redis is unreachable, and this platform's entire purpose is moving money through Stripe. But it is a genuine new coupling to an external vendor, and it would mean a Stripe incident can block an unrelated deploy.
+- **If a failed probe only alerts loudly** (via the `AlertService` that already exists, ADR-031/032) **and lets the app start,** availability is unchanged and the discovery time still collapses from days to seconds — but the signal can be missed, which is precisely the failure mode `THREAT_MODEL.md` #13 is about.
+
+**Founder decision: both, with the probe in the alerting form, not boot-refusal.** The problem being solved is time to discovery, not a bad boot; coupling this service's availability to Stripe's is disproportionate for an application that today serves every non-payment route without Stripe at all. Reconsider boot-refusal only if an alert is ever demonstrably missed.
+
+**A claim this project had made to Stripe support, corrected here by direct measurement.** The ticket stated that v1 calls with the corrupted key worked and the failure was isolated to v2 — which, if true, would have meant a v1-based probe reports a healthy credential in exactly the incident it exists to catch. Tested rather than assumed, by reconstructing the real corrupted value (the full key minus the character at index 105) and calling both APIs with it:
+
+```
+(a) v1  balance.retrieve      → 401  "Invalid API Key provided: sk_test_****…P2TT"
+(b) v2  core.accounts.list    → 401  invalid_v2_key
+```
+
+**Both reject it.** The belief that "v1 worked" was never observed: webhooks kept succeeding throughout, but webhook signature verification uses `STRIPE_WEBHOOK_SECRET` and makes no API call at all, and no other v1 call existed in the failing paths. An unverified inference was repeated until it sounded like a finding — worth recording precisely because it nearly shaped a design decision.
+
+**The probe still calls v2, for a different and narrower reason that survives that correction.** v2 Accounts access is enabled per Stripe account and can be absent while the key is otherwise entirely valid — that is a real state, not a hypothetical, since it was Stripe support who had to confirm the account was enabled. Only a v2 call proves the credential can do what restaurant onboarding actually requires (`v2.core.accounts.create`, ADR-009/ADR-014); a v1 probe would report health for an account unable to create a single connected account. This is written into the method's own doc comment so a later "optimization" to a cheaper v1 call cannot happen silently.
+
+**How the probe behaves where no real key exists, without a bypass flag.** Gated on `NODE_ENV !== "production"`, deliberately *not* on a dedicated on/off switch. A bespoke flag is precisely the kind of thing that gets set correctly in every environment except one, and the one that matters is the one nobody checks. `NODE_ENV` already exists, is already a validated enum, and is already load-bearing for far more than this — a wrong value there breaks enough else that it cannot fail quietly. The trade-off, stated plainly: this does mean a misconfigured `NODE_ENV` in production would disable the probe, but that misconfiguration has much larger and louder consequences than a skipped credential check. The alternative considered and rejected was probing everywhere: it would make a live third-party call from CI and from every developer machine against placeholder keys, breaking this codebase's own "no test makes a live network call" precedent and generating permanent false alarms — the reliable way to train everyone to ignore the real one.
+
+**Verified by falsification, each mechanism separately, against the real historical values:**
+
+| broken deliberately | what failed | proving |
+|---|---|---|
+| `STRIPE_SECRET_KEY` reverted to `z.string().min(1)` | 5 shape tests, including both real angle-bracket incidents | shape rules do the work, not something else |
+| boot probe removed entirely | 4 probe tests | the probe, not the shape rules, is what catches a working-looking-but-dead credential |
+| `logger.error` dropped, `sendAlert()` alone kept | 2 tests, incl. "logs even when the alert channel is unconfigured" | the unconditional log is load-bearing, since `sendAlert` returns early with no `ALERT_WEBHOOK_URL` |
+
+`env.validation.spec.ts` additionally asserts, in executable form, that shape validation does **not** catch the one-character truncation — the opposite of what its neighbours assert, on purpose, so nobody can later read that file and conclude the shape rules made the probe redundant.
+
+**Consequences:** `env.validation.ts` gains prefix/charset/length rules for both Stripe secrets (`rk_` accepted alongside `sk_`, since Stripe's own guidance now prefers restricted keys and rejecting them would turn that migration into a boot failure). `StripeService` implements `OnModuleInit` and gains `AlertService` + `PinoLogger` dependencies; `StripeModule` imports `AlertModule` accordingly — a missing import there typechecks fine and fails only when Nest builds the graph, exactly the shape CLAUDE.md's Architecture Review paragraph names, and it *did* surface that way in `payment.controller.spec.ts` during this work rather than being anticipated. CI's Stripe placeholders lengthen to real shape. Eight existing spec files updated for the widened constructor — the change's real ripple, fixed rather than routed around. New: `env.validation.spec.ts` (8 tests), `stripe.service.spec.ts` (6 tests). Full suite 45 files, 245 tests, stable across two consecutive runs.
+
+**Encountered while verifying, and worth separating from this ADR's own subject:** the local dev database had again accumulated 155 stale `PENDING` payments past `BATCH_SIZE`, starving `PaymentReconciliationService`'s test fixtures out of every batch — the identical fixture-hygiene problem ADR-032's Consequences already documents, recurring simply because the suite ran many times in one session. Resolved with `pnpm db:reset`. Not caused by this change, and confirmed as such rather than assumed: the failing assertions concerned a query this ADR never touches.
+
+**A prerequisite worth flagging, because it is the same class of gap found twice this session:** CI's placeholder is `sk_test_ci_placeholder_not_a_real_key` — prefix-valid and charset-valid, but far shorter than a real key. Any minimum-length rule tightens CI too, so the placeholder must be lengthened to a realistic dummy rather than the rule being weakened or environment-gated around it. The same reasoning as the BigInt polyfill fix in `test/setup.ts`: when the test environment differs in shape from production, the difference eventually hides a real defect rather than merely being untidy.
+
+**A prerequisite that was itself a finding, and then a second finding on top of it.** CI's placeholder `sk_test_ci_placeholder_not_a_real_key` is prefix- and charset-valid but far shorter than a real key, so any minimum-length rule tightens CI too. The placeholder was lengthened to real shape rather than the rule weakened or CI exempted — the same reasoning as this session's BigInt-polyfill fix in `test/setup.ts`: once the test environment differs in shape from production, the difference eventually hides a real defect instead of merely being untidy.
+
+**That fix was then blocked by GitHub, correctly, and the block was the more interesting result.** A placeholder realistic enough to satisfy our own validation is, by construction, realistic enough to match GitHub's secret-scanning pattern: the push was rejected as containing a *"Stripe Test API Secret Key."* GitHub offers an unblock link that would have made the push succeed in one click. **Taking it would have been the wrong lesson** — the value of push protection comes entirely from never having taught yourself to wave it through, and a team that clicks unblock for a fake key will click it for a real one.
+
+Resolved by generating both placeholders at CI runtime (`/dev/urandom` → prefix + random alphanumerics) instead of storing literals. This satisfies both constraints at once and is strictly better than a literal regardless of the scanner: nothing key-shaped exists in the repository to be scanned, leaked, or mistaken for real, and a freshly random value each run cannot quietly become a real credential that someone pasted in "just for now." The generated values were checked against this ADR's own rules before being relied on — 107 and 38 characters, both matching the new regexes.
+
+**The generalisable point, since it will recur the next time any validation is tightened:** a rule that forces test fixtures to resemble production makes those fixtures indistinguishable from the real thing to every tool that scans for the real thing. The answer is to *generate* the fixture rather than to store a better-looking one, and never to silence the scanner.
 
 ---
 

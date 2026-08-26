@@ -41,11 +41,29 @@ describe("WalletProjectionService (real database)", () => {
 
   beforeAll(async () => {
     await prisma.$connect();
-    const stripe = new StripeService({
-      getOrThrow: (key: string) =>
-        key === "STRIPE_WEBHOOK_SECRET" ? WEBHOOK_SECRET : "sk_test_fake_never_called",
+    const stripe = new StripeService(
+      {
+        getOrThrow: (key: string) =>
+          key === "STRIPE_WEBHOOK_SECRET"
+            ? WEBHOOK_SECRET
+            : key === "NODE_ENV"
+              ? "test"
+              : "sk_test_fake_never_called",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      // ADR-038: StripeService now carries a boot-time credential probe. NODE_ENV is "test" above,
+      // so the probe never runs here and never makes a network call — these two dependencies exist
+      // only to satisfy the constructor.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+      { sendAlert: async () => undefined } as any,
+      {
+        setContext: () => undefined,
+        info: () => undefined,
+        error: () => undefined,
+        warn: () => undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+    );
     const ledger = new LedgerService(prisma);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeConfig = { getOrThrow: () => 100 } as any; // 1.00%, Founder decision

@@ -11,8 +11,41 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32, "JWT_REFRESH_SECRET must be at least 32 characters"),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900), // 15 min
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(604_800), // 7 days
-  STRIPE_SECRET_KEY: z.string().min(1, "STRIPE_SECRET_KEY is required"),
-  STRIPE_WEBHOOK_SECRET: z.string().min(1, "STRIPE_WEBHOOK_SECRET is required"),
+  // ADR-038: shape validation, added after three consecutive hand-transferred secrets arrived
+  // corrupted — twice wrapped in angle brackets (`<sk_test_…>`, `<whsec_…>`), once with a single
+  // character silently deleted. These two were the ONLY secrets in this file still validated as
+  // `min(1)` while everything else here carries a real rule, and they are precisely the two that
+  // broke. The prefix and charset rules below catch the bracket class outright, at boot, naming
+  // the variable — instead of the app starting cleanly and failing days later on a real business
+  // call with an error about the key's PERMISSIONS rather than its INTEGRITY.
+  //
+  // Stated plainly so nobody mistakes this for full coverage: **none of these rules catch the
+  // one-character truncation.** A 106-character key has the right prefix, the right charset, and
+  // clears any honest minimum. That case is closed by StripeService's own boot-time liveness
+  // probe (ADR-038 Decision 2), not here.
+  //
+  // The 32-character floor is a real historical floor, not a guess: Stripe's older key format was
+  // `sk_test_` + 24 characters. Current keys are far longer (107), but pinning to today's length
+  // would break the day Stripe issues a different one — this catches gross truncation and empty-ish
+  // values without inventing a constraint Stripe never promised. `rk_` is accepted alongside `sk_`
+  // because Stripe's own current guidance recommends restricted keys over secret keys; this project
+  // uses `sk_` today, and rejecting `rk_` would turn that future migration into a boot failure.
+  STRIPE_SECRET_KEY: z
+    .string()
+    .min(32, "STRIPE_SECRET_KEY is too short to be a real Stripe key")
+    .regex(
+      /^(sk|rk)_(test|live)_[A-Za-z0-9]+$/,
+      "STRIPE_SECRET_KEY is malformed — expected sk_test_/sk_live_/rk_test_/rk_live_ followed by " +
+        "alphanumerics only. Angle brackets, quotes, whitespace or a truncated prefix all fail here.",
+    ),
+  STRIPE_WEBHOOK_SECRET: z
+    .string()
+    .min(32, "STRIPE_WEBHOOK_SECRET is too short to be a real Stripe webhook secret")
+    .regex(
+      /^whsec_[A-Za-z0-9]+$/,
+      "STRIPE_WEBHOOK_SECRET is malformed — expected whsec_ followed by alphanumerics only. " +
+        "Angle brackets, quotes or whitespace all fail here.",
+    ),
   // Sprint 5, Founder decision: 100 = 1.00%. Basis points (integer), not a percentage float — same
   // reasoning as ADR-001's BIGINT minor units for money itself. Required, no .default(): a fee
   // rate is a business decision, never silently assumed. "Default" in the name anticipates a

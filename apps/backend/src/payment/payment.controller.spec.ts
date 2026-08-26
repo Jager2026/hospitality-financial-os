@@ -11,6 +11,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { computeFingerprint } from "../common/idempotency/fingerprint.util";
 import { IdempotencyInterceptor } from "../common/idempotency/idempotency.interceptor";
+import { AlertService } from "../common/alerting/alert.service";
 import { AuditLogInterceptor } from "../common/interceptors/audit-log.interceptor";
 import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
@@ -53,6 +54,9 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
         if (key === "STRIPE_SECRET_KEY") return "sk_test_fake_never_really_called";
         if (key === "STRIPE_WEBHOOK_SECRET") return "whsec_fake_never_really_called";
         if (key === "DEFAULT_PLATFORM_FEE_BASIS_POINTS") return 100; // 1.00%, matches ADR-021
+        // ADR-038: StripeService reads NODE_ENV to decide whether to run its boot-time credential
+        // probe. "test" keeps it off, so no network call is ever attempted from this suite.
+        if (key === "NODE_ENV") return "test";
         throw new Error(`unexpected config key in test: ${key}`);
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -72,7 +76,21 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
         // synthetic stand-in.
         {
           provide: PinoLogger,
-          useValue: { setContext: () => undefined, warn: () => undefined } as unknown as PinoLogger,
+          useValue: {
+            setContext: () => undefined,
+            warn: () => undefined,
+            info: () => undefined,
+            error: () => undefined,
+          } as unknown as PinoLogger,
+        },
+        // ADR-038: StripeService now depends on AlertService for its boot-time credential probe.
+        // Without this the module fails to resolve at runtime — the exact failure shape CLAUDE.md's
+        // Architecture Review paragraph describes, which typechecks cleanly and only surfaces when
+        // Nest actually builds the graph. The probe itself never runs here (NODE_ENV is not
+        // "production"), so this stub only needs to exist.
+        {
+          provide: AlertService,
+          useValue: { sendAlert: async () => undefined } as unknown as AlertService,
         },
         { provide: APP_INTERCEPTOR, useClass: AuditLogInterceptor },
       ],
