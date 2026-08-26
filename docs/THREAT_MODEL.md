@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.9.0
+version: 1.10.0
 status: Active
 classification: Critical
 owner: Founder
@@ -225,19 +225,6 @@ Only the Daily figure matches its label exactly. "A month" is 27 days and "three
 
 ---
 
-## 23. Restoring from a volume snapshot has never been tried, and cannot be tried safely against production
-**Threat:** Entry 22 above closed the "no backups, never restored" threat *for PITR specifically*, by an actual rehearsal. Volume snapshots are now configured too — and it would be easy, and wrong, to read entry 22 as covering them by analogy. **It does not.** They are a different mechanism with a different restore path, and that path has never been executed on this project.
-
-The distinction is not academic. PITR restore is safe by construction: `volumeInstancePITRRestore` takes a `newServiceName` and stands up a *separate* service, leaving production untouched — which is exactly why rehearsing it was possible. Volume-snapshot restore does not work that way: per Railway's own documentation it creates a new volume from the snapshot and mounts it **on the same service** in place of the current one, detaching (but retaining) the old volume, and requires a redeploy to take effect. It additionally **permanently deletes every snapshot newer than the one being restored**. Performing that against the live production service is not a rehearsal — it is an outage plus irreversible loss of newer recovery points.
-
-**Why this stays open rather than being quietly closed:** the failure modes a rehearsal exists to catch are the same ones as for PITR — a snapshot that will not mount, a volume restored without the Ledger's constraints and trigger, a "restore" that silently lands on the wrong point. Entry 22 exists precisely because those are invisible until someone tries. Assuming they are absent here because they were absent for PITR is the reasoning `CLAUDE.md` warns against by name: diagnosing by resemblance to a prior case rather than from this one's own evidence.
-
-**What would actually close it, none of which is available today:** a throwaway service with its own volume and its own snapshot, restored and verified in isolation — which requires the staging environment that ADR-035 deliberately defers, since the project has exactly one Railway environment and everything that is not a laptop *is* production. The API signature (`volumeInstanceBackupRestore` takes `volumeInstanceId` and `volumeInstanceBackupId` as separate arguments) *suggests* a snapshot might be restorable into a different volume than its source, which would make an isolated rehearsal possible — but that is inference from a parameter list, not documented behaviour, and testing an inference against production infrastructure is itself the risk being avoided.
-
-**Status:** genuinely open. Snapshots are configured and accumulating, and are worth having on the strength of the mechanism alone — but until one has been restored and checked, they are the same kind of belief PITR was before its rehearsal. Closing this is a real task for whenever staging exists (ADR-035), not something to mark done because entry 22 looks similar.
-
----
-
 # Accepted Risk (Not Closed — Deliberately Left Open)
 
 ## Redis flush silently un-revokes outstanding refresh tokens and token families
@@ -252,6 +239,19 @@ This is listed here, separately from the Closed Threats above, on purpose: it is
 # Open, Not Answered
 
 Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet, or the answer depends on a decision outside this codebase entirely. Listed honestly rather than filled in with a guess, per the Founder's own instruction.
+
+## Restoring from a volume snapshot has never been tried, and cannot be tried safely against production
+Closed Threat #22 above closed the "no backups, never restored" threat **for PITR specifically**, by an actual rehearsal. Volume snapshots are now configured too — and it would be easy, and wrong, to read #22 as covering them by analogy. **It does not.** They are a different mechanism with a different restore path, and that path has never been executed on this project.
+
+The distinction is not academic. PITR restore is safe by construction: `volumeInstancePITRRestore` takes a `newServiceName` and stands up a *separate* service, leaving production untouched — which is exactly why rehearsing it was possible. Volume-snapshot restore does not work that way: per Railway's own documentation it creates a new volume from the snapshot and mounts it **on the same service** in place of the current one, detaching (but retaining) the old volume, and requires a redeploy to take effect. It additionally **permanently deletes every snapshot newer than the one being restored**. Performing that against the live production service is not a rehearsal — it is an outage plus irreversible loss of newer recovery points.
+
+The failure modes a rehearsal exists to catch are the same ones as for PITR — a snapshot that will not mount, a volume restored without the Ledger's constraints and trigger, a "restore" that silently lands on the wrong point. #22 exists precisely because those are invisible until someone tries. Assuming they are absent here because they were absent for PITR is the reasoning `CLAUDE.md` warns against by name: diagnosing by resemblance to a prior case rather than from this one's own evidence.
+
+**What would actually close it, none of which is available today:** a throwaway service with its own volume and its own snapshot, restored and verified in isolation — which requires the staging environment ADR-035 deliberately defers, since the project has exactly one Railway environment and everything that is not a laptop *is* production. The API signature (`volumeInstanceBackupRestore` takes `volumeInstanceId` and `volumeInstanceBackupId` as separate arguments) *suggests* a snapshot might be restorable into a different volume than its source, which would make an isolated rehearsal possible — but that is inference from a parameter list, not documented behaviour, and testing an inference against production infrastructure is itself the risk being avoided.
+
+Snapshots are configured and accumulating, and are worth having on the strength of the mechanism alone — but until one has been restored and checked, they are the same kind of belief PITR was before its rehearsal. Closing this is a real task for whenever staging exists, not something to mark done because #22 looks similar.
+
+---
 
 The two entries below are grouped together deliberately (Sprint 13, ADR-032 Decision 1): both are economically real, and both are genuinely blocked on the same not-yet-built feature — `Withdrawal`/`Settlement` (`DATABASE.md`, Future Entities) — rather than on missing analysis.
 
