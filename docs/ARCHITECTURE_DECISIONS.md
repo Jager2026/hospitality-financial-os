@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.20.0
-status: Active — thirty-five ADRs, all Accepted
+version: 1.21.0
+status: Active — thirty-six ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -660,6 +660,35 @@ The honest consequence, stated rather than glossed: a synthetic seed proves less
 **Why this is decided now but built later.** Not cost: the entire production stack (four services, two volumes) bills at roughly **$1.83/month** at current near-zero traffic — a duplicated idle environment is a rounding error, and it would be dishonest to present money as the reason. The real reasons are two: **it is blocked**, since Decision 4 requires a second Stripe sandbox and Stripe integration is currently non-functional against `invalid_v2_key`, so half of staging could not be exercised even if it existed; and **it is premature**, because staging's whole purpose is to stop us from touching a database holding customer data, and there is no customer data yet. Deferred with a named trigger rather than a vague intention — see `IMPLEMENTATION_PLAN.md`.
 
 **Consequences:** No infrastructure created, no environment provisioned, no cost incurred by this ADR. `IMPLEMENTATION_PLAN.md` gains the deferred entry and its trigger. The prohibition in Decision 2 is binding from the moment staging exists, not from the moment someone remembers it. ADR-034's config-as-code work is a direct prerequisite that already landed: it is what keeps a future staging environment from silently drifting away from production's build configuration.
+
+---
+
+## ADR-036 — Deploy Discipline: Git-Triggered Deploys as the Normal Path, Manual `railway up` Retained as a Gated Emergency Hatch
+**Status:** Accepted (Founder decision)
+
+**Context — a real incident, not a hypothetical.** A production deploy was once built from the Sprint 12 commit while the ADR-031 code had already been written and tested, but not committed. It was caught before it did harm, and only because someone deliberately compared the two by hand. Anything that depends on remembering to compare will eventually not be compared.
+
+The weakness underneath it is structural rather than human, and worth stating precisely because it determines the fix: `railway up` uploads the *working directory*. What ships is whatever happens to be on disk at that moment, and Railway records **no commit at all** for such a deploy — `resolvedFileConfig.commitHash` is literally `null` afterwards, confirmed directly against the API during this work rather than assumed. A deploy that cannot name its own commit cannot be audited later. For a system that moves money, that is the actual problem; "we might ship the wrong code" is only its most visible symptom.
+
+**Root cause of why git-triggered deploys were not already in use — found during this work, and not what anyone assumed.** Every previous attempt failed with *"GitHub Repo not found"*, and the repository list came back empty, despite the repository being public and every permission appearing correctly granted. The real cause: **the Founder has two GitHub accounts — `JagerHORECA` and `Jager2026` — the repository belongs to `Jager2026`, and Railway was connected to `JagerHORECA`.** Railway was reporting the literal truth from where it was looking: within the account it had access to, that repository did not exist. No amount of re-granting permissions on the correct account could have fixed it, because the correct account was never the one being asked. Resolved by fully reinstalling the GitHub App and reconnecting the correct account.
+
+Recorded here in full because the failure mode is genuinely deceptive: the error message is accurate, the permissions screen looks correct, and the natural response — re-checking permissions on the account you *think* is connected — reinforces the wrong conclusion. **Whenever an integration reports a resource as missing while it is demonstrably present, verify which identity the integration is authenticated as before verifying its permissions.**
+
+**Decision — hybrid (Founder's choice), not either extreme.**
+
+**The normal path is a git-triggered deploy from `main`,** with `checkSuites: true` so a deploy waits for a green CI run rather than racing it. This is chosen primarily for **auditability**, not convenience: with a git trigger, the deploy *is* a commit — `commitHash` is populated, `branch` and `commitAuthor` are recorded, and the question "what is actually running in production right now" has an answer that does not depend on anyone's memory. The original incident becomes structurally impossible along the way, since code that is not committed cannot be deployed at all. That is a consequence of the mechanism, not a rule anyone has to follow.
+
+**The emergency hatch is `railway up`, kept deliberately and not removed.** The reasoning is specific: during a real outage, the last thing that should stand between a known fix and production is a dependency on GitHub — which may itself be the thing that is down, and which this project has already watched fail in a non-obvious way (see the two-accounts root cause above). Removing the manual path would trade a rare failure for a rarer but far worse one: no way to ship a fix during an incident.
+
+The hatch is not left unguarded. `scripts/preflight-deploy.js` (wired as `pnpm deploy:backend` / `pnpm deploy:frontend`) refuses unless all three hold: the current branch is `main`, the working tree is clean **including untracked files** (`railway up` uploads those too), and `HEAD` equals `origin/main` compared after a **fresh fetch** — without that fetch the check would pass against an `origin/main` that moved days ago, which is exactly the false confidence it exists to remove. It has **no `--force` escape**, deliberately: a gate that can be waved through is documentation, not a gate. A genuinely necessary off-`main` deploy should mean invoking `railway up` directly and knowingly, rather than passing a flag to the thing whose entire purpose is to say no.
+
+Stated honestly rather than glossed: the hatch remains bypassable by calling `railway up` directly, and a deploy made that way still records no commit. That is accepted — an emergency path that cannot be taken in an emergency is not a path. The gate makes the safe route the easy one; it does not, and cannot, make the unsafe route unavailable.
+
+**A UI/API discrepancy worth recording, because it looks exactly like a known trap and is not one.** After reconnecting, the Railway Source screen displays **Root Directory: `/`**. Read against ADR-031 — where a non-empty `rootDirectory` hid the monorepo's root `pnpm-lock.yaml` from Railpack, silently fell back to `npm install`, and produced 27 spurious TypeScript errors — this looks alarming. It is not: the API reports `rootDirectory: ""` for both services, verified directly. The UI renders the repository root as `/`; the stored value is the empty string ADR-031 requires. **`/` on screen and `""` in the API are the same thing.** Checking the API rather than trusting either the screen or the memory of ADR-031 is what settled it.
+
+**What the reconnect did and did not do automatically:** connecting the repository through the Dashboard created a deployment trigger for `backend` on its own — but with `checkSuites: false`, which would have let a deploy race its own CI run. Updated to `true` via `deploymentTriggerUpdate`. `frontend` received **no** trigger from the UI flow at all and needed one created explicitly (`deploymentTriggerCreate`, also `checkSuites: true`) — which the API accepted without further manual action, confirming the GitHub connection was genuinely repaired rather than merely appearing so for the one service that had been reconnected by hand.
+
+**Consequences:** Both services deploy from `main` on push, gated on CI. `railway up` remains available and gated by the preflight script. `frontend`, which had been stuck on commit `eb6710a` from 16 August because nothing had redeployed it since, catches up on the first triggered deploy — and its `railway.frontend.json` gets resolved for the first time, closing the config-as-code verification left open in ADR-034. **One limitation is explicitly not claimed as verified:** that a deploy genuinely *waits* for a green check suite could only be proven by deliberately pushing a red CI run to `main`, which would mean holding the main branch broken against a live production service with no staging environment (ADR-035, deferred). The flag is confirmed set to `true`; the waiting behaviour itself is trusted from Railway's own documented semantics and remains unverified by this project. Stated as an open gap rather than folded into the verified results.
 
 ---
 
