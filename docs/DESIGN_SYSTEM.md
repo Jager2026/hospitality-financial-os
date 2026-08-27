@@ -78,6 +78,20 @@ In all four references, *the numbers themselves are neutral*. Accent marks actio
 
 The practical test: **if the accent were removed entirely, the hierarchy of the screen must survive unchanged.** If it collapses, colour was carrying weight that size and space should have been carrying.
 
+## The accent is a token from the first line of CSS, never a hardcoded colour
+
+**Binding from the first component, and the one part of a deferred feature that cannot be deferred.**
+
+`MASTERPLAN.md` records a Pilot-Ready *candidate* — letting a restaurant put its logo and **one** accent colour on the guest-facing terminal, chosen from a palette we have pre-verified for contrast. It is gated on evidence from real pilots and is not being built. But it fixes one requirement on the interface today: **the system must be able to swap exactly one accent value without touching anything else.**
+
+Doing that from the start costs nothing — a variable instead of a literal. Retrofitting it costs a sweep of every component, and the kind of sweep that misses three places and leaves a restaurant's terminal with our colour in the corner nobody checked.
+
+Three consequences that follow from the rule above and make this cheap to keep true:
+
+- **Exactly one accent value is swappable.** Not a theme engine, not an arbitrary palette. One token, chosen from verified options.
+- **Because accent never carries importance, changing it can never change what a screen means.** A swappable accent is only safe *because* of the rule in this section — the two are the same decision seen from either end. If accent ever starts ranking, customisation stops being safe on the same day.
+- **Semantic colour is not customisable, ever.** A failed payment must look failed in every restaurant. Semantic state belongs to us; the brand accent is the only thing a restaurant may own.
+
 ---
 
 # The Hierarchy Law
@@ -198,7 +212,7 @@ Rejected for the reason that applies to any duplicated decision in this codebase
 Recorded so these are answered deliberately rather than settled by whoever writes the first component:
 
 1. **Light or dark — twice, once per surface.** The *per-surface* part is settled above; which value each surface takes is not. The terminal's answer is decided on outdoor legibility, independently of whatever the Portals choose.
-2. **The accent colour, and its budget.** *Accent Colour Never Carries Importance* already fixes where accent is permitted (actions, status) and where it is banned (money figures) — Part 2 inherits that rule rather than re-opening it, and adds the hex values, the semantic set, and how both behave on each surface's ground.
+2. **The accent colour, and its budget.** *Accent Colour Never Carries Importance* already fixes where accent is permitted (actions, status) and where it is banned (money figures) — Part 2 inherits that rule rather than re-opening it, and adds the hex values, the semantic set, and how both behave on each surface's ground. Part 2 also owns **the pre-verified accent palette** the terminal-branding candidate depends on: a small set of values each checked for contrast against both surfaces, so "choose your colour" is a choice among known-legible options rather than a free hex field.
 3. **The numeric typeface, specifically.** This product is read as numbers. Tabular figures are non-negotiable — proportional digits make a column of money jitter and are the single most common typographic mistake in fintech interfaces. Part 2 should name the face and confirm it has a tabular set.
 4. **The type scale, anchored to the hero figure.** The Hierarchy Law is only enforceable if the gap between rank 1 and rank 2 is defined numerically; "bigger" is not a specification.
 5. **Density.** Related to, and constrained by, the two-surface question: a terminal wants far lower density than a dashboard.

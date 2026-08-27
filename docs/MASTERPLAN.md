@@ -1,7 +1,7 @@
 ---
 title: MASTERPLAN
 subtitle: Hospitality Financial Operating System
-version: 2.1.0
+version: 2.2.0
 status: Active
 classification: Internal
 owner: Founder
@@ -745,6 +745,26 @@ Two items move from the "Out of Scope" wording to an explicit **Pilot-Ready** ti
 This explicitly **does not include**: actually withholding funds, remitting anything to VMI/Sodra, or the platform (or the restaurant, through the platform) acting as a formal tax agent. That remains Phase 3 ("Automated Accounting. Tax Reporting.") exactly as already written, and requires a formal legal/tax opinion first.
 
 **A blocking dependency, not a development task:** the correct rate, the correct legal basis, and who is actually the tax agent all depend on the waiter's employment-status classification — a question this document cannot answer and code cannot decide on its own. No rate, no bracket, and no computation logic gets implemented until the Founder has a written answer from a Lithuanian tax/payroll consultant. Until then, this item stays flagged, not built — see `THREAT_MODEL.md`, "Open, Not Answered."
+
+### Restaurant branding on the terminal — a Pilot-Ready *candidate*, gated on pilot evidence
+
+**Not committed, and deliberately not built now.** Recorded here with its reasoning so the decision is not re-argued from scratch, and so the one thing it requires of us today actually happens.
+
+**Why the idea is right.** The customer terminal is the only surface a **guest** ever sees — and they see it *inside the interior*. A tablet carrying a visually foreign interface is a foreign object on the table; one that sits in tone with the room reads as part of the restaurant. That distinction is not cosmetic: it changes how much a guest trusts the device being handed to them to take their money, which is a payment-conversion and tip-size question, not a taste question. It is also something the restaurant genuinely wants — they have invested in that interior for years, and every other supplier's hardware ignores it.
+
+**Why the originally proposed mechanism — owner uploads a photo, AI generates a personal design (colours *and* layout), owner accepts or keeps the default — is dangerous in that full form.** Three separate reasons, each sufficient on its own:
+
+1. **It contradicts a rule we have just written, on the worst possible screen.** `DESIGN_SYSTEM.md` establishes that accent colour never carries importance, with the test that removing the accent entirely must leave the hierarchy intact. An arbitrary owner-chosen palette does not honour that rule — and it would be applied to the **terminal**, the one screen where a second of a stranger's confusion costs an actual payment (`DESIGN_SYSTEM.md`, *One Product, Two Visual Systems*).
+2. **An AI can extract a palette from a photograph; it cannot extract a composition.** Layout follows from the data and from the Hierarchy Law, not from the room. A feature that promises "a personal design" and delivers "your colours" has a disappointment built into it at the moment of delivery, which is worse than never having offered it.
+3. **We have zero screens.** The correct order is one good terminal first, put in front of ten real restaurants, and then listen for whether customisation is asked for at all. It is entirely possible the answer is "put our logo on it" and nothing more — and that is a much cheaper feature than the one being designed around here.
+
+**The decision: constrained customisation with guaranteed legibility.** A logo, **one** accent colour chosen from a palette we have pre-verified for contrast, and a light or dark surface. Not "paste any hex" — a choice among verified options. **The design system stays ours; customisation lives inside its rules rather than on top of them.**
+
+**The AI part survives, as a chooser rather than a generator.** Photograph of the room → extract its palette → propose the nearest accent *from ours*: "this one will suit your room." The same moment of magic for the owner, none of the risk, and roughly a tenth of the implementation.
+
+**The gate:** revisit after the first pilot restaurants have used a real terminal, and only if they ask. This is a demand question, and we do not have the evidence yet.
+
+**What this requires of us now — the only part that is not deferred.** The accent must be **a token from the first line of CSS, never a hardcoded colour**. That is a free decision today and an expensive rewrite later, and it is the single thing that stops this feature from requiring the interface to be rebuilt. Recorded as a binding requirement in `DESIGN_SYSTEM.md` rather than only here.
 
 ## User Journey
 
