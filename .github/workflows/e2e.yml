@@ -1,0 +1,104 @@
+name: E2E
+
+# ADR-041 — this runs ONLY on pull requests that touch the frontend or the harness itself.
+#
+# The reason is not saving minutes. A slow check that runs on everything starts getting worked
+# around, and a bypassed check is worse than an absent one: it manufactures a feeling of safety
+# that nothing is producing. Today the frontend is one screen and the backend changes constantly,
+# so paying the full browser price on every backend PR buys nothing and steadily erodes the habit
+# of trusting CI.
+#
+# The trigger for widening this is named rather than left as "when it gets big": when the frontend
+# consumes enough of the API that a contract change would go unnoticed until a screen breaks. That
+# is about coupling, not about file count. Add `apps/backend/**` here on that day, not before.
+#
+# The main `lint-typecheck-test-build` job keeps running on everything, so a backend PR still gets
+# the full non-browser suite — including the design-token contrast assertions.
+on:
+  pull_request:
+    paths:
+      - "apps/frontend/**"
+      - "apps/e2e/**"
+      - "packages/**"
+      - ".github/workflows/e2e.yml"
+
+jobs:
+  browser-e2e:
+    runs-on: ubuntu-latest
+
+    env:
+      # A database of its own, created by the harness's own prepare step. Separate from the unit
+      # suite's `hospitality_os_test` so the two cannot interfere.
+      E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hospitality_os_e2e
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hospitality_os_e2e
+      REDIS_URL: redis://localhost:6379
+
+    services:
+      postgres:
+        # ADR-034: same major as production (Railway, 18.x), docker/docker-compose.yml and ci.yml.
+        # Keep all four in lockstep — proving migrations against a different major than production
+        # runs is proving the wrong thing.
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        # Real Redis, not a stub: /health reports it separately and the harness asserts it is up,
+        # so "the suite is green" must not be satisfiable while Redis is down.
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter backend run prisma:generate
+
+      # Both servers under test are the real production builds, started by Playwright's own
+      # webServer from the real `start` scripts — not `dev`. A harness that only ever exercises the
+      # development server proves the development server works.
+      - name: Build backend
+        run: pnpm --filter backend run build
+
+      - name: Build frontend
+        run: pnpm --filter frontend run build
+
+      - name: Install Playwright browser
+        run: pnpm --filter e2e exec playwright install --with-deps chromium
+
+      - name: Run browser end-to-end suite
+        run: pnpm --filter e2e run test:e2e
+
+      # Traces are retained only on failure (playwright.config.ts), so this uploads nothing on a
+      # green run and everything needed to reconstruct a red one.
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: apps/e2e/test-results/
+          retention-days: 7
