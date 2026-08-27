@@ -353,7 +353,7 @@ describe("DashboardService (real database)", () => {
     },
   );
 
-  it("Top Staff ranks a real net-positive tip correctly and surfaces the waiter's email", async () => {
+  it("Top Staff ranks a real net-positive tip correctly and surfaces BOTH the staff member's display name and email", async () => {
     const { org, restaurant } = await seedOrgRestaurant();
     const { user: waiterUser, membership: waiter } = await seedMembership(
       org.id,
@@ -367,6 +367,13 @@ describe("DashboardService (real database)", () => {
     expect(entry).toBeDefined();
     expect(entry!.tips).toBe("500");
     expect(entry!.email).toBe(waiterUser.email);
+    // ADR-026 shipped this screen with email only, correctly recording at the time that `User`
+    // had no name field. ADR-033 then added `displayName` and nothing came back here, so a screen
+    // whose whole job is naming people kept showing addresses. Asserted rather than assumed, and
+    // asserted as a DISTINCT value from the email — an implementation that filled displayName from
+    // the email (an easy "fix") would pass a mere `toBeDefined()` and fail this.
+    expect(entry!.displayName).toBe(waiterUser.displayName);
+    expect(entry!.displayName).not.toBe(entry!.email);
   });
 
   it("Revenue Chart buckets a 3-days-ago payment into the correct day, not today's", async () => {
