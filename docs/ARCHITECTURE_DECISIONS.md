@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.25.0
-status: Active — thirty-eight ADRs, all Accepted
+version: 1.26.0
+status: Active — thirty-nine ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -801,6 +801,27 @@ The trade-off is real and should be decided rather than assumed:
 Resolved by generating both placeholders at CI runtime (`/dev/urandom` → prefix + random alphanumerics) instead of storing literals. This satisfies both constraints at once and is strictly better than a literal regardless of the scanner: nothing key-shaped exists in the repository to be scanned, leaked, or mistaken for real, and a freshly random value each run cannot quietly become a real credential that someone pasted in "just for now." The generated values were checked against this ADR's own rules before being relied on — 107 and 38 characters, both matching the new regexes.
 
 **The generalisable point, since it will recur the next time any validation is tightened:** a rule that forces test fixtures to resemble production makes those fixtures indistinguishable from the real thing to every tool that scans for the real thing. The answer is to *generate* the fixture rather than to store a better-looking one, and never to silence the scanner.
+
+---
+
+## ADR-039 — A Staff Member's Wallet Is Addressed Through Their Membership, Never By Widening `GET /wallets`
+**Status:** Accepted (Founder decision)
+
+**Context:** Found during the pre-frontend reconciliation of `UX_MAP.md` against the real API, and it is a shape worth naming: **a permission with no addressable resource behind it.** ADR-024 Decision 3 deliberately made an employee's Wallet viewable by a Manager or Owner who reaches that Restaurant — `UX_MAP.md`'s Employee Details screen has listed Wallet since v1.0. The check permitting it has existed and been tested since Sprint 7. But there was no route to the resource: `GET /wallets` returns only the caller's *own* Wallets, so the id that `GET /wallets/{id}` requires could not be obtained by the very people the rule was written to allow. Nobody noticed for six sprints because no screen existed to try it.
+
+**Decision: a new route, `GET /memberships/{id}/wallet`.** A Wallet belongs one-to-one to a Membership, so the Membership is its natural address, and the screen that needs it is already holding that id.
+
+**This follows an existing convention rather than introducing one.** The codebase already addresses nested resources through their owner — `GET /restaurants/{id}/tips`, `GET /restaurants/{id}/staff` (ADR-033), `GET /wallets/{id}/transactions`. It also already settles which controller such a route belongs to: the domain it *returns*, not the prefix in its path. `/restaurants/{id}/tips` is `TipController`'s and `/restaurants/{id}/staff` is `MembershipController`'s; by the same rule `/memberships/{id}/wallet` is `WalletController`'s.
+
+**The objection considered and dismissed — "a second path to the same resource."** Weaker than it sounds: *"my wallet"* and *"this employee's wallet"* are different operations, asked by different people, permitted by different reasoning. That they return the same entity type does not make them one endpoint. The check is shared; the intent is not.
+
+**Decision — the rejected alternative matters more than the chosen one, and is recorded for the class of error it represents.** The cheapest option was a filter: `GET /wallets?membershipId=`. It was rejected, and not on style grounds.
+
+`GET /wallets` today means exactly one thing — *mine*. Its scoping is structural: the query is built from `user.memberships`, so there is no access check to get wrong, because there is no reachable-but-not-mine case to consider. Adding a filter would silently change that meaning to *"the wallets I can reach"* — **a change in what a route exposes, with no change to its name.** Every engineer who has read that endpoint, and every reviewer who has approved code near it, would carry on holding a model that had quietly stopped being true. Its tests would still pass, because they assert the old, narrower behaviour.
+
+That is the mechanism by which access leaks actually happen in practice: not a check written incorrectly, but a check that stopped covering everything the route now returns, in a place nobody had reason to re-read. **A route whose meaning widens must change its name.** A new name forces a new review; a new filter parameter does not.
+
+**Consequences:** `WalletService.findByMembership` **reuses `assertReachable` unchanged** rather than restating the rule — two copies of an access check drift, and the one that drifts is the one nobody is looking at (the same reasoning ADR-021 applies to money and ADR-026/027 to reachability itself). A Membership with no Wallet yet returns the identical `WALLET_NOT_FOUND` as an unreachable one, deliberately: distinguishable responses would turn the endpoint into an existence oracle for Memberships in other Organizations. Four new tests in `wallet.service.spec.ts`, including the discriminating case — an org-wide Owner **of a different Organization**, which is the exact shape `CLAUDE.md`'s Architecture Review paragraph names; broken to `restaurantId === null` without the `organizationId` comparison, it fails with *"promise resolved instead of rejecting"*, and the same caller can still reach a Wallet inside their own Organization, so the rejection is real scoping rather than a blanket denial passing for the right reason. `API_Contract.md` and `UX_MAP.md` updated. No schema change.
 
 ---
 

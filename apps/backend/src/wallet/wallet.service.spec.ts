@@ -244,4 +244,72 @@ describe("WalletService (real database)", () => {
       code: "WALLET_NOT_FOUND",
     });
   });
+
+  // ADR-039. This route exists because the permission to view an employee's Wallet had no
+  // addressable resource behind it: GET /wallets returns only the caller's own, so the id that
+  // GET /wallets/{id} needs came from nowhere. These tests cover the new door with the same rigour
+  // as the old one — a second entrance to a resource is a second place an access check can be
+  // wrong.
+  it("findByMembership: a Manager reachable to the same Restaurant can reach a Waiter's Wallet by membership id", async () => {
+    const { org, restaurant } = await seedOrgRestaurant("ByMembership Manager");
+    const waiter = await seedMembership(org.id, restaurant.id, "Waiter");
+    const manager = await seedMembership(org.id, restaurant.id, "Manager");
+    await giveEarnings(waiter.id, restaurant.id, 700n);
+
+    const wallet = await walletService.findByMembership(waiter.id, asUser(manager));
+    expect(wallet.membershipId).toBe(waiter.id);
+    expect(wallet.availableBalance).toBe(700n);
+  });
+
+  // THE discriminating one. An org-wide Membership in a DIFFERENT Organization is the exact shape
+  // CLAUDE.md's Architecture Review paragraph names: an implementation testing `restaurantId ===
+  // null` alone, without comparing organizationId, treats "org-wide somewhere" as "org-wide here"
+  // and hands one Organization's payroll to an unrelated one. The caller below is genuinely
+  // org-wide — just not here.
+  it("findByMembership: an org-wide Owner of ANOTHER Organization cannot reach this Wallet — org-wide 'somewhere' is not org-wide 'here'", async () => {
+    const { org, restaurant } = await seedOrgRestaurant("ByMembership Target");
+    const waiter = await seedMembership(org.id, restaurant.id, "Waiter");
+    await giveEarnings(waiter.id, restaurant.id, 900n);
+
+    const outsiderOrg = await seedOrgRestaurant("ByMembership Outsider");
+    const outsiderOwner = await seedMembership(outsiderOrg.org.id, null, "Owner"); // org-wide, wrong org
+
+    await expect(
+      walletService.findByMembership(waiter.id, asUser(outsiderOwner)),
+    ).rejects.toMatchObject({ code: "WALLET_NOT_FOUND" });
+
+    // And the same caller CAN reach a Wallet inside their own Organization — so the rejection
+    // above is real scoping, not a blanket denial passing for the right reason by accident.
+    const insider = await seedMembership(outsiderOrg.org.id, outsiderOrg.restaurant.id, "Waiter");
+    await giveEarnings(insider.id, outsiderOrg.restaurant.id, 300n);
+    const reachable = await walletService.findByMembership(insider.id, asUser(outsiderOwner));
+    expect(reachable.membershipId).toBe(insider.id);
+  });
+
+  it("findByMembership: a Membership with no Wallet yet is indistinguishable from an unreachable one — both WALLET_NOT_FOUND, so the response is not an existence oracle", async () => {
+    const { org, restaurant } = await seedOrgRestaurant("ByMembership NoWallet");
+    // Seeded but never paid — WalletProjectionService has never run for this Membership.
+    const waiter = await seedMembership(org.id, restaurant.id, "Waiter");
+    const manager = await seedMembership(org.id, restaurant.id, "Manager");
+
+    await expect(walletService.findByMembership(waiter.id, asUser(manager))).rejects.toMatchObject({
+      code: "WALLET_NOT_FOUND",
+    });
+  });
+
+  it("findByMembership: an org-wide holder's own Wallet stays reachable only by themselves, exactly as findOne already guarantees (ADR-024)", async () => {
+    const { org } = await seedOrgRestaurant("ByMembership OrgWide");
+    const orgWideOwner = await seedMembership(org.id, null, "Owner");
+    const other = await seedMembership(org.id, null, "Manager"); // also org-wide, same org
+    await prisma.wallet.create({
+      data: { membershipId: orgWideOwner.id, currency: "EUR", availableBalance: 0n },
+    });
+
+    const own = await walletService.findByMembership(orgWideOwner.id, asUser(orgWideOwner));
+    expect(own.membershipId).toBe(orgWideOwner.id);
+
+    await expect(
+      walletService.findByMembership(orgWideOwner.id, asUser(other)),
+    ).rejects.toMatchObject({ code: "WALLET_NOT_FOUND" });
+  });
 });
