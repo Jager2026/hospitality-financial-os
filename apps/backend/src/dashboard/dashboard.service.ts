@@ -24,6 +24,10 @@ export interface DashboardRecentPayment {
 
 export interface DashboardTopStaffEntry {
   membershipId: string;
+  /** ADR-033 added User.displayName; ADR-026 predated it and shipped email alone. This is the
+   * human-readable label the screen shows — email stays as the stable, unique identifier beside
+   * it, since two staff members can share a display name. */
+  displayName: string;
   email: string;
   tips: string;
 }
@@ -163,9 +167,14 @@ export class DashboardService {
    * WalletProjectionService.recomputeBalance, scoped to today and this Restaurant instead of a
    * Membership's whole history. A refund posted today against an older tip-bearing payment can
    * make one membership's net lower (even negative) — correct, not a bug, same day-boundary
-   * reasoning as netBillRevenue above; "top" ordering handles it without a special case. Displays
-   * User.email — `User` has no name field anywhere in the schema (checked directly, not assumed);
-   * a real, known limitation, flagged in ADR-026 rather than silently working around it. */
+   * reasoning as netBillRevenue above; "top" ordering handles it without a special case.
+   *
+   * Returns `displayName` alongside `email`. ADR-026 originally shipped email alone and recorded
+   * why as a known limitation — `User` genuinely had no name field at that point. ADR-033 then
+   * added `User.displayName` (required, for the terminal's staff picker) and nothing came back to
+   * close the loop here, so a screen that exists to name people kept showing addresses. `email` is
+   * kept beside it rather than replaced: it is the stable identifier, and two staff members can
+   * share a display name while addresses are unique. */
   private async topStaff(
     restaurantId: string,
     start: Date,
@@ -186,14 +195,18 @@ export class DashboardService {
 
     const memberships = await this.prisma.membership.findMany({
       where: { id: { in: ranked.map(([id]) => id) } },
-      include: { user: { select: { email: true } } },
+      include: { user: { select: { email: true, displayName: true } } },
     });
-    const emailByMembership = new Map(memberships.map((m) => [m.id, m.user.email]));
+    const userByMembership = new Map(memberships.map((m) => [m.id, m.user]));
 
-    return ranked.map(([membershipId, tips]) => ({
-      membershipId,
-      email: emailByMembership.get(membershipId) ?? "",
-      tips: tips.toString(),
-    }));
+    return ranked.map(([membershipId, tips]) => {
+      const u = userByMembership.get(membershipId);
+      return {
+        membershipId,
+        displayName: u?.displayName ?? "",
+        email: u?.email ?? "",
+        tips: tips.toString(),
+      };
+    });
   }
 }
