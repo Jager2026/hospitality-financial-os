@@ -5,6 +5,7 @@ import { useState, type FormEvent, type JSX } from "react";
 import { apiPost } from "../../lib/api/client";
 import { destinationAfterLogin } from "../../lib/auth/destination";
 import { saveSession, type StoredSession } from "../../lib/auth/session";
+import { Wordmark } from "../../components/wordmark";
 import { t } from "../../lib/i18n";
 
 /**
@@ -52,7 +53,13 @@ export default function LoginPage(): JSX.Element {
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="flex w-full max-w-sm flex-col gap-8">
-        <h1 className="text-hero-2 font-bold">{t("login.title")}</h1>
+        {/* The wordmark IS the heading — DESIGN_SYSTEM.md, Product Identity On Screen. A separate
+            "Log in" above a form with an email field, a password field and a button labelled
+            "Log in" tells nobody anything; the name is the thing this screen exists to confirm,
+            because it is the only screen a person sees before they know where they are. */}
+        <h1>
+          <Wordmark size="entry" />
+        </h1>
 
         <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
           <label className="flex flex-col gap-2">

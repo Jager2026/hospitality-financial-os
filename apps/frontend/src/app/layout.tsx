@@ -1,6 +1,7 @@
 import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import type { Metadata } from "next";
 import type { JSX, ReactNode } from "react";
+import { PRODUCT_NAME } from "../components/wordmark";
 import { t } from "../lib/i18n";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -23,8 +24,8 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: t("app.name"),
-  description: "Financial infrastructure for restaurants, cafés, and bars.",
+  title: PRODUCT_NAME,
+  description: t("app.tagline"),
 };
 
 export default function RootLayout({ children }: { children: ReactNode }): JSX.Element {

@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.10.0
+version: 2.11.0
 status: Active
 classification: Critical
 priority: Highest
@@ -254,6 +254,12 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   What remains is the one thing no in-platform mechanism can address by construction: **every copy lives inside Railway.** PITR, all three snapshot tiers and the volume itself share a single point of failure that is not a disk — losing access to the account, or the account's own data being lost, takes all of them at once. For a system whose entire premise is an authoritative financial Ledger, one copy outside that blast radius is the reasonable end state, and it is now the *only* remaining reason to build this.
 
   **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The deferral reason is honest and time-bound and has not changed — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how its own restore gets rehearsed). The moment real money moves through it, that calculus inverts. Founder decision.
+
+- **Session tokens move from `localStorage` to an httpOnly cookie.** The API returns `accessToken` and `refreshToken` in the JSON body (`API_Contract.md`, Login), so the browser has to store them somewhere, and the login screen (Sprint 14) uses `localStorage`. **It is readable by any script that runs on the page**; an httpOnly, `SameSite` cookie set by the backend would not be.
+
+  **Deferred deliberately, and the reason is about change hygiene rather than risk appetite:** switching is a change to the *authentication contract* — the API would set a cookie rather than return a token, and every caller changes with it. Making that change in the middle of delivering the first screen would mean two independent changes arriving in one diff, each hiding the other's failures. The Founder's call, and the right one.
+
+  **Trigger, explicit: before the first pilot restaurant.** Today the exposure is theoretical — there are no real users and no third-party scripts on any page. Both of those stop being true at exactly the moment the trigger fires.
 
 - **Refresh-token revocation that survives a Redis outage (ADR-019's own trigger, now fired).** **This is not a new finding.** ADR-019 accepted the risk explicitly and named the condition for revisiting it in its own Consequences: *"revisit if refresh-token revocation ever needs to survive a Redis outage."* Noticing that the Sprint 13 volume-backup schedules cover only the Postgres volume, and that the redis volume has no schedule at all, is that condition arriving — recorded here so the revisit happens because the ADR said so, not because someone remembered.
 

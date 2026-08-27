@@ -28,3 +28,17 @@ export async function queryOne<T extends Record<string, unknown>>(
     await client.end();
   }
 }
+
+/**
+ * A write, permitted only under the narrow rule in `org.ts`: **the entity being created is not the
+ * subject of the check.** Anything the assertion is actually about goes through its real endpoint.
+ */
+export async function execute(sql: string, params: unknown[] = []): Promise<void> {
+  const client = new Client({ connectionString: E2E_DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query(sql, params);
+  } finally {
+    await client.end();
+  }
+}

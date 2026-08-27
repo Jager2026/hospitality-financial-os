@@ -11,7 +11,9 @@
  * a compile error and a second language cannot ship half-translated (see `index.ts`).
  */
 export const en = {
-  "app.name": "Hospitality Operating System",
+  // The product NAME is not here on purpose: a brand name is not translated (ADR-040,
+  // DESIGN_SYSTEM.md Product Identity). It lives as PRODUCT_NAME in components/wordmark.tsx.
+  "app.tagline": "Financial infrastructure for restaurants, cafés, and bars.",
 
   // Design-token specimen (development only)
   "design.title": "Design tokens",
@@ -28,7 +30,6 @@ export const en = {
   "design.noWarning": "There is no warning colour, and that is the decision.",
 
   // Log In — UX_MAP.md, "Getting In"
-  "login.title": "Log in",
   "login.email": "Email",
   "login.password": "Password",
   "login.submit": "Log in",

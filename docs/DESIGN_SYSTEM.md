@@ -1,6 +1,6 @@
 ---
 title: DESIGN_SYSTEM
-version: 1.0.2
+version: 1.1.0
 status: Active — Part 1 (structure, hierarchy, state) and Part 2 (surfaces, palette, type, spacing, density) both written
 classification: Internal
 owner: Founder
@@ -60,6 +60,54 @@ Four references were supplied: a dark orange fintech landing page (QPAY), a dark
 - **QPAY is a marketing landing page, not a product.** Its layout, its hero card render, its "Trusted by" logo row and its stat badges answer "should I sign up?" — a question none of our screens ask. Its useful contribution is the accent-restraint lesson and nothing else. Recorded plainly so it is not mined later for layout ideas it cannot supply.
 - **All four are phone-first, single-column, one-hand, at leisure.** The Restaurant Portal is used by an owner on a laptop or tablet between service peaks, and the Waiter Portal by someone standing on a floor mid-shift. Session length, lighting, and attention budget all differ. Consumer polish transplanted wholesale produces a product that photographs well and performs badly at 11pm in a dim room.
 - **Three of the four are dark; one is light. That is still a Part 2 decision** — but it is now settled that it is made **per surface**, not once for the product (see *One Product, Two Visual Systems*). An earlier version of this line claimed dark was defensible for the Portals "on ergonomics rather than fashion — restaurants are dim, and a bright screen at a service pass is unpleasant." **That claim has been withdrawn; see *The Portal's Surface* below.** It is worth leaving the retraction visible rather than quietly deleting the sentence: it is a clean example of an aesthetic preference arriving dressed as an ergonomic argument, which is the failure mode this whole document exists to catch.
+
+---
+
+# Product Identity On Screen
+
+**Found by the Founder on the first screen this system produced: the login page did not say what product it was.** The gap was not the login screen's — it was this document's. Everything here described surfaces, tokens, hierarchy and semantic state, and nothing said how the product names itself. Log In was simply the first screen to need it.
+
+**The product is called PlainTabs.** (`plaintabs.com` is registered; `ARCHITECTURE_DECISIONS.md` already refers to it in ADR-035.)
+
+## Why this is not decoration
+
+Log In is **the only screen a person sees before they know where they are.** An owner opening a link from an email has no confirmation it leads to the product someone described to them. Every other screen is reached from somewhere, and the somewhere carries the identity.
+
+There is a second reason, and it is a security one rather than a brand one: **a credential form with no identifying marks is the standard appearance of a phishing capture page.** Teaching people that our real login looks anonymous teaches them to trust anonymous credential forms. On a financial product that is a habit we cannot afford to build.
+
+## The distinction that must not be lost
+
+**The login screen's sparseness is correct and stays.** One screen, one task, and the empty space works for it — that is the Hierarchy Law doing its job, not an unfinished page.
+
+**A missing name is not sparseness. It is a missing element.** These look identical to someone glancing at a screenshot and are opposites in intent. Recorded explicitly because without the distinction, the reasonable next move is to start "filling in" a screen that is correctly empty.
+
+## The wordmark is typographic, and it is not the accent
+
+There is no logo, and inventing one is not a design-system decision to make in passing. The wordmark is therefore **type: IBM Plex Sans, 700, tracking −0.02em, set as "PlainTabs".** One face, because it is the only face this system has — reaching for a second one purely to set a wordmark would be a dependency with no reason behind it.
+
+**The wordmark is never the accent colour.** It renders in `--text`, the same neutral ink as everything else. That follows from *Accent Colour Never Carries Importance*: accent marks actions and status, and a wordmark is neither. It has a useful second consequence — the restaurant-branding candidate (`MASTERPLAN.md`) lets a restaurant own the accent, and this rule means **it can never recolour our name**, which is the correct boundary. A restaurant brands the surface it paid for; it does not rebrand us.
+
+**The wordmark is not a dictionary entry.** `ADR-040`'s `t()` covers translated strings; a product name is not translated. It lives as a constant.
+
+## Where the name appears, and at what size
+
+| Surface | Treatment |
+|---|---|
+| **Entry screens** — Log In, Register, Accept Invitation | The wordmark is the screen's **rank-1 element**, at `hero-2` (30px). It is the confirmation the person came for. |
+| **Inside the Portal** | Persistent chrome, at `label` size. Orientation rather than confirmation — by then they know where they are. |
+| **The guest terminal** | **Absent during the payment flow.** Present once, quietly, on the completion state. See below. |
+
+**A rule that follows from the table and is worth stating on its own: every screen reachable before authenticating carries the wordmark.** That is the whole set of screens where a person cannot yet tell where they are.
+
+**On entry screens the wordmark replaces a separate page heading rather than sitting above one.** "Log in" above a form containing an email field, a password field and a button labelled "Log in" is a heading that tells nobody anything. The name is the thing that does. One rank-1 element per screen, and on these screens it is the name.
+
+## Why the terminal is different
+
+The terminal is the one surface where **the user is not ours** (*One Product, Two Visual Systems*): ten seconds, a stranger, no reason to try again. What that person needs to trust is **the restaurant whose table they are sitting at** — and the branding candidate exists precisely so the device reads as part of that room.
+
+An unfamiliar brand name adds nothing to that trust and costs attention the screen does not have. So it is not on the payment step.
+
+**It appears once, on the completion state, at `micro` size.** After the money has moved, a guest who wants to know who processed the payment has somewhere to find it — a refund question, a card statement line they do not recognise. Before the money moves it is noise; after, it is an answer to a question someone may actually have.
 
 ---
 

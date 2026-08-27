@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.3.3
+version: 2.4.0
 status: Active
 classification: Internal
 owner: Founder
@@ -123,6 +123,11 @@ Rate-limited to 10 attempts per minute (ADR-028); the screen must say so plainly
 - **No Memberships at all** → Create Your Restaurant (below). This is where a just-registered owner goes.
 - **One org-wide Membership** → Restaurants (the list)
 - **One restaurant-scoped Membership** → that Restaurant's Dashboard
+- **More than one restaurant-scoped Membership, and no org-wide one** → Restaurants (the list). Added in Sprint 14; this branch was missing, and it is not hypothetical — ADR-006 explicitly supports a waiter or manager working shifts at two restaurants on the platform. Sending them to a single Dashboard would mean **the product silently choosing one of their employers for them**, on the screen where they have least context to notice. They choose.
+
+*A note on the whole fork, because every screen in the Portal is reached from wherever it sends someone:* it lives in one pure function (`destinationAfterLogin`) rather than inside the login form, and is proved twice — by unit tests at every branch, and through a real browser end-to-end. A wrong branch here is not a login bug; it is every screen wrong at once.
+
+**Identity on this screen (`DESIGN_SYSTEM.md`, Product Identity On Screen).** Log In carries the wordmark as its rank-1 element, and it replaces a separate "Log in" heading rather than sitting above one. This is the only screen a person sees before they know where they are — and a credential form with no identifying marks is the standard appearance of a phishing capture page, so the name is a security decision as much as a brand one. The screen's sparseness stays: one screen, one task. A missing name was never sparseness, it was a missing element.
 
 ## Create Your Restaurant
 
