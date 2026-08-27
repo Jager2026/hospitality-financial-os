@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.30.0
+version: 1.31.0
 status: Active — forty-two ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -567,6 +567,19 @@ Neither was careless. Both were the kind of statement that reads as obviously tr
 **The rule this fixes, and it is cheap:** before a claim about third-party behaviour is written down, acted on, or sent to anyone outside this project, run the smallest thing that would distinguish it from its opposite. A four-line script, one real request, one deliberately-wrong assertion. Both of these would have cost a minute; the first cost eleven days of a misdirected support thread.
 
 Worth noting where this *did* work: `RedisThrottlerStorage`'s own discriminating test (two instances, one Redis) was written from an assumption about `@nestjs/throttler`'s storage contract and passed immediately — because it was written as executable from the start rather than as a sentence to be checked later.
+
+**A fifth entry, and it is a class rather than an incident: a documented input that does not exist is worse than a documented input that is named wrong.**
+
+Both were found in the same `API_Contract.md` sweep, and the instinct is to file them together as "the document was out of date". They are not the same kind of defect.
+
+- **A wrong field name fails loudly, immediately, on the first request.** `display_name` got `400 VALIDATION_ERROR: displayName: Required`. Unpleasant, obvious, fixed in a minute.
+- **A documented parameter that was never built is silently ignored by the server**, and the response looks exactly like success. `GET /restaurants?organization_id=…` returns HTTP 200 and a body — just not a filtered one.
+
+The consequence is not "a feature is missing." It is **a confidently wrong answer that no error surfaces.** A chain owner filtering their restaurants down to one organization receives the full list across all their organizations, and the reasonable conclusion from that screen is *"I only have one organization"*. Nothing in the response contradicts them. In a product whose figures are meant to be reconciled against a bank statement, an unfiltered list presented as a filtered one is a data-integrity problem wearing the costume of a working feature.
+
+**The general rule, applying beyond this one parameter:** an unimplemented input must fail, not be ignored. Where a contract promises a filter, a sort, a search or a flag, either the server rejects the unknown parameter or the document marks it explicitly as not implemented. Silence is the one option that is never acceptable, because silence is indistinguishable from having worked. `API_Contract.md`'s Sorting and Search sections now carry that mark; `GET /restaurants` records that the filter was never built.
+
+The same asymmetry generalises past query parameters: **prefer the failure mode that announces itself.** It is the reason the design system has no warning colour rather than a discipline against using one, the reason `env.validation.ts` refuses a malformed key at boot rather than on the first business call, and the reason the fixture-safety check is a test rather than a paragraph in a README.
 
 ---
 
