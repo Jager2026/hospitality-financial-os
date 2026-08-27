@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.3.0
+version: 2.3.1
 status: Active
 classification: Internal
 owner: Founder
@@ -18,7 +18,7 @@ This document is the foundation for:
 - DATABASE.md
 - COMPONENT_LIBRARY.md
 
-(`API.md` and `DATABASE.md` now exist and are current — see `API_Contract.md` and `DATABASE.md`. `UX_BIBLE.md`, `DESIGN_SYSTEM.md`, and `COMPONENT_LIBRARY.md` remain outstanding, unchanged from v1.0.)
+(`API.md` and `DATABASE.md` now exist and are current — see `API_Contract.md` and `DATABASE.md`. `DESIGN_SYSTEM.md` now exists in part: Part 1 — the emotional contract, the Hierarchy Law, the caption rule, and the zero-state requirement — is written; Part 2, the visual layer, is not. `UX_BIBLE.md` and `COMPONENT_LIBRARY.md` remain outstanding, unchanged from v1.0.)
 
 No interface should be implemented before it exists inside this document.
 
