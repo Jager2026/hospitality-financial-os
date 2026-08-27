@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.26.0
+version: 1.27.0
 status: Active — thirty-nine ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -548,6 +548,12 @@ This is provably `SUM(billAmount)` net of refunds, not merely defined to equal i
 **A second instance of Decision 2's own lesson, worth recording here because it is the same trap wearing different clothes.** Decision 2 above is about Railway's API silently ignoring a value and the fix being to *query the field back* rather than trust the write. The mirror case: **`railway volume list` does not output `isPendingDeletion` or `deletedAt` at all.** A volume deleted through the Dashboard enters a roughly 48-hour deferred deletion and, for that entire window, the CLI lists it as `Ready` — indistinguishable from a live volume. Confirmed directly: the same volume reported `isPendingDeletion: true, deletedAt: <two days ahead>` through the GraphQL API while the CLI showed it as healthy and present.
 
 Nothing is wrong in either tool; the CLI simply prints a subset. But the failure mode is the dangerous one — **a confident wrong conclusion drawn from a complete-looking but partial output**, which is worse than an error, because an error prompts a second look and this does not. The habit that covers both cases: when Railway's state matters, read it from the API and read back the specific field, rather than from whichever summary view is most convenient.
+
+**A third instance, recorded as an observation with the mechanism explicitly unknown.** A manual volume snapshot of the production Postgres volume was created during the Sprint 13 backup work with `expiresAt: null` — no expiry, by the API's own report. On 2026-08-27, checking that the first scheduled Daily snapshot had fired, `volumeInstanceBackupList` returned **exactly one entry, the scheduled one**. The manual snapshot was gone. Neither the Founder nor this session deleted it; no delete command was issued by either. We do not know the rule by which it disappeared, and **deliberately did not investigate** — the finding stands on its own without a cause.
+
+The consequence is what matters and does not depend on knowing the mechanism: **a manual snapshot cannot be treated as reliable insurance before a risky operation.** The pattern "take a snapshot, run the migration, roll back if it goes wrong" is unsound here, because the snapshot's continued existence at the moment it is needed is not something we can currently assert — `expiresAt: null` demonstrably did not guarantee it. Until the rule is known, anything that must survive a specific operation needs a mechanism we have actually verified end-to-end (the PITR restore rehearsed in `THREAT_MODEL.md` entry 22), not a snapshot assumed to still be there.
+
+Same shape as the two findings above, one step further along: not a tool printing a partial view, but a tool's *documented field* not meaning what it appears to mean. The habit extends accordingly — for anything load-bearing, re-read the state at the moment you intend to rely on it, not at the moment you created it.
 
 ---
 
