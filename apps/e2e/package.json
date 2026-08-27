@@ -1,0 +1,21 @@
+{
+  "name": "e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser end-to-end harness. Real browser -> real Next.js -> real NestJS -> real Postgres -> real bcrypt. ADR-041 fixes the seam: only a literal outbound third-party network call may be replaced, and the login flow replaces nothing at all.",
+  "scripts": {
+    "test:e2e": "pnpm run db:prepare && playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "echo \"e2e runs via test:e2e — see ADR-041 for why it is not part of the default suite\"",
+    "db:prepare": "tsx fixtures/prepare-database.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.0",
+    "typescript": "^5.5.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.7.4"
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: DESIGN_SYSTEM
-version: 1.0.1
+version: 1.0.2
 status: Active — Part 1 (structure, hierarchy, state) and Part 2 (surfaces, palette, type, spacing, density) both written
 classification: Internal
 owner: Founder
@@ -247,6 +247,18 @@ Rejected for the reason that applies to any duplicated decision in this codebase
 **Measured, or it does not exist.** Founder's requirement, and the same standard `CLAUDE.md` applies to tests: a test that would pass against a wrong implementation proves nothing, and a colour that "looks like enough contrast" is decoration of the same kind. Every value below carries its measured ratio against the ground it actually sits on. WCAG 2.1 AA — 4.5:1 for text — is the floor, not the target.
 
 The standard earned its place immediately. The first neutral ramp drafted for this section put muted text at `#7A756D`, which looks unmistakably like readable grey and measures **4.38:1** — under the floor. Corrected to `#726D64` (**4.92:1**) before anything was written down. Judged by eye it would have shipped.
+
+## Why this was transcribed in full before anything consumed it
+
+**A document turned into code starts arguing back.**
+
+That sentence is the real justification for writing the whole token layer — every ramp step, both surfaces, the complete type scale — before a single screen used a third of it. The usual argument is "otherwise the design system gets authored by its first screen," which is true but abstract. The concrete version is what actually happened on the day of transcription: turning these tables into `tokens.css` and `tokens.contrast.spec.ts` produced **three objections to this document that no amount of re-reading it would have raised.**
+
+- The Hierarchy Law's constant was **0.62**, rounded down from the pair it was derived from — so the rule forbade its own example, since 30 ÷ 48 = 0.625. Invisible in prose; a failing assertion on the first run.
+- `--rule` on light was given as `#D8D5CF`, **a value that was not on the ramp at all.** The table read fine. Making the ramp the single source made the gap immediate.
+- Light could only be inherited from `:root`, never pinned on a subtree — found by *rendering* the specimen on a dark machine, where the card meant to demonstrate the light default came out dark.
+
+None of the three is a typo. Each is a place where prose was internally inconsistent in a way prose cannot show. Executable form is not a nicety here; it is the review pass this document could not perform on itself.
 
 ## Surfaces — three, not two
 
