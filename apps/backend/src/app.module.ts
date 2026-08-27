@@ -2,7 +2,11 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { APP_FILTER, APP_INTERCEPTOR, APP_GUARD } from "@nestjs/core";
 import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
-import { LoggerModule } from "nestjs-pino";
+import { LoggerModule, PinoLogger } from "nestjs-pino";
+import { AlertModule } from "./common/alerting/alert.module";
+import { AlertService } from "./common/alerting/alert.service";
+import { RedisThrottlerStorage } from "./common/throttler/redis-throttler.storage";
+import { RedisService } from "./redis/redis.service";
 import { validateEnv } from "./config/env.validation";
 import { PrismaModule } from "./prisma/prisma.module";
 import { RedisModule } from "./redis/redis.module";
@@ -48,7 +52,17 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
       },
     }),
     // ADR-010: baseline, generic rate limiting from Sprint 1 — per-endpoint tuning is Sprint 11.
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+    // ADR-042: state moved to Redis. The default storage counts in each process's own memory, so
+    // the documented limits silently multiply by the number of running instances — a defect in a
+    // protective mechanism, latent today only because Railway runs one instance.
+    ThrottlerModule.forRootAsync({
+      imports: [AlertModule],
+      inject: [RedisService, AlertService, PinoLogger],
+      useFactory: (redis: RedisService, alerts: AlertService, logger: PinoLogger) => ({
+        throttlers: [{ ttl: 60_000, limit: 100 }],
+        storage: new RedisThrottlerStorage(redis, alerts, logger),
+      }),
+    }),
     PrismaModule,
     RedisModule,
     HealthModule,

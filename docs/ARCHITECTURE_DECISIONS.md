@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.28.0
-status: Active — forty-one ADRs, all Accepted
+version: 1.29.0
+status: Active — forty-two ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -870,6 +870,31 @@ The cost is real. Playwright needs browser binaries, both servers, Postgres and 
 **Rate limiting is reset, never relaxed.** Login is limited to 10/min and repeated end-to-end runs will trip it. Raising the limit in the test environment would weaken the exact behaviour under test, so instead the throttler's Redis keys are flushed between tests by a fixture — real Redis, real throttler, only the state reset — and the limit itself is proved by its own test with its own budget.
 
 **Consequences:** a separate CI job with a `paths` filter, not an addition to the existing one. The `lint-typecheck-test-build` job keeps running on everything, so a backend PR still gets the full non-browser suite including the design-token contrast assertions.
+
+---
+
+## ADR-042 — Rate-Limit State Moves to Redis, and Fails Open When Redis Is Gone
+**Status:** Accepted (Founder decision)
+
+**Context — a known property re-read as a defect.** `ADR-028` Decision 5 already recorded that "`ThrottlerGuard`'s in-memory counter lives per app instance," discovered while writing the Payment/Ledger load test. It was recorded as a *property* — something to work around by giving each load phase its own app. It is a defect.
+
+**With two backend instances behind one load balancer, the documented 10/min silently becomes 20/min**, because each process counts only the requests it happened to serve. Nothing reports this; the limit simply stops being the limit. That it has not bitten us is not because the mechanism is sound — it is because Railway currently runs a single instance (`railway.backend.json` declares no replica count). **The correctness of a protective mechanism therefore rests on an infrastructure fact that appears in no document and is guarded by nothing.**
+
+That is fixed on its own merits. The e2e harness being unblocked is a *consequence*, not the reason: a change made for testing convenience and a change made for correctness are different things even when the code is identical, and recording which one this is matters for whoever reads it next.
+
+**Decision 1 — a Redis-backed `ThrottlerStorage`, written here rather than taken as a dependency.** `RedisThrottlerStorage` implements the `ThrottlerStorage` interface over the `RedisService` this project already has. Roughly forty lines and no new package, and — since this is a protective mechanism read line by line (`CLAUDE.md`, Review Depth Scales With Risk) — the fail-open behaviour and key namespacing below are ours to specify rather than a third-party default to inherit.
+
+**Namespacing is load-bearing, not tidiness.** Every key is written under `throttle:`; token revocation lives in the same Redis under `auth:` (`token.service.ts`). Anything that clears throttle state — the e2e fixture does exactly that between tests — must be able to target these keys and no others. A `FLUSHALL` would un-revoke every logged-out session and every family revoked on refresh-token reuse detection, silently. A test asserts the two namespaces stay separate, and the fixture scans by prefix rather than flushing.
+
+**Decision 2 — fail open when Redis is unreachable, and say so loudly (Founder decision).** `ThrottlerGuard` is a global guard, so failing closed would make Redis a hard dependency of the entire API. The first casualty would be Stripe's webhooks (500/min, ADR-028): **payments would stop reaching the Ledger while Stripe and Postgres were both perfectly healthy.** `ADR-019` already accepts losing Redis as a survivable risk for token revocation, so treating it as critical infrastructure here alone would be inconsistent with a decision this project has already made.
+
+The cost is stated rather than hidden: **while degraded, brute-force protection is not applied.** bcrypt's own cost keeps that from being free to an attacker, and the alert is what makes the window observable instead of silent.
+
+Two details that make the alerting honest rather than decorative. The `ERROR` log is unconditional, never contingent on `ALERT_WEBHOOK_URL` being configured — ADR-038's rule, that an alert which only exists when a webhook happens to be set is not an alert. And the alert fires **once per outage, not once per request**: with the webhook route alone allowing 500/min, per-request alerting would turn a Redis outage into a flood on our own alerting channel, the same "exactly once per incident" discipline `OutboxPollerService` already applies. Recovery is announced too, so a degraded window has a visible end and not only a beginning.
+
+**A correction recorded because the test caught it, not review.** While writing the e2e suite this session, it was reported — by me — that a controller-level `@Throttle` meant a controller-level budget, so `register`/`login`/`refresh`/`logout`/`me` shared one 10/min allowance. **That is wrong.** `ThrottlerGuard` builds its key as `sha256(ClassName-handlerName-throttlerName-tracker)`, so the *handler* is part of the key and every route gets its own bucket under a single decorator. The claim looked entirely reasonable and was stated confidently; the assertion written from it failed on the first run, against the real deployed process. The test now asserts the true behaviour, and is kept for a reason beyond the correction: if a custom `generateKey` is ever added and drops the handler, every auth route would silently collapse into one shared bucket and a single brute-force attempt would begin locking legitimate users out of registration.
+
+**Consequences:** `RedisThrottlerStorage` plus seven tests, including the discriminating one — two storage instances sharing one Redis produce a cumulative count, which is precisely what the in-memory implementation cannot do. Falsified three ways, each restored: per-instance key isolation (the old behaviour) gives `[1, 1, 2]` where `[1, 2, 3]` is required; alerting per request instead of per outage gives five calls where one is required; sharing the `auth:` namespace breaks the revocation-survival assertion. Rate limiting now depends on Redis being reachable to *apply*, never to *serve* — see Decision 2. `IMPLEMENTATION_PLAN.md`'s Sprint 2 Definition of Done ("a brute-force attempt is throttled") is now proved against the real deployed process rather than only a module-scoped integration test, in `apps/e2e/tests/rate-limit.spec.ts`.
 
 ---
 

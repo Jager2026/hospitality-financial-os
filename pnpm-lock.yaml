@@ -154,6 +154,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.23.1
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.11.1
       pg:
         specifier: ^8.13.0
         version: 8.23.0
