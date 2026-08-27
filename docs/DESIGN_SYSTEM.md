@@ -1,13 +1,13 @@
 ---
 title: DESIGN_SYSTEM
-version: 0.1.0
-status: Partial — Part 1 (structure, hierarchy, state) complete; Part 2 (palette, typography, density) not yet written
+version: 1.0.0
+status: Active — Part 1 (structure, hierarchy, state) and Part 2 (surfaces, palette, type, spacing, density) both written
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
 ---
 
-# DESIGN SYSTEM — PART 1
+# DESIGN SYSTEM
 
 > "A design system is not a set of colours. It is a set of decisions that stop being re-argued."
 
@@ -15,11 +15,11 @@ technical_owner: AI Technical Co-Founder
 
 # What This Document Is, And What It Is Not
 
-`UX_MAP.md` has named this file as one of its foundations since v1.0 and it did not exist. This is the first half of it.
+`UX_MAP.md` has named this file as one of its foundations since v1.0 and it did not exist. This is it, in two parts.
 
-**Part 1 — this document — covers what does not change when the palette changes:** what the product is emotionally for, which element on a screen wins when two compete for attention, how a figure that needs a caveat carries it, and what every component owes its own empty and broken states. These are structural decisions. A different colour scheme, a different typeface, a tighter grid — none of them invalidate a single rule below.
+**Part 1 covers what does not change when the palette changes:** what the product is emotionally for, which element on a screen wins when two compete for attention, how a figure that needs a caveat carries it, and what every component owes its own empty and broken states. These are structural decisions. A different colour scheme, a different typeface, a tighter grid — none of them invalidate a single rule in it.
 
-**Part 2 — not yet written — covers palette, typography, spacing scale, density, motion, and elevation.** It will be written on top of this, once the reference folder is complete. Part 2 must not contradict Part 1; where it seems to need to, that is a signal Part 1 was wrong and should be revised explicitly, not quietly worked around.
+**Part 2 covers surfaces, palette, type, spacing, density and elevation.** It sits on top of Part 1 and may not contradict it; where it seems to need to, that is a signal Part 1 was wrong and gets revised explicitly rather than quietly worked around. That has happened once already, and the retraction is left visible on purpose — see *The Portal's Surface*.
 
 The split is deliberate and worth stating, because it is the usual failure mode of a design system: teams start with a colour palette, then discover six months later that no one ever decided what the product is supposed to *feel* like, and the palette turns out to be load-bearing for an argument it was never designed to settle.
 
@@ -213,7 +213,7 @@ The terminal also has no dashboard, no hierarchy problem and no emotional contra
 
 ## The Portal's surface — a withdrawn justification, and what replaces it
 
-**Open, pending the Founder's answer. Recorded now because the retraction stands on its own regardless of what replaces it.**
+**Decided (Founder): light by default, dark as a supported preference. Both defined in Part 2.**
 
 This document previously justified a dark Restaurant Portal as ergonomics: *restaurants are dim, a bright screen at a service pass is unpleasant.* The Founder challenged it as an argument from a surface we do not build. Checked rather than defended, it is worse than that:
 
@@ -226,7 +226,11 @@ So the justification is withdrawn entirely. Not softened — withdrawn. What can
 - **Dark-for-long-reading is folklore.** For sustained reading at normal vision, light-on-dark performs slightly *worse* — the pupil opens and thin type haloes. Dark's genuine advantages are low ambient light and certain visual conditions: a per-person preference, not a product default.
 - **A light Portal collapses two surface treatments into one**, since the terminal is already decided light. That is the same argument that ruled out two independent design systems, applied one level down.
 
-**Recommendation: light by default for the Restaurant Portal, dark as a supported preference.** And the reframe that makes this cheap rather than dramatic — **surface is a token set, not an identity**, exactly as the accent turned out to be. The monochrome base is the system; light and dark are two values of the surface token, and Part 2 defines both regardless. Only the default is in question, so this is a value, not a rewrite.
+**The argument the Founder accepted as decisive was the first one, and it is worth keeping in that form: reconciliation is the owner's actual work with this product, not a side activity.** Forcing the eye to re-adapt on every comparison between our screen and a statement raises the cost of the primary task. Everything else above supports that; nothing else needed to carry it.
+
+The reframe that makes this cheap rather than dramatic — **surface is a token set, not an identity**, exactly as the accent turned out to be. The monochrome base is the system; light and dark are two values of the surface token, and Part 2 defines both.
+
+The Founder also withdrew their own supporting argument ("evening work with reports") on the same ground the original claim failed: it supports *matching the ambient light*, which is a personal preference, not a property of the product. Recorded because a decision is only as good as the arguments left standing under it.
 
 ## Why not two independent systems
 
@@ -234,16 +238,133 @@ Rejected for the reason that applies to any duplicated decision in this codebase
 
 ---
 
-# What Part 2 Must Decide
+# PART 2 — THE VISUAL LAYER
 
-Recorded so these are answered deliberately rather than settled by whoever writes the first component:
+**Status: written.** Part 1 decides what a screen means; this decides what it looks like. Nothing here may contradict Part 1 — where it seems to need to, Part 1 was wrong and gets revised explicitly.
 
-1. **Light or dark — twice, once per surface.** The *per-surface* part is settled above; which value each surface takes is not. The terminal's answer is decided on outdoor legibility, independently of whatever the Portals choose.
-2. **The accent colour, and its budget.** *Accent Colour Never Carries Importance* already fixes where accent is permitted (actions, status) and where it is banned (money figures) — Part 2 inherits that rule rather than re-opening it, and adds the hex values, the semantic set, and how both behave on each surface's ground. Part 2 also owns **the pre-verified accent palette** the terminal-branding candidate depends on: a small set of values each checked for contrast against both surfaces, so "choose your colour" is a choice among known-legible options rather than a free hex field.
-3. **The numeric typeface, specifically.** This product is read as numbers. Tabular figures are non-negotiable — proportional digits make a column of money jitter and are the single most common typographic mistake in fintech interfaces. Part 2 should name the face and confirm it has a tabular set.
-4. **The type scale, anchored to the hero figure.** The Hierarchy Law is only enforceable if the gap between rank 1 and rank 2 is defined numerically; "bigger" is not a specification.
-5. **Density.** Related to, and constrained by, the two-surface question: a terminal wants far lower density than a dashboard.
-6. **How money is formatted** — currency placement, decimal treatment, and grouping, per locale. `DATABASE.md` stores minor units as `BIGINT` (ADR-001) and the API returns strings; the interface layer decides presentation. Worth settling once, in Part 2, rather than per component.
+## The standard every value here meets
+
+**Measured, or it does not exist.** Founder's requirement, and the same standard `CLAUDE.md` applies to tests: a test that would pass against a wrong implementation proves nothing, and a colour that "looks like enough contrast" is decoration of the same kind. Every value below carries its measured ratio against the ground it actually sits on. WCAG 2.1 AA — 4.5:1 for text — is the floor, not the target.
+
+The standard earned its place immediately. The first neutral ramp drafted for this section put muted text at `#7A756D`, which looks unmistakably like readable grey and measures **4.38:1** — under the floor. Corrected to `#726D64` (**4.92:1**) before anything was written down. Judged by eye it would have shipped.
+
+## Surfaces — three, not two
+
+| Surface | Ground | Why |
+|---|---|---|
+| **Portal — light (default)** | `#FAFAF8` | The owner's screen. Its content is financial documents, and everything they check our numbers against is light. |
+| **Portal — dark (preference)** | `#0F0E0C` | The same system, the other value of the same token. Honours `prefers-color-scheme` and an explicit choice. |
+| **Terminal** | `#FFFFFF` | Pure white deliberately: maximum luminance for a screen that may be read on a terrace in July. Nothing else on the ramp buys that. |
+
+The Portal's two grounds are **one token with two values**, not two designs. The terminal's white is a genuinely separate value, chosen on legibility.
+
+## The neutral ramp
+
+Warm-neutral throughout — the hue is biased a hair toward the accent so the greys read as chosen rather than inherited. A pure grey beside an amber accent looks like an accident.
+
+```
+n-0   #FFFFFF     n-300 #C7C4BD     n-700 #403D38
+n-25  #FAFAF8     n-400 #928D84     n-800 #302D28
+n-50  #F4F3F0     n-500 #726D64     n-900 #1A1815
+n-100 #ECEBE7     n-600 #5C5852     n-950 #0F0E0C
+n-200 #DEDCD7
+```
+
+| Token | Light portal | Terminal | Dark portal |
+|---|---|---|---|
+| `--text` | `#0F0E0C` — **18.46:1** | `#0F0E0C` — **19.29:1** | `#FAFAF8` — **18.46:1** |
+| `--text-muted` | `#726D64` — **4.92:1** | `#726D64` — **5.14:1** | `#928D84` — **5.85:1** |
+| `--rule` | `#D8D5CF` — 1.40:1 | `#ECEBE7` | `#302D28` — 1.41:1 |
+| `--surface` | `#F4F3F0` | `#F4F3F0` | `#1A1815` |
+
+`--text-muted` takes a different ramp step on each ground rather than one value forced to serve both — that is what a ramp is for. `--rule` is measured against a different target: a divider wants roughly **1.4:1**, enough to separate and not enough to catch the eye. Light and dark landing at 1.40 and 1.41 means both surfaces divide their content with equal emphasis, which is a large part of why they read as one product.
+
+## Accent — one token, five verified values
+
+**Default: `#9A5D14`.** On a dark surface the same token takes `#E0A050`.
+
+The four alternates exist for the terminal-branding candidate (`MASTERPLAN.md`). **A value without a measurement cannot enter this table.**
+
+| Value | Light surface | White text on it | As text on light | Dark surface | Dark text on it | As text on dark |
+|---|---|---|---|---|---|---|
+| **Amber (default)** | `#9A5D14` | **5.19:1** | 5.09:1 | `#E0A050` | **8.29:1** | 8.56:1 |
+| Navy | `#1F4E79` | **8.46:1** | 8.29:1 | `#7FB2DC` | **8.28:1** | 8.55:1 |
+| Violet | `#55408C` | **8.21:1** | 8.04:1 | `#A896DC` | **7.18:1** | 7.41:1 |
+| Plum | `#7A2E52` | **8.77:1** | 8.59:1 | `#D48CAC` | **7.25:1** | 7.48:1 |
+| Slate | `#3D5460` | **7.79:1** | 7.62:1 | `#96B2BF` | **8.38:1** | 8.65:1 |
+
+As text on the terminal's pure white they measure 5.32 / 8.66 / 8.41 / 8.97 / 7.97 — every one passes there too.
+
+**Said plainly, because the table says it and prose could hide it: the default is the weakest value in its own set.** Amber at 5.19:1 clears the floor with real headroom, and it is chosen for what it means in this industry rather than for its ratio — but every alternate measures 7.79 or better. That is the price of the hue, it is known, and it is on the record so nobody later mistakes *it passed* for *it was the strongest option*.
+
+**Excluded by rule, not by taste — and it is a constraint on the data, not on the design.** No green and no red enters this table at any lightness. An accent colliding with `--success` or `--error` makes *press this* and *this worked* indistinguishable on the terminal, where a guest gets ten seconds. So the branding feature offers a **fixed list, never a colour picker**: a free hex field cannot enforce a hue exclusion, which means the constraint has to live in which values exist rather than in what a UI hopes people will avoid.
+
+## Semantic colour — reserved, never customisable
+
+| | Light | Dark |
+|---|---|---|
+| `--success` | `#2E7D46` — **4.86:1** | `#6FBF87` — **8.71:1** |
+| `--error` | `#B3261E` — **6.25:1** | `#F08B7F` — **8.00:1** |
+
+**There is no warning colour, and that is a decision rather than an omission.** The two places one would be reached for are both places Part 1 explicitly forbids alarming: the platform-fee caption (a routine, permanent, correct fact — *The Caption Problem*) and an empty dashboard (*The Mirror Risk*). A system that owns an amber warning token will use it in exactly those two places within a month. Not having one is cheaper than the discipline of not using one — and it removes any collision with the default accent, which is itself amber.
+
+States that are neither success nor failure — "under review", "requirements outstanding", "nothing yet today" — are carried by **words and position**, in neutral. That is Part 1's explanation-over-suppression rule expressed in the palette.
+
+## Type
+
+**IBM Plex Sans**, with **IBM Plex Mono** for identifiers — ledger references, transaction ids, invitation tokens. Chosen for one specific reason rather than for character: its numerals are unambiguous and `1`/`l`/`7` do not collide. That matters more here than in most products, because our figures get read aloud, compared against a bank statement, and typed into someone else's system. Plex Mono is not decoration either: an id is a string to be copied exactly, and a monospaced face is what makes a transposition visible.
+
+**`font-variant-numeric: tabular-nums` on every figure.** Non-negotiable — proportional digits make a column of money jitter as values change, and it is the most common typographic mistake in financial interfaces.
+
+| Role | Size | Weight | Tracking |
+|---|---|---|---|
+| Hero figure (rank 1) | 48px | 700 | −0.03em |
+| Hero secondary | 30px | 600 | −0.02em |
+| Section title | 20px | 600 | −0.01em |
+| Body | 16px | 400 | 0 |
+| Small | 14px | 400 | 0 |
+| Label / caption | 12px | 500 | +0.12em, uppercase |
+| Micro | 11px | 500 | +0.10em |
+
+**Terminal overrides:** bill amount 56px, primary action label 18px, tip options 18px. A stranger at arm's length is not reading a dashboard.
+
+**The Hierarchy Law, made numeric — this is what makes it enforceable rather than advisory:**
+
+- The hero figure is **at least 3× body size**.
+- **No other text element on that screen may exceed 0.62× the hero** (48 → 30). A second element at rank 1 becomes arithmetically impossible, which is the point: "make it bigger" is not a specification, and a review can now fail on a number.
+
+## Spacing, radius, elevation
+
+**4px base.** Scale: `4 · 8 · 12 · 16 · 24 · 32 · 48 · 64 · 96`. Nothing off the scale.
+
+**Radius:** 8px portal, 12px terminal — larger targets read softer, and the terminal's are larger.
+
+**Elevation carries layering, never importance.** A shadow means something is genuinely above something else — a modal, a menu. Raising a card to make it feel important is the same error as colouring a figure to make it feel important, and *Accent Colour Never Carries Importance* applies unchanged. Size and space rank; nothing else does.
+
+## Density — two, matching the two audiences
+
+| | Portal | Terminal |
+|---|---|---|
+| Row height | 44px | — |
+| Primary action | 40px tall | **≥ 56px tall** |
+| Other targets | ≥ 40px | ≥ 48px |
+| Card padding | 20–24px | 24px |
+| Section gap | 24–32px | 16–24px |
+
+`UX_MAP.md` sets an absolute floor of 44×44 for touch targets. The terminal goes well past it deliberately: the Portal is used by someone who has learned where things are, the terminal by someone who has not and never will.
+
+## Money formatting
+
+Locale-driven, from the Restaurant's own locale, never hardcoded. `DATABASE.md` stores minor units as `BIGINT` (ADR-001) and the API returns strings; the interface decides presentation and never arithmetic. Grouping, decimal separator and symbol placement follow the locale (`1 240,00 €` in `lt-LT`, `€1,240.00` in `en-*`). Always two decimals for EUR, always tabular, and **never abbreviated** — no `€1.2k` anywhere a real amount is meant. Someone reconciling against a bank statement needs the figure, not a summary of it.
+
+---
+
+# What Part 2 Deliberately Leaves Open
+
+- **The accent palette is four alternates, not a final catalogue.** It grows when the branding candidate is actually built, by the same rule: measured against both grounds, no semantic hues, or it does not enter the table.
+- **Motion.** Nothing here needs it yet. When it arrives it must respect `prefers-reduced-motion` and carry no meaning not also carried by text or position.
+- **Charts beyond the 7-day bar.** `revenueChart` is specified by rank, not by charting library. Anything further waits for a screen that needs it.
+- **Illustration and empty-state art.** Part 1 requires four designed states per component; it does not require pictures, and the never-populated state should be attempted in words and layout first.
 
 ---
 
