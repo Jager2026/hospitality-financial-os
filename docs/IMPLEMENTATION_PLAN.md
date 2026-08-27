@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.9.0
+version: 2.10.0
 status: Active
 classification: Critical
 priority: Highest
@@ -254,6 +254,14 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   What remains is the one thing no in-platform mechanism can address by construction: **every copy lives inside Railway.** PITR, all three snapshot tiers and the volume itself share a single point of failure that is not a disk — losing access to the account, or the account's own data being lost, takes all of them at once. For a system whose entire premise is an authoritative financial Ledger, one copy outside that blast radius is the reasonable end state, and it is now the *only* remaining reason to build this.
 
   **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The deferral reason is honest and time-bound and has not changed — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how its own restore gets rehearsed). The moment real money moves through it, that calculus inverts. Founder decision.
+
+- **Refresh-token revocation that survives a Redis outage (ADR-019's own trigger, now fired).** **This is not a new finding.** ADR-019 accepted the risk explicitly and named the condition for revisiting it in its own Consequences: *"revisit if refresh-token revocation ever needs to survive a Redis outage."* Noticing that the Sprint 13 volume-backup schedules cover only the Postgres volume, and that the redis volume has no schedule at all, is that condition arriving — recorded here so the revisit happens because the ADR said so, not because someone remembered.
+
+  Redis currently holds two kinds of state: rate-limit counters, and the revocation set — individual `jti`s rotated out, plus `familyId`s revoked on refresh-token reuse detection. Losing the counters is harmless. Losing the revocation set means **tokens that were deliberately invalidated become valid again** — a logout, or a family revoked because we detected a stolen token being replayed, silently un-does itself.
+
+  **The fix is explicitly not "turn on snapshots for the redis volume."** A restored, stale revocation set is worse than an empty one, and the distinction is the whole reason this needs design rather than a toggle: an empty set is honestly wrong in a way we can reason about — every outstanding token is valid, we know it, and we can act on it. A stale set is *dishonestly* wrong — some genuinely revoked tokens are valid again while the system reports itself protected, which is the failure mode that gets discovered by an incident rather than by a check.
+
+  **Deferred until after the frontend. Founder decision, with the reasoning recorded because it is what makes the deferral defensible rather than convenient:** the blast radius is bounded by the token's own TTL (at most 7 days, after which every affected token expires by signature regardless), there are zero real users today so there is nothing outstanding to un-revoke, and the real solution needs actual design — a Postgres table, a strategy for pruning expired rows, and, most consequentially, the latency cost of a database read in the token-verification path **on every authenticated request**, which is exactly why ADR-019 put this in Redis to begin with. That last point is the reason this cannot be a quick fix: it re-opens ADR-019's original trade-off rather than patching around it.
 
 ---
 
