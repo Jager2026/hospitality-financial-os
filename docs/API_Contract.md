@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.11.0
+version: 2.12.0
 status: Active
 classification: Internal
 owner: Founder
@@ -207,6 +207,9 @@ GET /wallets/{id} — same shape as one entry above.
 
 ## Wallet Transactions
 GET /wallets/{id}/transactions — Ledger-derived history for this Wallet only, newest first. Response: array of `{ ledgerLineId, account, direction, amount, currency, restaurantId, transactionId, entryType, createdAt }`.
+
+## Staff Member's Wallet
+GET /memberships/{id}/wallet — new, ADR-039, Sprint 13. The Wallet backing one Membership, addressed through the Membership that owns it. This is how the Employee Details screen (`UX_MAP.md`) reaches a staff member's Wallet: `GET /wallets` returns only the caller's *own*, so the id `GET /wallets/{id}` needs was previously unobtainable by the Manager or Owner that ADR-024 had always permitted to view it — a permission with no addressable resource behind it. Same reachability rule as `GET /wallets/{id}`, reusing the identical check rather than restating it: the Wallet's own holder always, plus anyone reaching that Wallet's Restaurant (org-wide in the same Organization, or scoped to that exact Restaurant). An org-wide holder's own Wallet remains reachable only by themselves. **A Membership with no Wallet yet returns the same `WALLET_NOT_FOUND` as an unreachable one, deliberately** — distinguishable responses would make this an existence oracle for Memberships in other Organizations. Deliberately *not* implemented as `GET /wallets?membershipId=`: that would silently change what an existing route exposes without changing its name (ADR-039).
 
 ## Withdrawal Request
 POST /wallets/{id}/withdrawals — future (IMPLEMENTATION_PLAN.md Sprint 7: "Future Withdrawals Placeholder"). Own-wallet-only, even though `GET /wallets/{id}` is reachable more widely — `PERMISSION_DENIED` for a Manager or Owner who can view but doesn't hold the Wallet, `WITHDRAWAL_NOT_AVAILABLE` (501) for the Wallet's own holder, so the response always means "not built yet," never "not yours."

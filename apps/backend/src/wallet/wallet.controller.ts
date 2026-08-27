@@ -25,6 +25,19 @@ export class WalletController {
     return this.walletService.findTransactions(id, user);
   }
 
+  /** ADR-039. Lives in WalletController, not MembershipController, following this codebase's own
+   * convention: a nested route belongs to the domain it *returns*, not the one in its path prefix
+   * — the same reason `GET /restaurants/:id/tips` is TipController's and `GET /restaurants/:id/staff`
+   * is MembershipController's (ADR-033).
+   *
+   * A separate route from `GET /wallets`, not a filter on it (ADR-039 rejects that explicitly):
+   * "my wallets" and "this employee's wallet" are different operations under different rules, and
+   * one shared return type does not make them one endpoint. */
+  @Get("memberships/:id/wallet")
+  findByMembership(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.walletService.findByMembership(id, user);
+  }
+
   // IMPLEMENTATION_PLAN.md Sprint 7: "Future Withdrawals Placeholder" — a real, documented route
   // (API_Contract.md: "POST /wallets/{id}/withdrawals — future.") that answers honestly rather
   // than 404ing as if the concept doesn't exist. Confirms the caller can actually reach this

@@ -71,6 +71,31 @@ export class WalletService {
     return wallet;
   }
 
+  /** ADR-039: the Employee Details screen's own route to a staff member's Wallet. Before this, an
+   * Owner could be *allowed* to view an employee's Wallet (assertReachable below has permitted it
+   * since ADR-024) and still have no way to reach it — `GET /wallets` returns only the caller's
+   * own, so the id that `GET /wallets/{id}` needs came from nowhere. A permission with no
+   * addressable resource behind it.
+   *
+   * Deliberately reuses `assertReachable` unchanged rather than restating the rule. Two copies of
+   * an access check drift, and the one that drifts is the one nobody is looking at — the same
+   * "never two independently-maintained copies of a decision" reasoning applied to money in
+   * ADR-021 and to reachability itself in ADR-026/027. */
+  async findByMembership(membershipId: string, user: AuthenticatedUser): Promise<Wallet> {
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { membershipId },
+      include: { membership: { include: { restaurant: { select: { name: true } } } } },
+    });
+    // Same 404 as an unreachable Wallet, deliberately: "this Membership has no Wallet yet" and
+    // "you may not see it" must be indistinguishable to the caller, or the response becomes an
+    // existence oracle for Memberships in other Organizations.
+    if (!wallet) {
+      throw new AppException("WALLET_NOT_FOUND", "Wallet not found.", 404);
+    }
+    this.assertReachable(wallet, user);
+    return wallet;
+  }
+
   // API_Contract.md: "Ledger-derived history for this Wallet only" — reads LedgerLine directly
   // (ADR-002: the Ledger is the source of truth; Wallet itself is only ever a cached projection
   // of it), not a stored transaction log on Wallet.

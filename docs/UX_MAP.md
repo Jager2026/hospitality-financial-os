@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.2.0
+version: 2.3.0
 status: Active
 classification: Internal
 owner: Founder
@@ -219,6 +219,10 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 **Employee Details:** Profile · Position · Wallet · Tip History · Performance · Activity · Permissions · Status
 
 **What changed (ADR-006):** Wallet, here, reflects only this Restaurant's earnings for this person. If the same person also works at another Restaurant on the platform, that is a second, separate Wallet, visible in their own Waiter Portal — never merged into this view, since two employers' money should never appear as one balance (see Waiter Portal Wallet, below).
+
+**Reachable as of ADR-039.** This section had been listed since v1.0 and was, until now, unbuildable: the rule permitting a Manager or Owner to view it has existed since ADR-024, but no route led to it — a permission with nothing addressable behind it, unnoticed for six sprints because no screen existed to try. It is now reached through the Membership this screen is already showing.
+
+**Pending Balance reads zero here too**, for the same reason as in the Waiter Portal — nothing is withdrawable yet (ADR-024). Present it as inactive rather than as a real zero, or an owner will read it as money already paid out.
 
 ---
 
