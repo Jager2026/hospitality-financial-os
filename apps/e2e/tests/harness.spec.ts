@@ -13,19 +13,21 @@ import { queryOne } from "../fixtures/db";
  *
  * ── The auth-request budget, and why this file is deliberately frugal ──────────────────────────
  *
- * `AuthController` carries `@Throttle({ limit: 10, ttl: 60_000 })` at the CONTROLLER level, so
- * register, login, refresh, logout and me all share **one 10-per-minute budget**, and the default
- * tracker keys on the request IP — which is the same for every test here. The counter lives in
- * `@nestjs/throttler`'s in-memory store (no storage provider is configured; ADR-028 Decision 5
- * already recorded that "ThrottlerGuard's in-memory counter lives per app instance"), so it
- * cannot be reset from outside the backend process.
+ * `AuthController` carries `@Throttle({ limit: 10, ttl: 60_000 })`, and `ThrottlerGuard` keys on
+ * `sha256(ClassName-handlerName-throttlerName-tracker)` — so each route has its own 10-per-minute
+ * bucket, per caller IP, which is the same IP for every test here.
  *
- * This file therefore spends exactly **three** auth requests in total: one register, one correct
- * login, one wrong-password login. That is a real constraint, not a style choice, and it is the
- * reason the rate-limit test agreed for this harness is NOT here — it needs eleven requests of its
- * own and there is no way to give it a fresh budget. See the report accompanying this commit.
+ * (An earlier version of this comment claimed all the auth routes shared one budget. They do not;
+ * the handler is part of the key. `rate-limit.spec.ts` asserts the real behaviour, and caught the
+ * mistake.)
  *
- * `retries` is 0 in the config for the same reason: a retry would re-spend a budget that has not
+ * This file still spends only three auth requests — one register, two logins — because the state
+ * is shared across the whole run and frugality here leaves headroom for the rate-limit suite.
+ * Since ADR-042 that state lives in Redis and `resetRateLimits()` can clear it between tests;
+ * before that it was unreachable in-process memory, which is why the limit itself could not be
+ * tested at all.
+ *
+ * `retries` is 0 in the config for a related reason: a retry would re-spend a budget that has not
  * refilled, turning a genuine failure into a 429 and reporting the wrong cause.
  */
 
