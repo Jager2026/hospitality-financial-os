@@ -59,7 +59,7 @@ Four references were supplied: a dark orange fintech landing page (QPAY), a dark
 - **All four are consumer products showing a person their own money.** `$8,987.00` is *yours*, to spend, with no explanation owed. Our hero figure is a business's gross sales, from which a platform fee has not yet been deducted, displayed next to tips that legally and morally belong to *staff, not the viewer*. The emotional register of "your balance" cannot be transplanted onto a number that is neither the viewer's to keep nor final. This is not a stylistic difference; it is the reason the caption problem below exists at all.
 - **QPAY is a marketing landing page, not a product.** Its layout, its hero card render, its "Trusted by" logo row and its stat badges answer "should I sign up?" — a question none of our screens ask. Its useful contribution is the accent-restraint lesson and nothing else. Recorded plainly so it is not mined later for layout ideas it cannot supply.
 - **All four are phone-first, single-column, one-hand, at leisure.** The Restaurant Portal is used by an owner on a laptop or tablet between service peaks, and the Waiter Portal by someone standing on a floor mid-shift. Session length, lighting, and attention budget all differ. Consumer polish transplanted wholesale produces a product that photographs well and performs badly at 11pm in a dim room.
-- **Three of the four are dark; one is light. That is still a Part 2 decision** — but it is now settled that it is made **per surface**, not once for the product (see *One Product, Two Visual Systems*). Dark is defensible for the Portals on ergonomics rather than fashion: restaurants are dim, and a bright screen at a service pass is genuinely unpleasant. That argument does not carry to the terminal.
+- **Three of the four are dark; one is light. That is still a Part 2 decision** — but it is now settled that it is made **per surface**, not once for the product (see *One Product, Two Visual Systems*). An earlier version of this line claimed dark was defensible for the Portals "on ergonomics rather than fashion — restaurants are dim, and a bright screen at a service pass is unpleasant." **That claim has been withdrawn; see *The Portal's Surface* below.** It is worth leaving the retraction visible rather than quietly deleting the sentence: it is a clean example of an aesthetic preference arriving dressed as an ergonomic argument, which is the failure mode this whole document exists to catch.
 
 ---
 
@@ -77,6 +77,16 @@ In all four references, *the numbers themselves are neutral*. Accent marks actio
 - **Forbidden:** accenting a figure because it is important, tinting the hero number to make it feel bigger, or colour-coding a set of figures so the palette re-ranks what the layout has already ranked.
 
 The practical test: **if the accent were removed entirely, the hierarchy of the screen must survive unchanged.** If it collapses, colour was carrying weight that size and space should have been carrying.
+
+## The system is a monochrome base plus one accent token (Founder decision)
+
+**This is not "we picked a palette."** Three directions were built and compared on identical screens — a monochrome one, a warm-paper-and-green one, and a warm one with amber. The correct reading of the result, and the Founder's own: **the monochrome base *is* the system, and the three "directions" were one system with three values of a single token.** The first was that system with the accent set to black; the other two set it to a colour.
+
+So there was only ever one question — **what the default value of that token is** — and the answer is **a darkened amber, `#9A5D14`**.
+
+**Green was rejected, and the reason outlives the decision.** A brand accent and the semantic "succeeded" state cannot be the same colour: on the terminal, a guest would not be able to tell *press this* from *this worked*. That is a structural constraint on any future accent value, not a preference about green — it applies equally to whatever a restaurant later chooses under the branding candidate, and it is why the pre-verified palette Part 2 defines must exclude the semantic hues rather than merely avoiding them by taste.
+
+**Amber is recorded darkened, with the measurement, because the measurement is the finding.** The amber first reached for (`#B5701F`) measured **3.87:1** against the pay button's own text — below the 4.5:1 minimum, on the one screen where a stranger gets ten seconds and no second attempt. At `#9A5D14` it measures **5.19:1** and passes with headroom. The conclusion worth carrying forward is not the hex: **a light amber is structurally unavailable to us — this hue only qualifies pushed towards brown.** Any later proposal to "brighten it up" is re-opening a contrast failure, not a taste debate.
 
 ## The accent is a token from the first line of CSS, never a hardcoded colour
 
@@ -200,6 +210,23 @@ Every other surface is used by someone with a stake in us. An owner and a waiter
 A dark interface in direct sunlight is materially harder to read, and the terminal is the screen least able to afford it. In Lithuania (ADR-012 — launch market) this is not an edge case: **the summer terrace is a substantial share of a restaurant's revenue, and a significant share of all payments will be taken there.** A surface treatment chosen for a dim dining room, applied unexamined to a device held over an outdoor table in July, degrades exactly where the money is densest.
 
 The terminal also has no dashboard, no hierarchy problem and no emotional contract. It has one job, and needs maximum legibility and zero ambiguity.
+
+## The Portal's surface — a withdrawn justification, and what replaces it
+
+**Open, pending the Founder's answer. Recorded now because the retraction stands on its own regardless of what replaces it.**
+
+This document previously justified a dark Restaurant Portal as ergonomics: *restaurants are dim, a bright screen at a service pass is unpleasant.* The Founder challenged it as an argument from a surface we do not build. Checked rather than defended, it is worse than that:
+
+- **`UX_MAP.md` specifies no device and no environment for either portal.** Not for the Restaurant Portal, not for the Waiter Portal. The dim room was not read from any document — it was assumed and then written down as though it had been established.
+- **There is no screen at a service pass in this product at all.** The Restaurant Portal belongs to the owner and manager, the Waiter Portal to the waiter, the terminal to the guest. A kitchen screen was reasoning about a surface that does not exist.
+
+So the justification is withdrawn entirely. Not softened — withdrawn. What can be said instead, and checked:
+
+- **The content is financial documents.** Figures, tables, exports. What an owner checks our numbers against — a bank statement, an accountant's spreadsheet, an invoice — is light. That is not fashion; it lowers the cost of comparing, which is the actual job.
+- **Dark-for-long-reading is folklore.** For sustained reading at normal vision, light-on-dark performs slightly *worse* — the pupil opens and thin type haloes. Dark's genuine advantages are low ambient light and certain visual conditions: a per-person preference, not a product default.
+- **A light Portal collapses two surface treatments into one**, since the terminal is already decided light. That is the same argument that ruled out two independent design systems, applied one level down.
+
+**Recommendation: light by default for the Restaurant Portal, dark as a supported preference.** And the reframe that makes this cheap rather than dramatic — **surface is a token set, not an identity**, exactly as the accent turned out to be. The monochrome base is the system; light and dark are two values of the surface token, and Part 2 defines both regardless. Only the default is in question, so this is a value, not a rewrite.
 
 ## Why not two independent systems
 
