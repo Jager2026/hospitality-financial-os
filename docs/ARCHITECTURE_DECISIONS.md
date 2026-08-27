@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.27.0
-status: Active — thirty-nine ADRs, all Accepted
+version: 1.28.0
+status: Active — forty-one ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -828,6 +828,48 @@ Resolved by generating both placeholders at CI runtime (`/dev/urandom` → prefi
 That is the mechanism by which access leaks actually happen in practice: not a check written incorrectly, but a check that stopped covering everything the route now returns, in a place nobody had reason to re-read. **A route whose meaning widens must change its name.** A new name forces a new review; a new filter parameter does not.
 
 **Consequences:** `WalletService.findByMembership` **reuses `assertReachable` unchanged** rather than restating the rule — two copies of an access check drift, and the one that drifts is the one nobody is looking at (the same reasoning ADR-021 applies to money and ADR-026/027 to reachability itself). A Membership with no Wallet yet returns the identical `WALLET_NOT_FOUND` as an unreachable one, deliberately: distinguishable responses would turn the endpoint into an existence oracle for Memberships in other Organizations. Four new tests in `wallet.service.spec.ts`, including the discriminating case — an org-wide Owner **of a different Organization**, which is the exact shape `CLAUDE.md`'s Architecture Review paragraph names; broken to `restaurantId === null` without the `organizationId` comparison, it fails with *"promise resolved instead of rejecting"*, and the same caller can still reach a Wallet inside their own Organization, so the rejection is real scoping rather than a blanket denial passing for the right reason. `API_Contract.md` and `UX_MAP.md` updated. No schema change.
+
+---
+
+## ADR-040 — The Portal Ships in English Only, and Every String Goes Through a Dictionary From Day One
+**Status:** Accepted (Founder decision)
+
+**Context:** Found during the pre-implementation review of the first screen, and worth recording as a *shape* rather than only a decision: the Founder listed i18n among the infrastructure that "comes free with the login screen" — reasonably, since it usually does. Checking rather than assuming showed the question had **never been answered anywhere**. `User.locale` is an optional field at registration; `Restaurant` carries a *customer-facing* language, which is the terminal's. **No document states what language the Portal itself renders in, or which languages we support.** ADR-013 promises both languages; nothing said when, or which comes first.
+
+Left undecided, it would have been decided silently by whoever wrote the first component, in the form of hardcoded English literals.
+
+**Decision: English only at launch. Lithuanian is not dropped — it is sequenced.**
+
+The reasoning is the same one that separated the two surfaces in `DESIGN_SYSTEM.md`, applied to language: **Lithuanian is needed by the terminal, not by the Portal.** The terminal is used by a guest who gets ten seconds, has no interest in working anything out, and no reason to try again — for them a foreign language is a barrier. The Portal is used by an owner and a manager who *learn* the product; for them English is friction, not a barrier. ADR-013's promise stands in full.
+
+**The part that had to be done now, and it is about order rather than scope: every user-facing string goes through a dictionary lookup from the first line of code, while the dictionary still has exactly one language in it.** A free literal costs a sweep of every component to retrofit — the identical shape as a hardcoded colour, and the identical reason `--accent` is a token before any restaurant can change it (`MASTERPLAN.md`'s branding candidate). Doing it on day one costs a function call.
+
+**Consequences:** `apps/frontend/src/lib/i18n/` — `en.ts` holds flat, dotted keys; `index.ts` exposes `t(key)`. The typing does the enforcing rather than a convention: `t()` accepts only a `MessageKey`, so a mistyped key fails to compile instead of rendering a raw key at a customer, and `Dictionary` is `Record<MessageKey, string>`, so **a second language cannot ship half-translated**. That last constraint is deliberate and matches the trigger below — a partial Lithuanian translation would be worse than none, because it would appear finished. Money is explicitly *not* translated: amounts are locale-formatted by the money helper (`DESIGN_SYSTEM.md`), never a dictionary string. `next/font` loads the `latin-ext` subset already, so the Lithuanian diacritics are present before the language is.
+
+**Trigger for Lithuanian, explicit rather than "someday": before the first pitch to a real restaurant, and translated by a native speaker — not by us.** A financial product that reads as machine-translated in the language of the money it moves loses trust faster than one that is confidently in English.
+
+---
+
+## ADR-041 — Playwright Runs Only on Pull Requests That Touch the Frontend
+**Status:** Accepted (Founder decision)
+
+**Context:** Browser end-to-end coverage is arriving with the first screen. The existing backend e2e suite already fixes this codebase's testing seam and states it explicitly in `critical-flow.e2e.spec.ts`: **only the literal outbound network call is replaced** — every real Controller, Guard, Service, Prisma client, Ledger write and Outbox row runs unmodified under real HTTP. Playwright adopts that identical seam one layer up rather than inventing a looser one. For the login screen specifically that means **nothing is faked at all**: Stripe is not involved, and the breached-password check runs at registration and invitation-acceptance, never at login (`API_Contract.md`).
+
+The cost is real. Playwright needs browser binaries, both servers, Postgres and Redis, and it will make a full CI run meaningfully slower.
+
+**Decision: Playwright runs only on pull requests that change the frontend.**
+
+**The reason is not saving minutes.** A slow check that runs on everything starts getting worked around, and **a bypassed check is worse than an absent one, because it manufactures a feeling of safety that nothing is producing.** Today the frontend is one screen and the backend changes constantly; paying the full price on every backend PR buys nothing and steadily erodes the habit of trusting CI.
+
+**Trigger for revisiting, named rather than left as "when it gets big": when the frontend is large enough that a backend change could plausibly break it.** Concretely — when the frontend consumes enough of the API that a contract change would go unnoticed until a screen fails. The trigger is about coupling, not about file count.
+
+**Two testing decisions recorded alongside, because they are the ones that would otherwise be settled quietly under time pressure:**
+
+**Falsification needs two directions, not one.** "Type the wrong password, see an error" passes against an implementation that shows an error for *everything*, including the correct password — proving nothing, the same defect as a ledger test whose numbers agree by coincidence (`CLAUDE.md`, Testing Philosophy). The test is therefore a discriminating pair on the same user: wrong password → error shown, URL still `/login`, no session stored; correct password → navigated to the destination that user's Memberships imply. Both halves, or neither counts. The routing fork gets its own falsification for the same reason — it is the one piece of routing the whole Portal inherits.
+
+**Rate limiting is reset, never relaxed.** Login is limited to 10/min and repeated end-to-end runs will trip it. Raising the limit in the test environment would weaken the exact behaviour under test, so instead the throttler's Redis keys are flushed between tests by a fixture — real Redis, real throttler, only the state reset — and the limit itself is proved by its own test with its own budget.
+
+**Consequences:** a separate CI job with a `paths` filter, not an addition to the existing one. The `lint-typecheck-test-build` job keeps running on everything, so a backend PR still gets the full non-browser suite including the design-token contrast assertions.
 
 ---
 

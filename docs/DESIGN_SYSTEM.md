@@ -1,6 +1,6 @@
 ---
 title: DESIGN_SYSTEM
-version: 1.0.0
+version: 1.0.1
 status: Active — Part 1 (structure, hierarchy, state) and Part 2 (surfaces, palette, type, spacing, density) both written
 classification: Internal
 owner: Founder
@@ -267,7 +267,7 @@ n-0   #FFFFFF     n-300 #C7C4BD     n-700 #403D38
 n-25  #FAFAF8     n-400 #928D84     n-800 #302D28
 n-50  #F4F3F0     n-500 #726D64     n-900 #1A1815
 n-100 #ECEBE7     n-600 #5C5852     n-950 #0F0E0C
-n-200 #DEDCD7
+n-200 #D8D5CF
 ```
 
 | Token | Light portal | Terminal | Dark portal |
@@ -278,6 +278,10 @@ n-200 #DEDCD7
 | `--surface` | `#F4F3F0` | `#F4F3F0` | `#1A1815` |
 
 `--text-muted` takes a different ramp step on each ground rather than one value forced to serve both — that is what a ramp is for. `--rule` is measured against a different target: a divider wants roughly **1.4:1**, enough to separate and not enough to catch the eye. Light and dark landing at 1.40 and 1.41 means both surfaces divide their content with equal emphasis, which is a large part of why they read as one product.
+
+**A second transcription correction.** The ramp originally listed `n-200` as `#DEDCD7` while `--rule` on light was given as `#D8D5CF` — a value that was not on the ramp at all. Turning the table into code made that visible immediately: every semantic token must point at a ramp step, or the ramp is not the single source it claims to be. `n-200` is now `#D8D5CF` and `--rule` points at it. `#DEDCD7` was referenced by nothing and is gone.
+
+**These tokens are enforced, not merely written down.** `apps/frontend/src/styles/tokens.contrast.spec.ts` re-derives every ratio on this page from `tokens.css` itself and fails on drift — including the two dark blocks disagreeing with each other, an accent straying into a semantic hue, a `--warning` token appearing, or the terminal being scoped somewhere `prefers-color-scheme` could repaint it.
 
 ## Accent — one token, five verified values
 
@@ -331,7 +335,9 @@ States that are neither success nor failure — "under review", "requirements ou
 **The Hierarchy Law, made numeric — this is what makes it enforceable rather than advisory:**
 
 - The hero figure is **at least 3× body size**.
-- **No other text element on that screen may exceed 0.62× the hero** (48 → 30). A second element at rank 1 becomes arithmetically impossible, which is the point: "make it bigger" is not a specification, and a review can now fail on a number.
+- **No other text element on that screen may exceed 0.625× the hero** (48 → 30). A second element at rank 1 becomes arithmetically impossible, which is the point: "make it bigger" is not a specification, and a review can now fail on a number.
+
+**Corrected during transcription, and worth recording as an example of why the rule is a test.** This constant was first written as **0.62**, rounded down from the pair it was derived from — which made the document forbid its own example, since 30 ÷ 48 = 0.625. Nobody reading the prose would have noticed; the test that turns the rule into arithmetic failed on its first run. The document was corrected to match the arithmetic rather than the arithmetic bent to match the prose.
 
 ## Spacing, radius, elevation
 

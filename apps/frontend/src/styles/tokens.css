@@ -1,0 +1,232 @@
+/*
+ * DESIGN SYSTEM — TOKEN LAYER
+ *
+ * Transcribed from `docs/DESIGN_SYSTEM.md` v1.0.0 Part 2, deliberately in full rather than
+ * only the subset the first screen needs. A token layer written to fit its first consumer is
+ * a design system authored by one screen, which is the exact failure that document exists to
+ * prevent. Every value here is measured; `tokens.contrast.spec.ts` re-measures them and fails
+ * if a value drifts from what the document claims.
+ *
+ * Two rules the structure enforces, rather than asks for:
+ *   1. Components never read the ramp (`--n-*`) directly — only the semantic tokens below.
+ *      The ramp is raw material; the semantic layer is what a surface change swaps.
+ *   2. `--accent` is exactly ONE swappable value (ADR-039's sibling reasoning in
+ *      MASTERPLAN.md's terminal-branding candidate). It is never a hardcoded colour anywhere.
+ */
+
+/* ── The ramp — warm-neutral, biased a hair toward the accent ───────────────────────────────
+ * A pure grey next to an amber accent reads as an accident rather than a choice.
+ * Never referenced by a component. Only the semantic tokens below may point at these.        */
+:root {
+  --n-0: #ffffff;
+  --n-25: #fafaf8;
+  --n-50: #f4f3f0;
+  --n-100: #ecebe7;
+  --n-200: #d8d5cf;
+  --n-300: #c7c4bd;
+  --n-400: #928d84;
+  --n-500: #726d64;
+  --n-600: #5c5852;
+  --n-700: #403d38;
+  --n-800: #302d28;
+  --n-900: #1a1815;
+  --n-950: #0f0e0c;
+
+  /* Accent — one token, five verified values (DESIGN_SYSTEM.md). Default is amber, darkened:
+   * `#B5701F` measured 3.87:1 against the pay button's own text, under the 4.5 floor, on the
+   * one screen where a stranger gets ten seconds. A light amber is structurally unavailable —
+   * this hue only qualifies pushed toward brown. Brightening it re-opens a contrast failure,
+   * not a taste debate. Alternates live in `ACCENT_PALETTE` (see accent-palette.ts) so the
+   * customisation feature can only ever offer verified values, never a free hex field. */
+  --accent-light: #9a5d14;
+  --accent-dark: #e0a050;
+
+  /* Semantic state — reserved, never customisable. A failed payment must look failed in every
+   * restaurant. There is deliberately NO warning colour: the two places one gets reached for
+   * are the two places DESIGN_SYSTEM.md forbids alarming (the platform-fee caption and an
+   * empty dashboard). Not having the token is cheaper than the discipline of not using it. */
+  --success-light: #2e7d46;
+  --success-dark: #6fbf87;
+  --error-light: #b3261e;
+  --error-dark: #f08b7f;
+}
+
+/* ── Surface: Portal, light. The default (Founder decision) ─────────────────────────────────
+ * The Portal's content is financial documents, and everything an owner checks our numbers
+ * against — a bank statement, an accountant's spreadsheet, an invoice — is light.
+ * Reconciliation IS the owner's work with this product, not a side activity, so forcing the
+ * eye to re-adapt on every comparison raises the cost of the primary task.                   */
+:root {
+  --ground: var(--n-25); /* text 18.46:1 */
+  --surface: var(--n-50);
+  --text: var(--n-950);
+  --text-muted: var(--n-500); /* 4.92:1 — floor is 4.5 */
+  --rule: var(--n-200); /* 1.40:1 — enough to separate, not to catch the eye */
+  --accent: var(--accent-light); /* 5.19:1 against --on-accent */
+  --on-accent: #fffcf7;
+  --success: var(--success-light); /* 4.86:1 */
+  --error: var(--error-light); /* 6.25:1 */
+}
+
+/* ── Surface: Portal, dark. A supported preference, not a second design ─────────────────────
+ * One token set with different values, never a separate system. Both the OS preference and an
+ * explicit choice are honoured; an explicit `light` beats a dark OS.                          */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: var(--n-950); /* text 18.46:1 */
+    --surface: var(--n-900);
+    --text: var(--n-25);
+    --text-muted: var(
+      --n-400
+    ); /* 5.85:1 — a different ramp step, not one value forced to
+                                 * serve both grounds. That is what a ramp is for. */
+    --rule: var(
+      --n-800
+    ); /* 1.41:1 — within 0.01 of the light rule, so both surfaces
+                           * divide their content with equal emphasis */
+    --accent: var(--accent-dark); /* 8.29:1 against --on-accent */
+    --on-accent: #14120f;
+    --success: var(--success-dark); /* 8.71:1 */
+    --error: var(--error-dark); /* 8.00:1 */
+  }
+}
+
+/* Both theme overrides are attribute-scoped rather than `:root`-scoped, deliberately. On `<html>`
+ * they are the explicit user choice; on any wrapper they pin a subtree to one theme regardless
+ * of the OS preference. That second use is not hypothetical — it is how a specimen can show
+ * light and dark side by side on a dark machine, and the gap was found by rendering the page,
+ * not by reading the CSS. It also mirrors how `[data-surface="terminal"]` already works, so
+ * "pin a surface" means one thing everywhere. */
+[data-theme="light"] {
+  --ground: var(--n-25);
+  --surface: var(--n-50);
+  --text: var(--n-950);
+  --text-muted: var(--n-500);
+  --rule: var(--n-200);
+  --accent: var(--accent-light);
+  --on-accent: #fffcf7;
+  --success: var(--success-light);
+  --error: var(--error-light);
+}
+
+[data-theme="dark"] {
+  --ground: var(--n-950);
+  --surface: var(--n-900);
+  --text: var(--n-25);
+  --text-muted: var(--n-400);
+  --rule: var(--n-800);
+  --accent: var(--accent-dark);
+  --on-accent: #14120f;
+  --success: var(--success-dark);
+  --error: var(--error-dark);
+}
+
+/* ── Surface: the guest terminal ────────────────────────────────────────────────────────────
+ * Pure white deliberately — maximum luminance for a screen that may be read on a terrace in
+ * July, and in Lithuania (ADR-012) the summer terrace is a substantial share of revenue.
+ *
+ * Set on a WRAPPER element, never on :root, and that is load-bearing: custom properties set on
+ * a descendant override inherited ones regardless of any ancestor selector's specificity. So
+ * the terminal cannot be darkened by `prefers-color-scheme`, which is the point — a guest's
+ * own device preference must not repaint the payment screen. The terminal's surface is chosen
+ * on legibility, not on the viewer's taste (DESIGN_SYSTEM.md, One Product Two Visual Systems).
+ */
+[data-surface="terminal"] {
+  --ground: var(--n-0); /* text 19.29:1 */
+  --surface: var(--n-50);
+  --text: var(--n-950);
+  --text-muted: var(--n-500); /* 5.14:1 */
+  --rule: var(--n-100);
+  --accent: var(--accent-light);
+  --on-accent: #fffcf7;
+  --success: var(--success-light);
+  --error: var(--error-light);
+}
+
+/* ── Type ───────────────────────────────────────────────────────────────────────────────────
+ * IBM Plex Sans, chosen for one reason rather than for character: its numerals are unambiguous
+ * and 1/l/7 do not collide. Our figures get read aloud, compared against a bank statement, and
+ * typed into someone else's system. Plex Mono is not decoration either — an id is a string to
+ * be copied exactly, and a monospaced face makes a transposition visible.
+ *
+ * The Hierarchy Law made numeric: hero >= 3x body, and no other text may exceed 0.625x the hero
+ * (48 -> 30). A second element at rank 1 becomes arithmetically impossible, so a review can
+ * fail on a number instead of an opinion.                                                     */
+:root {
+  --text-hero: 48px;
+  --text-hero-2: 30px;
+  --text-title: 20px;
+  --text-body: 16px;
+  --text-small: 14px;
+  --text-label: 12px;
+  --text-micro: 11px;
+
+  --tracking-hero: -0.03em;
+  --tracking-hero-2: -0.02em;
+  --tracking-title: -0.01em;
+  --tracking-label: 0.12em;
+  --tracking-micro: 0.1em;
+
+  /* Terminal overrides — a stranger at arm's length is not reading a dashboard. */
+  --text-terminal-amount: 56px;
+  --text-terminal-action: 18px;
+}
+
+/* ── Spacing, radius, density ───────────────────────────────────────────────────────────────
+ * 4px base. Nothing off the scale.
+ * Elevation carries layering, never importance: a shadow means something is genuinely above
+ * something else (a modal, a menu). Raising a card to make it feel important is the same error
+ * as colouring a figure to make it feel important. Size and space rank; nothing else does.    */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+
+  --radius-portal: 8px;
+  --radius-terminal: 12px;
+
+  /* Density — two, matching the two audiences. UX_MAP.md sets an absolute 44x44 floor for
+   * touch targets; the terminal goes well past it deliberately, because the Portal is used by
+   * someone who has learned where things are and the terminal by someone who never will. */
+  --control-portal: 40px;
+  --control-terminal: 56px;
+  --row-portal: 44px;
+  --target-min: 44px;
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────────────────────────
+ * `body` paints an explicit ground: a transparent body borrows whatever is behind it, which is
+ * how a page ends up rendering one theme's text on the other theme's background.
+ * `tabular-nums` is global rather than per-component — proportional digits make a column of
+ * money jitter as values change, and this product is read as numbers.                         */
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--ground);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+[data-surface="terminal"] {
+  background: var(--ground);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
