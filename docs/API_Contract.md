@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.12.0
+version: 2.13.0
 status: Active
 classification: Internal
 owner: Founder
@@ -28,6 +28,18 @@ Resources. Not functions.
 # Design Principles
 
 RESTful · JSON Only · HTTPS Only · Stateless · Versioned · Predictable · Consistent · Idempotent where required.
+
+---
+
+# Field Naming — camelCase on the wire, snake_case in the database
+
+**Every request body field, response field and query parameter in this document is `camelCase`.** `restaurantId`, `waiterMembershipId`, `displayName`, `cardPaymentsStatus`. That is what the code actually accepts and returns.
+
+**The database is `snake_case`** — `restaurant_id`, `waiter_membership_id` — per `DATABASE.md`'s naming convention, mapped by Prisma's `@map`/`@@map`. The two conventions are deliberately different and the boundary is Prisma; nothing in between translates.
+
+This is stated explicitly because the document got it wrong for a long time, in a way that is worth understanding rather than just fixing. **Every multi-word request field here was written in snake_case** — the database's convention, borrowed for the wire. It is a plausible slip: both conventions are real and live in the same project. Nothing caught it, because a contract document has nothing to disagree with — until the first real HTTP request. That request was made by the e2e harness, before any screen existed, and the API answered `displayName: Required`.
+
+**Two names are correctly snake_case in this document and must stay that way:** Stripe's own field names (`application_fee_amount`, `balance_transaction`) and our database's own columns and tables (`token_hash`, `accepted_at`, `idempotency_keys`), which this document occasionally references directly. Those are quotations from another system's vocabulary, not our wire contract.
 
 ---
 
@@ -63,7 +75,7 @@ Error:
 # AUTHENTICATION
 
 ## Register
-POST /auth/register — body: `email`, `password`, `display_name` (ADR-033, Sprint 13 — required; the name shown wherever this person needs to be identified by a human, e.g. the terminal's own staff-selection picker, Payment.md `MEMBERSHIPS`), `locale` (optional). Creates a User only. No Membership is created at registration: `Membership.organization_id` is required, and an Organization doesn't exist until this person creates their first Restaurant (see RESTAURANTS, `POST /restaurants`; DATABASE.md's Organization entity). A freshly registered User has zero Memberships, which DATABASE.md explicitly allows ("mid-invitation" is the same valid state). Previously said "+ Owner Membership" here, contradicting this document's own ORGANIZATIONS and RESTAURANTS sections — fixed to match the two places that already agreed. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) — checked only here and at Accept Invitation, never at Login.
+POST /auth/register — body: `email`, `password`, `displayName` (ADR-033, Sprint 13 — required; the name shown wherever this person needs to be identified by a human, e.g. the terminal's own staff-selection picker, Payment.md `MEMBERSHIPS`), `locale` (optional). Creates a User only. No Membership is created at registration: `Membership.organization_id` is required, and an Organization doesn't exist until this person creates their first Restaurant (see RESTAURANTS, `POST /restaurants`; DATABASE.md's Organization entity). A freshly registered User has zero Memberships, which DATABASE.md explicitly allows ("mid-invitation" is the same valid state). Previously said "+ Owner Membership" here, contradicting this document's own ORGANIZATIONS and RESTAURANTS sections — fixed to match the two places that already agreed. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) — checked only here and at Accept Invitation, never at Login.
 
 ## Login
 POST /auth/login — returns Access Token, Refresh Token, User, Memberships.
@@ -103,10 +115,10 @@ POST /restaurants — creates a new Organization automatically if the user has n
 POST /organizations/{id}/restaurants — explicit path for adding a location to an existing chain. Distinguishes "I'm opening a new, independent restaurant" from "I'm adding a location to mine."
 
 ## Get Restaurants
-GET /restaurants — scoped to every Restaurant the current user's Memberships grant access to. Supports `?organization_id=` to filter to one chain.
+GET /restaurants — scoped to every Restaurant the current user's Memberships grant access to. **Takes no query parameters.** This line previously claimed a `?organization_id=` filter to narrow to one chain; `RestaurantController`'s handler declares no `@Query` at all and `findAllForUser` accepts only the caller. The filter was never built — found during the Sprint 14 casing sweep, and worth separating from that sweep: a wrong field *name* fails loudly on the first request, while a documented parameter that does not exist is silently ignored by the server and looks to the caller like a filter that matched everything.
 
 ## Restaurant Details
-GET /restaurants/{id} — includes `onboarding_status`, `card_payments_status`, `payouts_status`, `requirements_due` so the frontend can surface outstanding Stripe requirements (ADR-009, ADR-014 — Accounts v2 capability-status strings, not v1 booleans).
+GET /restaurants/{id} — includes `onboardingStatus`, `cardPaymentsStatus`, `payoutsStatus`, `requirementsDue` so the frontend can surface outstanding Stripe requirements (ADR-009, ADR-014 — Accounts v2 capability-status strings, not v1 booleans).
 
 ## Update Restaurant
 PATCH /restaurants/{id}
@@ -124,10 +136,10 @@ POST /restaurants/{id}/onboarding-link — generates a fresh Stripe Account Link
 Renamed from Employees (ADR-005). Represents one person's role at one restaurant, or one org-wide role.
 
 ## Invite Membership
-POST /memberships — body: `email`, `restaurant_id` (nullable — omit for an organization-wide role), `role_id`. Creates a `MembershipInvitation` (ADR-020), never a `Membership` directly — true even when `email` already belongs to an existing User: every invitation is explicitly accepted, uniformly, rather than a Membership appearing because someone else typed an email into a form. Response includes the raw invitation token exactly once — no email-delivery provider exists yet (undocumented, so not something this endpoint invents); the caller is responsible for relaying it until one is introduced with its own ADR.
+POST /memberships — body: `email`, `restaurantId` (nullable — omit for an organization-wide role), `roleId`. Creates a `MembershipInvitation` (ADR-020), never a `Membership` directly — true even when `email` already belongs to an existing User: every invitation is explicitly accepted, uniformly, rather than a Membership appearing because someone else typed an email into a form. Response includes the raw invitation token exactly once — no email-delivery provider exists yet (undocumented, so not something this endpoint invents); the caller is responsible for relaying it until one is introduced with its own ADR.
 
 ## Accept Invitation
-POST /memberships/invitations/accept — public, no `Authorization` header (the invitee may not have an account yet). Body: `email`, `token`, `password` and `display_name` (ADR-033, Sprint 13) — both required only if no `User` currently exists for `email` (ignored otherwise, since an existing User already has one). Looks up pending, non-expired `MembershipInvitation` rows by `email` and hash-verifies `token` against each candidate's `token_hash`, the same shape as a login password check (ADR-020) — never a lookup keyed on the token itself. On success: creates `User` (only if none exists for `email`) and `Membership` together, atomically, and sets `accepted_at`. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) whenever a new `User` is actually being created here.
+POST /memberships/invitations/accept — public, no `Authorization` header (the invitee may not have an account yet). Body: `email`, `token`, `password` and `displayName` (ADR-033, Sprint 13) — both required only if no `User` currently exists for `email` (ignored otherwise, since an existing User already has one). Looks up pending, non-expired `MembershipInvitation` rows by `email` and hash-verifies `token` against each candidate's `token_hash`, the same shape as a login password check (ADR-020) — never a lookup keyed on the token itself. On success: creates `User` (only if none exists for `email`) and `Membership` together, atomically, and sets `accepted_at`. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) whenever a new `User` is actually being created here.
 
 ## Membership List
 GET /memberships
@@ -142,14 +154,14 @@ PATCH /memberships/{id}
 PATCH /memberships/{id}/disable
 
 ## Restaurant Staff
-GET /restaurants/{id}/staff — new, ADR-033, Sprint 13. Every `ACTIVE`, non-deleted Membership reachable at this Restaurant (same reachability rule as everywhere else, ADR-005), with no Role filter — "who actually served this table," not "who holds a specific Role." Returns `id`, `display_name`, `email`, `role_name` per entry. This is the terminal's own staff-selection picker's data source — the caller-side UI flow itself (three-dot menu → tap a name → one-button confirmation) has no frontend screen built yet (no screen in this codebase does); this endpoint and `POST /payments`'s new `waiter_membership_id` field are the backend half.
+GET /restaurants/{id}/staff — new, ADR-033, Sprint 13. Every `ACTIVE`, non-deleted Membership reachable at this Restaurant (same reachability rule as everywhere else, ADR-005), with no Role filter — "who actually served this table," not "who holds a specific Role." Returns `id`, `displayName`, `email`, `roleName` per entry. This is the terminal's own staff-selection picker's data source — the caller-side UI flow itself (three-dot menu → tap a name → one-button confirmation) has no frontend screen built yet (no screen in this codebase does); this endpoint and `POST /payments`'s new `waiterMembershipId` field are the backend half.
 
 ---
 
 # PAYMENTS
 
 ## Create Payment
-POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `restaurant_id`, `amount` (minor units, ADR-001, the full amount charged to the card — bill and tip combined), `tip_amount` (minor units, optional, defaults to 0, must not exceed `amount` — ADR-022), `waiter_membership_id` (ADR-033, Sprint 13 — the terminal's own "who actually served this table" selection; see `GET /restaurants/{id}/staff` above for the picker's data source). `currency` and `payment_method` are deliberately not client fields — `currency` always mirrors the Restaurant's own fixed Stripe-account currency (DATABASE.md, Restaurant Rules), and `payment_method` is server-set (`"card"`, the only method this MVP scope supports) rather than trusted from the client before Stripe has confirmed anything. Creates a Stripe PaymentIntent as a direct charge on the Restaurant's own connected account (ADR-014's Sprint 5 addendum) and a `PENDING` Payment row. `waiter_membership_id` is **required whenever `tip_amount > 0`** (rejected with `VALIDATION_ERROR` before Stripe is ever called if omitted) and validated as a real, `ACTIVE` Membership reachable at the Restaurant, no Role restriction — no longer captured automatically from the caller (ADR-022's original mechanism, revised); `null` when there's no tip, since there's nobody to attribute. `application_fee_amount` sent to Stripe is computed from `amount - tip_amount`, never the full `amount` — the platform fee excludes tips (ADR-021). Response: `id`, `restaurant_id`, `amount`, `tip_amount`, `waiter_membership_id`, `currency`, `status`, `client_secret` — the frontend confirms via Stripe.js using `client_secret` (ADR-015); this endpoint never confirms the payment itself, and never writes a Ledger entry — that happens later, asynchronously, driven by the `payment_intent.succeeded` webhook (see Incoming Webhooks below).
+POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `restaurantId`, `amount` (minor units, ADR-001, the full amount charged to the card — bill and tip combined), `tipAmount` (minor units, optional, defaults to 0, must not exceed `amount` — ADR-022), `waiterMembershipId` (ADR-033, Sprint 13 — the terminal's own "who actually served this table" selection; see `GET /restaurants/{id}/staff` above for the picker's data source). `currency` and `paymentMethod` are deliberately not client fields — `currency` always mirrors the Restaurant's own fixed Stripe-account currency (DATABASE.md, Restaurant Rules), and `paymentMethod` is server-set (`"card"`, the only method this MVP scope supports) rather than trusted from the client before Stripe has confirmed anything. Creates a Stripe PaymentIntent as a direct charge on the Restaurant's own connected account (ADR-014's Sprint 5 addendum) and a `PENDING` Payment row. `waiterMembershipId` is **required whenever `tip_amount > 0`** (rejected with `VALIDATION_ERROR` before Stripe is ever called if omitted) and validated as a real, `ACTIVE` Membership reachable at the Restaurant, no Role restriction — no longer captured automatically from the caller (ADR-022's original mechanism, revised); `null` when there's no tip, since there's nobody to attribute. `application_fee_amount` sent to Stripe is computed from `amount - tip_amount`, never the full `amount` — the platform fee excludes tips (ADR-021). Response: `id`, `restaurantId`, `amount`, `tipAmount`, `waiterMembershipId`, `currency`, `status`, `clientSecret` — the frontend confirms via Stripe.js using `clientSecret` (ADR-015); this endpoint never confirms the payment itself, and never writes a Ledger entry — that happens later, asynchronously, driven by the `payment_intent.succeeded` webhook (see Incoming Webhooks below).
 
 ## Payment Details
 GET /payments/{id}
@@ -311,7 +323,7 @@ GET /currencies — returns the Currency reference table: code, exponent, name. 
 GET /settings — PATCH /settings — future; not built by Sprint 6 (Business Details, Tax Information, and the other Settings sections in UX_MAP.md belong to their own owning modules, not Tips).
 
 ## Tip Configuration
-GET /restaurants/{id}/settings/tips — PATCH /restaurants/{id}/settings/tips (Sprint 6, ADR-022) — corrected to a restaurant-scoped path (real gap found building this: `/settings/tips` with no restaurant id has no way to know which Restaurant it configures, unlike every other resource-specific endpoint in this document; the fix is the same restaurant-scoping convention already used everywhere else, e.g. `/restaurants/{id}/onboarding-link`). Requires `tips.configure` (seeded, Owner/Administrator/Manager, not Waiter). Percentage presets shown to the customer at Tip Selection (UX_MAP.md), not a validation rule on `POST /payments`'s `tip_amount`: the terminal computes the actual minor-unit amount from whichever preset (or Custom) the customer picks, and the server only ever checks `tip_amount <= amount`.
+GET /restaurants/{id}/settings/tips — PATCH /restaurants/{id}/settings/tips (Sprint 6, ADR-022) — corrected to a restaurant-scoped path (real gap found building this: `/settings/tips` with no restaurant id has no way to know which Restaurant it configures, unlike every other resource-specific endpoint in this document; the fix is the same restaurant-scoping convention already used everywhere else, e.g. `/restaurants/{id}/onboarding-link`). Requires `tips.configure` (seeded, Owner/Administrator/Manager, not Waiter). Percentage presets shown to the customer at Tip Selection (UX_MAP.md), not a validation rule on `POST /payments`'s `tipAmount`: the terminal computes the actual minor-unit amount from whichever preset (or Custom) the customer picks, and the server only ever checks `tip_amount <= amount`.
 ```json
 { "presetTips": [10, 15, 20] }
 ```
@@ -348,11 +360,15 @@ GET /memberships?status=active
 
 # Sorting
 
-?sort=created_at&order=desc
+**Not implemented anywhere.** No endpoint accepts `sort` or `order`; no DTO declares them. Kept as the shape a future sorting parameter should take, marked so nobody builds against it:
+
+?sort=createdAt&order=desc
 
 ---
 
 # Search
+
+**Not implemented anywhere.** No endpoint accepts `search`. Same status as Sorting above — a convention recorded ahead of its first use, not a claim about today:
 
 ?search=John
 
@@ -404,7 +420,7 @@ Verifies the Stripe signature before any processing. Every event is deduplicated
 - `payment_intent.succeeded` → creates Transaction + JournalEntry + LedgerLines
 - `charge.refunded` → creates Refund + compensating JournalEntry
 - `charge.dispute.created` / `charge.dispute.closed` → creates/updates Chargeback + compensating JournalEntry
-- `account.updated` → updates Restaurant `onboarding_status` / `card_payments_status` / `payouts_status` / `requirements_due` (ADR-009's revision — Accounts v2 capability-status strings, not v1 booleans)
+- `account.updated` → updates Restaurant `onboardingStatus` / `cardPaymentsStatus` / `payoutsStatus` / `requirementsDue` (ADR-009's revision — Accounts v2 capability-status strings, not v1 booleans)
 
 ---
 

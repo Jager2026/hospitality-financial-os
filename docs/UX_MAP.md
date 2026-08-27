@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.3.2
+version: 2.3.3
 status: Active
 classification: Internal
 owner: Founder
@@ -157,7 +157,7 @@ Stripe hosts the actual identity and bank-account collection; this screen's whol
 
 Not a screen — a **condition** the Dashboard carries, and the reason the previous screen may be skipped. Recorded here because it is the state a new owner spends the most time in, and the only one where the product is visibly incomplete through no fault of theirs.
 
-While `card_payments_status` or `payouts_status` is anything other than `active`:
+While `cardPaymentsStatus` or `payoutsStatus` is anything other than `active`:
 - The Dashboard leads with the banner described below, and every figure on it is legitimately zero. **Zeroes here must read as "nothing has happened yet," never as "something is broken"** — this is the single most likely moment for a new owner to conclude the product does not work.
 - Inviting staff, configuring tips and editing settings all work normally. Only taking payment does not.
 - The banner and the Quick Action are the route back to Connect Payments, which keeps its four states above.
@@ -172,7 +172,7 @@ Questions answered: How much revenue today? How many transactions? How many tips
 
 If these questions cannot be answered within five seconds, the dashboard has failed.
 
-**New (ADR-009):** if this Restaurant's Stripe onboarding isn't complete — `card_payments_status` or `payouts_status` is not `active` — the Dashboard leads with a single, unmissable banner instead of competing with the sections below: "Finish payment setup to start accepting cards," naming the specific outstanding requirement, with one button to resolve it. Everything else on this screen is secondary until that banner is gone.
+**New (ADR-009):** if this Restaurant's Stripe onboarding isn't complete — `cardPaymentsStatus` or `payoutsStatus` is not `active` — the Dashboard leads with a single, unmissable banner instead of competing with the sections below: "Finish payment setup to start accepting cards," naming the specific outstanding requirement, with one button to resolve it. Everything else on this screen is secondary until that banner is gone.
 
 **Dashboard Sections:** Today's Revenue · Today's Tips · Today's Transactions · Average Bill · Average Tip · Revenue Chart · Recent Payments · Top Staff · Quick Actions
 
@@ -274,7 +274,7 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 
 Restaurant Information · Business Details · Tip Configuration · Payment Configuration · Users · Permissions · **Tax Information** *(blocked — see below)*
 
-**What changed (ADR-009):** Payment Configuration now includes the Stripe connection itself — connected account status, `card_payments_status`, `payouts_status`, and any outstanding requirements. This is the permanent home for what the Dashboard banner and the Connect Payments screen link to.
+**What changed (ADR-009):** Payment Configuration now includes the Stripe connection itself — connected account status, `cardPaymentsStatus`, `payoutsStatus`, and any outstanding requirements. This is the permanent home for what the Dashboard banner and the Connect Payments screen link to.
 
 **Removed (Sprint 13 frontend review): Notifications · Integrations · Security.** None of the three exists, none is planned for MVP, and none had a definition — three headings that would each have opened an empty screen. They return when there is something to put in them.
 

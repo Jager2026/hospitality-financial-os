@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.29.0
+version: 1.30.0
 status: Active — forty-two ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -554,6 +554,19 @@ Nothing is wrong in either tool; the CLI simply prints a subset. But the failure
 The consequence is what matters and does not depend on knowing the mechanism: **a manual snapshot cannot be treated as reliable insurance before a risky operation.** The pattern "take a snapshot, run the migration, roll back if it goes wrong" is unsound here, because the snapshot's continued existence at the moment it is needed is not something we can currently assert — `expiresAt: null` demonstrably did not guarantee it. Until the rule is known, anything that must survive a specific operation needs a mechanism we have actually verified end-to-end (the PITR restore rehearsed in `THREAT_MODEL.md` entry 22), not a snapshot assumed to still be there.
 
 Same shape as the two findings above, one step further along: not a tool printing a partial view, but a tool's *documented field* not meaning what it appears to mean. The habit extends accordingly — for anything load-bearing, re-read the state at the moment you intend to rely on it, not at the moment you created it.
+
+**A fourth entry, and the one that generalises the other three: a claim about someone else's code lives until its first execution, not until its first review.**
+
+The three findings above are all cases of a *tool* misleading us. This one is the mirror: **us misleading ourselves about the tool, confidently, in writing, and surviving review.** Two instances inside one week, both stated as fact, both wrong, both caught by running something rather than by re-reading anything:
+
+- **"Stripe's v1 calls work; only v2 rejects the key."** Said to the Founder and repeated to Stripe support while diagnosing `invalid_v2_key`. Testing it showed v1 returned 401 as well. The claim had been derived from plausible reasoning about which API surface a restricted key covers, and it was simply untrue.
+- **"A controller-level `@Throttle` means a controller-level budget."** Said while reporting the e2e harness blocked, so `register`/`login`/`refresh`/`logout`/`me` were described as sharing one 10/min allowance. `ThrottlerGuard` keys on `sha256(ClassName-handlerName-throttlerName-tracker)` — the *handler* is part of the key, so every route has its own bucket. The assertion written from the claim failed on its first run against the real process.
+
+Neither was careless. Both were the kind of statement that reads as obviously true, describes a library's behaviour rather than our own, and cannot be checked by looking harder at our source — because the behaviour lives in someone else's. **Review has no access to it.** That is the whole point: re-reading our code can confirm what we asked the library to do and never what the library does with it.
+
+**The rule this fixes, and it is cheap:** before a claim about third-party behaviour is written down, acted on, or sent to anyone outside this project, run the smallest thing that would distinguish it from its opposite. A four-line script, one real request, one deliberately-wrong assertion. Both of these would have cost a minute; the first cost eleven days of a misdirected support thread.
+
+Worth noting where this *did* work: `RedisThrottlerStorage`'s own discriminating test (two instances, one Redis) was written from an assumption about `@nestjs/throttler`'s storage contract and passed immediately — because it was written as executable from the start rather than as a sentence to be checked later.
 
 ---
 
