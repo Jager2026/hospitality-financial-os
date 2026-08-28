@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.14.0
+version: 2.15.0
 status: Active
 classification: Critical
 priority: Highest
@@ -256,6 +256,14 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The deferral reason is honest and time-bound and has not changed — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how its own restore gets rehearsed). The moment real money moves through it, that calculus inverts. Founder decision.
 
 - **`Role.name` stops doing two jobs.** It is currently both the stable key — `seed.ts` upserts on it, fixtures look up by it — and the text a human reads in a role picker. Today those coincide, because "Owner" and "Manager" happen to be reasonable labels in English. **They stop coinciding the day Lithuanian arrives:** a translated label cannot be the upsert key, and `ADR-040`'s dictionary translates strings in *code*, not values in *tables*. Renaming "Administrator" to something clearer would break the same way, for the same reason. The fix is a display label separate from the key, plus a decision on where its translation lives — small, but a schema change and therefore not something to do in passing. **Trigger: when Lithuanian arrives** (`ADR-040`'s own trigger — before the first pitch).
+
+- **`seedRbac` can grant a Permission but cannot revoke one.** Found by auditing the create-vs-update class the Founder asked about after ADR-044's seed fix, and it is the sharper instance of it.
+
+  The Role and Permission upserts are complete (both mirror `create` in `update`, and the `RolePermission` upsert has nothing to update — its two fields *are* the composite key). But the loop only ever **adds** `RolePermission` rows. **Remove a permission from a Role in `seed.ts`, deploy, and the row stays in the database. The permission remains granted while the code says it was revoked.**
+
+  Two properties make this worse than an ordinary omission. **It is directional in the dangerous way** — grants apply, revocations do not — on the matrix that decides who can do what. And **it cannot reproduce on a developer's machine**: `db:reset` rebuilds the matrix from nothing, so the seed always looks correct locally, and the divergence exists only where rows already exist. Which is production.
+
+  Not urgent today — no Role's permission list has ever narrowed. It becomes urgent the first time one does, and that is exactly the moment nobody will be watching for it. **Fix shape: reconcile rather than add — delete `RolePermission` rows for that Role whose permission is not in the intended list, in the same pass.** Small, but it changes a seed from additive to authoritative, which deserves saying out loud rather than slipping in.
 
 - **The ADR-005 reachability predicate is hand-rolled in 13 places while a shared utility exists.** `restaurant-reachability.util.ts` was extracted at the pattern's fourth occurrence, and its own comment records the exception: *"the three existing call sites are left as-is to avoid unrelated churn in already-shipped modules."* **There are now thirteen**, across `membership`, `payment`, `restaurant`, `settings`, `tip`, `transaction` and `wallet` — the decision was applied to new call sites, the un-migrated count grew afterwards, and the comment describing the exception went stale without anyone noticing.
 
