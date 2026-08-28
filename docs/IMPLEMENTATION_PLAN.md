@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.11.0
+version: 2.12.0
 status: Active
 classification: Critical
 priority: Highest
@@ -254,6 +254,14 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   What remains is the one thing no in-platform mechanism can address by construction: **every copy lives inside Railway.** PITR, all three snapshot tiers and the volume itself share a single point of failure that is not a disk — losing access to the account, or the account's own data being lost, takes all of them at once. For a system whose entire premise is an authoritative financial Ledger, one copy outside that blast radius is the reasonable end state, and it is now the *only* remaining reason to build this.
 
   **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The deferral reason is honest and time-bound and has not changed — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how its own restore gets rehearsed). The moment real money moves through it, that calculus inverts. Founder decision.
+
+- **`Role.name` stops doing two jobs.** It is currently both the stable key — `seed.ts` upserts on it, fixtures look up by it — and the text a human reads in a role picker. Today those coincide, because "Owner" and "Manager" happen to be reasonable labels in English. **They stop coinciding the day Lithuanian arrives:** a translated label cannot be the upsert key, and `ADR-040`'s dictionary translates strings in *code*, not values in *tables*. Renaming "Administrator" to something clearer would break the same way, for the same reason. The fix is a display label separate from the key, plus a decision on where its translation lives — small, but a schema change and therefore not something to do in passing. **Trigger: when Lithuanian arrives** (`ADR-040`'s own trigger — before the first pitch).
+
+- **Fixtures build their Role and Permissions from the seed, mechanically rather than by discipline.** `CLAUDE.md`'s Testing Philosophy now forbids the literal; this item is what would make the rule unbreakable rather than remembered — the same preference for a mechanism that produced the fixture-safety check and the absent warning colour.
+
+  **The shape is cheap because half of it exists:** `seed.ts` already exports its `ROLES` matrix, and exports it for exactly this reason — the first drift incident was closed by making `test/global-setup.ts` consume it instead of keeping a copy. The specs simply never followed. A helper reading `permissions` from that same exported constant, plus a check that fails on a literal `permissions: [` in any spec outside the helper, closes it. **Estimated cost: the helper plus roughly a dozen call sites — under an hour**, with no schema change and no production code touched.
+
+  Deferred rather than done only because it landed mid-security-fix, and mixing a test-infrastructure refactor into a diff that closes a live data leak would hide both. **No external trigger: this is simply next after the current sequence.**
 
 - **Session tokens move from `localStorage` to an httpOnly cookie.** The API returns `accessToken` and `refreshToken` in the JSON body (`API_Contract.md`, Login), so the browser has to store them somewhere, and the login screen (Sprint 14) uses `localStorage`. **It is readable by any script that runs on the page**; an httpOnly, `SameSite` cookie set by the backend would not be.
 
