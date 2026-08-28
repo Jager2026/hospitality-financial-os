@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.12.0
+version: 2.13.0
 status: Active
 classification: Critical
 priority: Highest
@@ -256,6 +256,12 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Deliberately deferred, with a specific trigger rather than "someday": revisit before the first real payment from the first real pilot restaurant.** The deferral reason is honest and time-bound and has not changed — today the production Ledger is empty (no payment has ever been captured in production), so an off-platform copy would be protecting nothing, while the work itself is real (where it lives, how it is encrypted, who holds access, how its own restore gets rehearsed). The moment real money moves through it, that calculus inverts. Founder decision.
 
 - **`Role.name` stops doing two jobs.** It is currently both the stable key — `seed.ts` upserts on it, fixtures look up by it — and the text a human reads in a role picker. Today those coincide, because "Owner" and "Manager" happen to be reasonable labels in English. **They stop coinciding the day Lithuanian arrives:** a translated label cannot be the upsert key, and `ADR-040`'s dictionary translates strings in *code*, not values in *tables*. Renaming "Administrator" to something clearer would break the same way, for the same reason. The fix is a display label separate from the key, plus a decision on where its translation lives — small, but a schema change and therefore not something to do in passing. **Trigger: when Lithuanian arrives** (`ADR-040`'s own trigger — before the first pitch).
+
+- **The ADR-005 reachability predicate is hand-rolled in 13 places while a shared utility exists.** `restaurant-reachability.util.ts` was extracted at the pattern's fourth occurrence, and its own comment records the exception: *"the three existing call sites are left as-is to avoid unrelated churn in already-shipped modules."* **There are now thirteen**, across `membership`, `payment`, `restaurant`, `settings`, `tip`, `transaction` and `wallet` — the decision was applied to new call sites, the un-migrated count grew afterwards, and the comment describing the exception went stale without anyone noticing.
+
+  **This is not a tidiness item.** `CLAUDE.md`'s Architecture Review paragraph exists because this exact predicate has already shipped wrong twice — `RestaurantService.findAllForUser` and `TipService.assertReachable`, both by comparing `restaurantId === null` without the `organizationId` check. Thirteen independently-maintained copies of a predicate the project has twice got wrong is a risk surface, not a style preference.
+
+  Audited alongside it and found **fully adopted**, so this is one instance rather than a habit: `splitPlatformFee` (both intended call sites), `restaurant-ledger-window.util` (both), `timezone-day.util` (both, via different exported functions), `seedRbac` (consumed by `global-setup.ts` as intended). **No trigger — this is scheduled work, not a watch item.**
 
 - **Fixtures build their Role and Permissions from the seed, mechanically rather than by discipline.** `CLAUDE.md`'s Testing Philosophy now forbids the literal; this item is what would make the rule unbreakable rather than remembered — the same preference for a mechanism that produced the fixture-safety check and the absent warning colour.
 

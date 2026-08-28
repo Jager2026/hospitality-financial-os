@@ -283,4 +283,57 @@ describe("MembershipService (real database)", () => {
     });
     expect(untouched.status).toBe("ACTIVE");
   });
+
+  it("GET /memberships returns exactly these fields — the recorded revisit condition, made checkable", async () => {
+    // API_Contract.md decides this route requires authentication only, on the grounds that a
+    // colleague list is operational information the people on it already have. That decision is
+    // about WHAT IS RETURNED, not about the route — and a route does not change when a column is
+    // added to the model behind it. findAllForUser returns the raw Prisma Membership, so any new
+    // column would be exposed the day it is added, silently, to everyone who works a shift.
+    //
+    // This assertion is the revisit condition itself rather than an intention to remember it:
+    // add a field to Membership and this fails, which forces the decision to be re-taken instead
+    // of quietly inherited.
+    const { organization, first } = await createOrgWithTwoRestaurants();
+    const user = await createUser();
+    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
+    const membership = await prisma.membership.create({
+      data: {
+        userId: user.id,
+        organizationId: organization.id,
+        restaurantId: first.id,
+        roleId: waiterRole.id,
+      },
+    });
+
+    const rows = await service.findAllForUser({
+      id: user.id,
+      email: user.email,
+      locale: "en",
+      memberships: [
+        {
+          id: membership.id,
+          organizationId: organization.id,
+          restaurantId: first.id,
+          role: { id: membership.roleId, name: "Waiter", permissions: [] },
+        },
+      ],
+    });
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(Object.keys(rows[0]).sort()).toEqual(
+      [
+        "createdAt",
+        "deletedAt",
+        "hireDate",
+        "id",
+        "organizationId",
+        "restaurantId",
+        "roleId",
+        "status",
+        "updatedAt",
+        "userId",
+      ].sort(),
+    );
+  });
 });
