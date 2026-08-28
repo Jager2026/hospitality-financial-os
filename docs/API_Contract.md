@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.14.0
+version: 2.15.0
 status: Active
 classification: Internal
 owner: Founder
@@ -142,7 +142,11 @@ POST /memberships — body: `email`, `restaurantId` (nullable — omit for an or
 POST /memberships/invitations/accept — public, no `Authorization` header (the invitee may not have an account yet). Body: `email`, `token`, `password` and `displayName` (ADR-033, Sprint 13) — both required only if no `User` currently exists for `email` (ignored otherwise, since an existing User already has one). Looks up pending, non-expired `MembershipInvitation` rows by `email` and hash-verifies `token` against each candidate's `token_hash`, the same shape as a login password check (ADR-020) — never a lookup keyed on the token itself. On success: creates `User` (only if none exists for `email`) and `Membership` together, atomically, and sets `accepted_at`. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) whenever a new `User` is actually being created here.
 
 ## Membership List
-GET /memberships
+GET /memberships — **requires authentication only, and that is a decision rather than an oversight** (Founder, ADR-043's review). Returns every Membership reachable by the caller: colleagues at the restaurants they work at.
+
+Recorded explicitly because the absence of a permission decorator was, on two other routes, exactly an omission — so silence here would be indistinguishable from the same mistake. The reasoning is different: a Transaction holds the restaurant's revenue, fee and tax, which a waiter has no relationship to; **a colleague list is operational information the people on it already have.** They work the same shifts. Scoping stays reachability-based (ADR-005): a Membership at one restaurant does not reveal another restaurant's staff.
+
+**Revisit if this response ever grows a field that is not already common knowledge on the floor** — anything compensation-adjacent, a home address, a contract date. The decision is about *what is returned*, not about the route.
 
 ## Membership Details
 GET /memberships/{id}

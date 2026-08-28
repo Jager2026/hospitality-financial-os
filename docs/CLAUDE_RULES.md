@@ -1,5 +1,13 @@
 ---
 title: CLAUDE_RULES
+version: 2.5.0
+status: Active
+classification: Critical
+priority: Highest
+supersedes: CLAUDE_RULES v1.0 and Claude_CTO_Operating_Manual v1 (retired) — see ARCHITECTURE_DECISIONS.md, ADR-011
+---
+---
+title: CLAUDE_RULES
 version: 2.4.2
 status: Active
 classification: Critical
@@ -180,6 +188,8 @@ Never log: Passwords. Secrets. Tokens. Card Numbers. Personal financial informat
 If it is important, test it: Financial Logic. Authorization. Authentication. Payments. Wallet. Transactions. Analytics. Critical UX. Regression.
 
 Never merge critical financial code without tests. This is not aspirational — `IMPLEMENTATION_PLAN.md` now makes Tests an explicit, mandatory task on every sprint that touches money, not something deferred to a later sprint.
+
+A fixture that has drifted from the real seed data proves things about a system that does not exist. This is a pattern, not an incident — it has now happened twice, and the second time it hid a live data leak for a whole sprint. First: `test/global-setup.ts` maintained its own hand-copied Permission/Role matrix, which had gone stale at 4 of 10 Permissions, 3 of 4 Roles, and granted Owner 2 of its 10 real Permissions — recorded in `seed.ts`'s own comment, and fixed by exporting the seed's matrix so there was one source instead of two. Second: three hand-built `AuthenticatedUser` fixtures in the payment and transaction specs described users the seed cannot produce — an `"Owner"` holding `permissions: []` when the real Owner holds all ten, and one that fetched the Manager Role from the database while labelling it `"Owner"` with a single permission. Five tests built on those fixtures asserted that holding a Membership was enough to read a restaurant's financial list, each believing it described reachability; that assertion was the leak ADR-043 closed, written down as the specification. The rule: **a fixture's Role and Permissions come from the seed, never from a literal typed in the spec.** A literal cannot be wrong at the moment it is written and cannot stay right afterwards.
 
 A test only counts if it would fail against a plausible wrong implementation. If a naive or incorrect version of the code would still pass the test, the test proves nothing — it is decoration, not protection. Check this deliberately anywhere correct behavior depends on grouping, splitting, or aggregating by some key (currency, restaurant, membership, allocation strategy, time period): construct a case where the naive ungrouped version and the correct grouped version would disagree, not only a case where both happen to agree by coincidence. (A real example: an early test claiming to prove per-currency ledger balancing used numbers where a naive implementation that summed every currency together would have failed the test too, for the wrong reason — passing, but proving nothing about the grouping logic it claimed to protect.)
 
