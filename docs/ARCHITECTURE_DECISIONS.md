@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.33.0
+version: 1.34.0
 status: Active — forty-four ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -567,6 +567,14 @@ Neither was careless. Both were the kind of statement that reads as obviously tr
 **The rule this fixes, and it is cheap:** before a claim about third-party behaviour is written down, acted on, or sent to anyone outside this project, run the smallest thing that would distinguish it from its opposite. A four-line script, one real request, one deliberately-wrong assertion. Both of these would have cost a minute; the first cost eleven days of a misdirected support thread.
 
 Worth noting where this *did* work: `RedisThrottlerStorage`'s own discriminating test (two instances, one Redis) was written from an assumption about `@nestjs/throttler`'s storage contract and passed immediately — because it was written as executable from the start rather than as a sentence to be checked later.
+
+**A sixth entry, a method rather than a finding: to enumerate the places a dangerous input is accepted, grep for the input — never reason about the flows.** You only know the flows you happen to remember.
+
+Established by measurement, not assertion. Closing ADR-044, the rule was stated as two-sided — *the list omits platform-only Roles, the invite rejects them* — because those are the two flows anyone thinks of when they think "granting a Role". **Grepping for `roleId` found four.** The third was `PATCH /memberships/{id}`, and it is **more dangerous than the one the whole exercise was about**: promoting an existing colleague to `Administrator` needs no invitation, no acceptance, and no second party — one request. **The path nobody was thinking about was shorter than the path being defended.**
+
+That asymmetry is the reason the method matters. Reasoning about flows enumerates the *designed* ones, and a designed flow is by construction the one someone already considered. The field is the thing an attacker actually holds; every place it is accepted is a door whether or not anyone drew it.
+
+Applied to two more inputs immediately afterwards, at the Founder's instruction, and **both came back clean — which is itself the useful result**: `waiterMembershipId` (ADR-033; it decides whose Wallet is credited) is accepted in exactly one place and validated there; `restaurantId` is accepted in six DTOs and every one of the six verifies reach before use. `roleId` was the outlier precisely *because* nothing ever returned one — no endpoint existed, so no habit of validating it formed around it.
 
 **A fifth entry, and it is a class rather than an incident: a documented input that does not exist is worse than a documented input that is named wrong.**
 
