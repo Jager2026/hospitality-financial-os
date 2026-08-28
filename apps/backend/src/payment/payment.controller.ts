@@ -57,7 +57,10 @@ export class PaymentController {
     return this.paymentService.createPaymentIntent(dto, idempotencyKey, user);
   }
 
+  // ADR-043, same reasoning as the Transactions list: a Payment is the restaurant's takings.
   @Get()
+  @UseGuards(PermissionsGuard)
+  @RequirePermission("reports.view")
   findAll(
     @Query(new ZodValidationPipe(paymentHistoryQuerySchema)) query: PaymentHistoryQueryDto,
     @CurrentUser() user: AuthenticatedUser,

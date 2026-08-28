@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.31.0
-status: Active — forty-two ADRs, all Accepted
+version: 1.32.0
+status: Active — forty-three ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -921,6 +921,36 @@ Two details that make the alerting honest rather than decorative. The `ERROR` lo
 **A correction recorded because the test caught it, not review.** While writing the e2e suite this session, it was reported — by me — that a controller-level `@Throttle` meant a controller-level budget, so `register`/`login`/`refresh`/`logout`/`me` shared one 10/min allowance. **That is wrong.** `ThrottlerGuard` builds its key as `sha256(ClassName-handlerName-throttlerName-tracker)`, so the *handler* is part of the key and every route gets its own bucket under a single decorator. The claim looked entirely reasonable and was stated confidently; the assertion written from it failed on the first run, against the real deployed process. The test now asserts the true behaviour, and is kept for a reason beyond the correction: if a custom `generateKey` is ever added and drops the handler, every auth route would silently collapse into one shared bucket and a single brute-force attempt would begin locking legitimate users out of registration.
 
 **Consequences:** `RedisThrottlerStorage` plus seven tests, including the discriminating one — two storage instances sharing one Redis produce a cumulative count, which is precisely what the in-memory implementation cannot do. Falsified three ways, each restored: per-instance key isolation (the old behaviour) gives `[1, 1, 2]` where `[1, 2, 3]` is required; alerting per request instead of per outage gives five calls where one is required; sharing the `auth:` namespace breaks the revocation-survival assertion. Rate limiting now depends on Redis being reachable to *apply*, never to *serve* — see Decision 2. `IMPLEMENTATION_PLAN.md`'s Sprint 2 Definition of Done ("a brute-force attempt is throttled") is now proved against the real deployed process rather than only a module-scoped integration test, in `apps/e2e/tests/rate-limit.spec.ts`.
+
+---
+
+## ADR-043 — A List Query Scopes by the Membership That Carries the Permission, Not by Any Membership at All
+**Status:** Accepted (Founder decision). **Closes a confirmed data leak.**
+
+**Context — the shape, which is what makes this worth an ADR rather than a bug fix.** Two checks existed, each correct on its own terms:
+
+- `PermissionsGuard` asked *"does this caller hold the required permission on **any** Membership?"*
+- a list query built its `WHERE` from **every** Membership the caller holds.
+
+**Nothing asked whether those were the same Membership.** So a permission held in one Organization silently widened a list built from a Membership in another. Neither check is wrong in isolation; the defect lives in the gap between them, which is precisely why review did not catch it — you have to hold both files in your head at once and notice that the subject changed.
+
+**Proved by execution, not argued.** `permission-scope.e2e.spec.ts` builds a person the product explicitly supports (ADR-006): **Owner of Organization A, and a Waiter at a Restaurant in Organization B.** Seven routes were probed. Five behaved — Dashboard, Analytics, payment creation and staff invitation all denied, and the positive control passed, so the denials were real scoping rather than blanket refusal. Two leaked, with data rather than a status code: the CSV export returned another restaurant's transaction row, and the list returned it with `grossAmount` in it. **A zero-permission Waiter could export the full financial history of the restaurant they work at, provided they held any permission-bearing Membership anywhere.**
+
+**A third instance was found by auditing for the shape, not by a test reaching it: `GET /payments`.** Same construction, and no permission decorator at all. Fixed in the same change, with its own assertion added, because shipping a half-closed leak of a proven class would be indefensible.
+
+**Decision 1 — `permittedScope(user, permission)`.** One helper beside the existing per-resource checks, returning the organization and restaurant ids drawn **only from Memberships that carry the required permission**. Callers pass the same permission string the route's `@RequirePermission` uses, so the filter and the decorator cannot drift apart — the drift is what the leak was.
+
+**Decision 2 — `GET /transactions` and `GET /payments` now require `reports.view`.** Neither had a decorator. **That absence was an omission, not a design.** Every neighbouring route answering the same question carries one: the Dashboard, Analytics, and the CSV export *of this same data*. **Different formats of one question must not have different thresholds.**
+
+The Founder's reasoning, recorded because it is a product argument rather than an access-hierarchy one: a Transaction contains the restaurant's revenue, the platform fee and the tax — **the economics of the business, which a waiter has no relationship to. It is not their data.** Their own money — tips — lives in the Wallet and `GET /tips/me`, reached by ownership rather than by a claim on someone else's finances. The test that settles it: *if an owner learned that every waiter could export the venue's full revenue, they would be unhappy* — so it is not allowed.
+
+**Decision 3 — the guard's own comment was rewritten, because it had become false in a dangerous direction.** It claimed "no current route does this yet (first real caller: Sprint 3+)" — we are in Sprint 14 and many routes use it — and marked the resource-scoped narrowing as an unbuilt extension point, when in fact that narrowing exists at the service layer. **An outdated comment about a security mechanism is worse than none:** it tells the next reader the check is missing when it is merely elsewhere, inviting them to add it in the guard and remove it from the services. It now says plainly what the guard is — a coarse pre-filter that cannot scope rows — and that any list route must use `permittedScope`.
+
+**The finding inside the fix: five existing tests broke, and they broke because they had encoded the leak as the specification.** Not one of them missed it by omission; each *asserted* that holding a Membership was enough to read a restaurant's financial list, believing it was describing reachability. Worse, three fixtures modelled users who cannot exist: an `"Owner"` with `permissions: []` (the real seeded Owner holds all ten), and a fixture that fetched the Manager role from the database while labelling it `"Owner"` with a single permission. **A hand-built `AuthenticatedUser` that has drifted from `seed.ts` proves things about a system that does not exist** — and this is the second recorded instance of exactly that drift, the first being the stale `global-setup.ts` matrix already noted in `seed.ts`'s own comment. The fixtures were corrected to match the real seed rather than relaxed to keep the suite green, and a discriminating unit test was added: the same reachable user sees the row with `reports.view` and not without it. Without that test, reverting `permittedScope` would leave every corrected fixture passing.
+
+**Consequences:** `permittedScope` in `restaurant-reachability.util.ts`; `TransactionService.buildWhere` and `PaymentService.findAllForUser` scope through it; `TRANSACTION_PERMISSION`/`PAYMENT_READ_PERMISSION` constants so route and query share one string. `permission-scope.e2e.spec.ts` — eight assertions across the real HTTP surface, five of which document correct behaviour and are worth keeping as regression cover for routes that were never broken. Falsified: reverting the permission filter to `user.memberships` fails the new unit test with *"expected [Array(1)] to not include …"*. No schema change, no migration.
+
+**Not fixed here, raised instead:** `GET /memberships` builds a list the same way and has no permission decorator. It returns colleagues rather than money, so the argument above does not obviously apply — a waiter arguably should see who else works there. Recorded rather than changed, because widening or narrowing it is a product decision, not a defect.
 
 ---
 

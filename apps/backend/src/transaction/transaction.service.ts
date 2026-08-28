@@ -2,11 +2,16 @@ import { Injectable } from "@nestjs/common";
 import type { LedgerAccount, Transaction } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
+import { permittedScope } from "../common/restaurant-reachability.util";
 import { PrismaService } from "../prisma/prisma.service";
 import type {
   TransactionExportQueryDto,
   TransactionListQueryDto,
 } from "./dto/transaction-list-query.schema";
+
+/** The permission both the list and the CSV export require (ADR-043). One constant so the route
+ * decorators and the query filter can never drift apart — the drift is what the leak was. */
+export const TRANSACTION_PERMISSION = "reports.view";
 
 export interface TransactionBreakdown {
   netRestaurantRevenue: string;
@@ -203,26 +208,30 @@ export class TransactionService {
     return [header, ...lines].join("\n");
   }
 
+  /**
+   * ADR-043. Scoped by the Memberships that actually carry , not by every
+   * Membership the caller holds. The earlier version filtered by reachability alone, which let a
+   * permission held in one Organization widen a list built from a Membership in another — proved
+   * by , which exported another restaurant's rows as a Waiter.
+   */
+  /**
+   * ADR-043. Scoped by the Memberships that actually carry `reports.view`, never by every
+   * Membership the caller holds.
+   *
+   * The earlier version filtered on reachability alone, which let a permission held in one
+   * Organization widen a list built from a Membership in another. Not an argument — measured:
+   * `permission-scope.e2e.spec.ts` exported another restaurant's transaction rows, amounts
+   * included, as a zero-permission Waiter.
+   */
   private buildWhere(
     user: AuthenticatedUser,
     filters: TransactionListQueryDto | TransactionExportQueryDto,
   ) {
-    const orgWideOrgIds = [
-      ...new Set(
-        user.memberships.filter((m) => m.restaurantId === null).map((m) => m.organizationId),
-      ),
-    ];
-    const restaurantIds = [
-      ...new Set(
-        user.memberships
-          .filter((m) => m.restaurantId !== null)
-          .map((m) => m.restaurantId as string),
-      ),
-    ];
+    const { organizationIds, restaurantIds } = permittedScope(user, TRANSACTION_PERMISSION);
 
     const reachableWhere = {
       OR: [
-        { restaurant: { organizationId: { in: orgWideOrgIds } } },
+        { restaurant: { organizationId: { in: organizationIds } } },
         { restaurantId: { in: restaurantIds } },
       ],
     };

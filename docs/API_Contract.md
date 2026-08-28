@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.13.0
+version: 2.14.0
 status: Active
 classification: Internal
 owner: Founder
@@ -170,7 +170,7 @@ GET /payments/{id}
 GET /payments/{id}/status
 
 ## Payment History
-GET /payments — pagination, sorting, filtering.
+GET /payments — pagination, sorting, filtering. **Requires `reports.view`** (ADR-043). It previously required no permission and scoped by reachability alone, so a Waiter saw the restaurant's full payment history — amounts and tips. A Payment is the restaurant's takings, not the waiter's: their own money is the Wallet and `GET /tips/me`, reached by ownership rather than by a claim on someone else's finances. Found by auditing for the shape of the transactions leak rather than by a test reaching it.
 
 ---
 
@@ -231,7 +231,7 @@ POST /wallets/{id}/withdrawals — future (IMPLEMENTATION_PLAN.md Sprint 7: "Fut
 # TRANSACTIONS
 
 ## Transaction List
-GET /transactions — reachability-scoped the same way `GET /payments` already is (ADR-005): every Restaurant the caller's Memberships reach. Filters: `restaurantId`, `status` (`COMPLETED`/`PARTIALLY_REFUNDED`/`REFUNDED`/`DISPUTED`), `membership` (a Waiter's own Transactions, via `Payment.waiter_membership_id` — `GET /transactions?membership=123`, already named in Filtering below). Paginated (`page`/`limit`, same shape as every other list endpoint). Sort fixed at `created_at desc` for MVP, matching Payment History's own precedent.
+GET /transactions — **requires `reports.view`** (ADR-043; it previously required no permission at all, which was an omission — the Dashboard, Analytics and this data’s own CSV export all require one, and different formats of one question must not have different thresholds). Scoped to the Restaurants reached by a Membership that CARRIES that permission, not by any Membership at all. Reachability-scoped the same way `GET /payments` already is (ADR-005): every Restaurant the caller's Memberships reach. Filters: `restaurantId`, `status` (`COMPLETED`/`PARTIALLY_REFUNDED`/`REFUNDED`/`DISPUTED`), `membership` (a Waiter's own Transactions, via `Payment.waiter_membership_id` — `GET /transactions?membership=123`, already named in Filtering below). Paginated (`page`/`limit`, same shape as every other list endpoint). Sort fixed at `created_at desc` for MVP, matching Payment History's own precedent.
 
 ## Transaction Details
 GET /transactions/{id} — includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
