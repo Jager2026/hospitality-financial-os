@@ -8,8 +8,29 @@ import type { PrismaService } from "../prisma/prisma.service";
  * org-wide Membership reaches every Restaurant in its own Organization; a restaurant-scoped one
  * reaches only the exact Restaurant it names — never "any org-wide Membership anywhere"
  * (CLAUDE_RULES.md's Architecture Review paragraph on this exact bug shape). Extracted here on
- * this pattern's fourth occurrence (Dashboard, Sprint 9) rather than copy-pasted again; the three
- * existing call sites are left as-is to avoid unrelated churn in already-shipped modules. */
+ * this pattern's fourth occurrence (Dashboard, Sprint 9) rather than copy-pasted again.
+ *
+ * ── CORRECTION (Sprint 14). The sentence that used to end this paragraph read: "the three
+ * existing call sites are left as-is to avoid unrelated churn in already-shipped modules."
+ * **There are now thirteen.**
+ *
+ * That is a different kind of staleness from an ordinary out-of-date comment, and worth naming:
+ * the exception to a decision was recorded accurately, and then **the exception silently grew**.
+ * Nobody widened it deliberately; each new module simply wrote the predicate inline, and the
+ * comment went on describing a boundary that had stopped being true. It still *read* as precise,
+ * which is what made it invisible — the same failure mode as the "Sprint 3+" extension point in
+ * `permissions.guard.ts`, which outlived its sprint by eleven while looking like a plan.
+ *
+ * The count matters here more than it usually would. **This exact predicate has already shipped
+ * wrong twice** — `RestaurantService.findAllForUser` and `TipService.assertReachable`, both by
+ * treating `restaurantId === null` as proof of reach without comparing `organizationId`. The
+ * Architecture Review paragraph in `CLAUDE.md` exists because of those two. Thirteen
+ * independently-maintained copies of a predicate the project has twice got wrong is a risk
+ * surface, not an aesthetic complaint.
+ *
+ * Consolidation is scheduled work, not a watch item (`IMPLEMENTATION_PLAN.md`, Deferred). This
+ * comment is corrected ahead of it because an inaccurate comment about an access rule is worse
+ * than none: it tells the next reader the duplication is bounded and old, when it is neither. */
 export function isRestaurantReachable(
   user: AuthenticatedUser,
   restaurant: { id: string; organizationId: string },
@@ -78,8 +99,9 @@ export function hasPermissionAtRestaurant(
 }
 
 /** The combined "reachable + carries the given permission" check, thrown as a wrapper this time —
- * unlike the three earlier call sites Sprint 9 deliberately left untouched (each had its own
- * slightly different not-found message/code), Dashboard and Analytics (ADR-026/027) share
+ * unlike the call sites Sprint 9 left untouched (each had its own slightly different not-found
+ * message/code, and there turned out to be thirteen rather than three; see the correction at the
+ * top of this file), Dashboard and Analytics (ADR-026/027) share
  * byte-identical semantics here, same two exception codes. Sharing the throwing wrapper itself,
  * not just the boolean predicates, avoids a second copy of logic that would otherwise need to
  * change in both places every time either module's access rule changes.
