@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.15.0
+version: 2.16.0
 status: Active
 classification: Internal
 owner: Founder
@@ -131,12 +131,29 @@ POST /restaurants/{id}/onboarding-link — generates a fresh Stripe Account Link
 
 ---
 
+# ROLES
+
+New resource (ADR-044, Sprint 14).
+
+## Assignable Roles
+GET /roles — **requires `membership.invite`.** Every Role a Restaurant may actually grant, as `id`, `name`, `description`. The data source for the Invite Employee screen (`UX_MAP.md`).
+
+Built because `POST /memberships` has required a `roleId` since Sprint 4 and **nothing returned one** — a required input with nothing addressable behind it, the same shape ADR-039 named for a staff member’s Wallet.
+
+**Excludes `platformOnly` Roles** — today that is `Administrator`, which holds every Permission and is ours to grant, never a Restaurant’s. **That exclusion is enforced on every write path, not only here:** `POST /memberships`, `PATCH /memberships/{id}` and `POST /memberships/invitations/accept` all refuse such a Role. Filtering only the list would leave the dropdown looking correct while a direct API call still granted it.
+
+Refusals answer `Role not found`, not `forbidden`: to a Restaurant the Role does not exist, and confirming otherwise would invite someone to look for a way to it.
+
+Gated on `membership.invite` rather than a permission of its own — the list exists to populate the invite screen, so the people who may invite are exactly the people who need it. Reference data, identical for every caller; no reachability scoping, because a Role is not owned by an Organization.
+
+---
+
 # MEMBERSHIPS
 
 Renamed from Employees (ADR-005). Represents one person's role at one restaurant, or one org-wide role.
 
 ## Invite Membership
-POST /memberships — body: `email`, `restaurantId` (nullable — omit for an organization-wide role), `roleId`. Creates a `MembershipInvitation` (ADR-020), never a `Membership` directly — true even when `email` already belongs to an existing User: every invitation is explicitly accepted, uniformly, rather than a Membership appearing because someone else typed an email into a form. Response includes the raw invitation token exactly once — no email-delivery provider exists yet (undocumented, so not something this endpoint invents); the caller is responsible for relaying it until one is introduced with its own ADR.
+POST /memberships — body: `email`, `restaurantId` (nullable — omit for an organization-wide role), `roleId` (must be an assignable Role: a `platformOnly` one is refused with `Role not found`, ADR-044; see `GET /roles` for the list). Creates a `MembershipInvitation` (ADR-020), never a `Membership` directly — true even when `email` already belongs to an existing User: every invitation is explicitly accepted, uniformly, rather than a Membership appearing because someone else typed an email into a form. Response includes the raw invitation token exactly once — no email-delivery provider exists yet (undocumented, so not something this endpoint invents); the caller is responsible for relaying it until one is introduced with its own ADR.
 
 ## Accept Invitation
 POST /memberships/invitations/accept — public, no `Authorization` header (the invitee may not have an account yet). Body: `email`, `token`, `password` and `displayName` (ADR-033, Sprint 13) — both required only if no `User` currently exists for `email` (ignored otherwise, since an existing User already has one). Looks up pending, non-expired `MembershipInvitation` rows by `email` and hash-verifies `token` against each candidate's `token_hash`, the same shape as a login password check (ADR-020) — never a lookup keyed on the token itself. On success: creates `User` (only if none exists for `email`) and `Membership` together, atomically, and sets `accepted_at`. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) whenever a new `User` is actually being created here.

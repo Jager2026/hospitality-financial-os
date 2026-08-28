@@ -92,7 +92,15 @@ export class MembershipService {
 
     if (dto.roleId) {
       const role = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
-      if (!role) {
+      // ADR-044. A THIRD door, found while closing the other two: this route also takes a roleId
+      // and validated only that it existed. Promoting an existing colleague to a platform-only
+      // Role is in fact *easier* than inviting one — no invitation, no acceptance, one PATCH.
+      //
+      // Worth recording as the shape rather than the bug: the rule was stated as two-sided ("the
+      // list omits them, the invite rejects them"), and two-sided was already wrong when it was
+      // written. Every write path that accepts a roleId needs it, and the way to know how many
+      // there are is to grep for the field rather than to reason about the flows.
+      if (!role || role.platformOnly) {
         throw new AppException("VALIDATION_ERROR", "Role not found.", 400);
       }
     }

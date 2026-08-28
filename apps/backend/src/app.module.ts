@@ -10,6 +10,7 @@ import { RedisService } from "./redis/redis.service";
 import { validateEnv } from "./config/env.validation";
 import { PrismaModule } from "./prisma/prisma.module";
 import { RedisModule } from "./redis/redis.module";
+import { RoleModule } from "./role/role.module";
 import { HealthModule } from "./health/health.module";
 import { LedgerModule } from "./ledger/ledger.module";
 import { OutboxModule } from "./outbox/outbox.module";
@@ -69,6 +70,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     LedgerModule,
     OutboxModule,
     AuthModule,
+    RoleModule,
     ProfileModule,
     StripeModule,
     OrganizationModule,

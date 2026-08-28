@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.11.0
+version: 2.12.0
 status: Active
 classification: Internal
 owner: Founder
@@ -121,7 +121,13 @@ MembershipInvitation
 # ENTITY
 Role
 ############################################################
-Unchanged from v1.0. Owner · Manager · Waiter · Administrator · future Accountant · future Auditor.
+Owner · Manager · Waiter · Administrator · future Accountant · future Auditor.
+
+**`platform_only` (boolean, default false) — added Sprint 14, ADR-044.** True means the Role is ours to grant and may never be offered to a Restaurant. `Administrator` is seeded true: it holds every Permission and its description has always said "platform-level", but until this column existed nothing enforced that — `POST /memberships` validated only that the `role_id` *existed*, so any Owner could grant it.
+
+**A constraint on the data, not on the interface.** Filtering it out of a dropdown while the endpoint still accepted it would be the worse outcome: the screen would look correct and a direct API call would still work. Every write path that takes a `role_id` refuses a `platform_only` Role — invite, update, and invitation-accept — and `GET /roles` omits them from the list.
+
+**`name` still does two jobs**, and that is recorded rather than fixed: it is the stable upsert key (`seed.ts` upserts on it) *and* the text a human reads in a Role picker. They coincide only while the product is English. `IMPLEMENTATION_PLAN.md` carries the item, triggered by Lithuanian arriving (ADR-040).
 
 ---
 

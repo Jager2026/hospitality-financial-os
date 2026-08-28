@@ -41,6 +41,18 @@ export class MembershipInvitationService {
     if (!role) {
       throw new AppException("VALIDATION_ERROR", "Role not found.", 400);
     }
+    // ADR-044, the enforcing half of the rule. `GET /roles` already omits platform-only Roles, and
+    // stopping there would be worse than doing nothing visible at all: the dropdown would look
+    // correct while a direct API call still granted "Administrator" — every Permission — to
+    // anyone an Owner chose. A filtered interface over an endpoint that accepts everything is
+    // exactly the failure ADR-031 records, where the response looks like success.
+    //
+    // Answered as "not found" rather than "forbidden", deliberately: to a Restaurant this Role
+    // does not exist, and saying "you may not grant that one" would confirm it does and invite
+    // someone to go looking for a way.
+    if (role.platformOnly) {
+      throw new AppException("VALIDATION_ERROR", "Role not found.", 400);
+    }
 
     if (dto.restaurantId) {
       const restaurant = await this.prisma.restaurant.findFirst({
@@ -76,6 +88,15 @@ export class MembershipInvitationService {
    * existing POST /auth/login is what proves the resulting account actually works. */
   async accept(dto: AcceptInvitationDto): Promise<Membership> {
     const invitation = await this.findMatchingInvitation(dto.email, dto.token);
+
+    // ADR-044, defence in depth on a permission grant. invite() already rejects a platform-only
+    // Role, so an invitation carrying one can only exist if it predates that check. None do — but
+    // the alternative to this line is reasoning about the vintage of a row every time someone
+    // reads this method, and the grant it authorises is every Permission in the system.
+    const invitedRole = await this.prisma.role.findUnique({ where: { id: invitation.roleId } });
+    if (invitedRole?.platformOnly) {
+      throw new AppException("VALIDATION_ERROR", "Invitation is no longer valid.", 400);
+    }
 
     let user = await this.prisma.user.findUnique({ where: { email: dto.email } });
 

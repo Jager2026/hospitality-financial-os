@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.4.0
+version: 2.5.0
 status: Active
 classification: Internal
 owner: Founder
@@ -220,6 +220,12 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 **Screen Sections:** Employee List · Invite Employee · Deactivate Employee · Employee Details · Permissions · Search · Filters
 
 **What changed (ADR-005):** Invite Employee gains one new choice — **This Location Only** or **All Locations** — whether the invitation grants access to just this Restaurant or every Restaurant in the Organization. Single-location businesses never see this choice; it only appears once a second location exists, keeping the common case exactly as simple as before.
+
+**What changed (ADR-044, Sprint 14) — the Role picker now has a data source, and it was unbuildable before.** `POST /memberships` has required a `roleId` since Sprint 4 and nothing returned one; `GET /roles` is that list.
+
+**Each option shows its name and its description, and the description is not optional decoration.** "Manager" in a dropdown, with nothing saying how it differs from "Administrator", asks an owner to guess at a permission grant — on the one screen where guessing wrong hands someone else control of the business. The descriptions are real seeded data (`prisma/seed.ts`), not text invented for the screen.
+
+**The list is shorter than the set of Roles that exist, and the screen must not explain why.** `Administrator` is ours — platform-level, every Permission — and a Restaurant may never grant it. It is absent, silently: naming a Role the owner cannot choose would only prompt the question of how to get it. Refused elsewhere as *"Role not found"* for the same reason (ADR-044).
 
 **Employee Details:** Profile · Position · Wallet · Tip History · Performance · Activity · Permissions · Status
 
