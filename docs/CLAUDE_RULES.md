@@ -1,14 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.5.0
-status: Active
-classification: Critical
-priority: Highest
-supersedes: CLAUDE_RULES v1.0 and Claude_CTO_Operating_Manual v1 (retired) — see ARCHITECTURE_DECISIONS.md, ADR-011
----
----
-title: CLAUDE_RULES
-version: 2.4.2
+version: 2.7.0
 status: Active
 classification: Critical
 priority: Highest
@@ -204,6 +196,10 @@ Never refactor for ego. Refactor because future engineers deserve better.
 ---
 
 # Workspace Hygiene
+
+The same applies to processes, not only files. A server started by hand to verify something is shared state for as long as it lives: it holds a port, and — if it points at the development database — it keeps running its background jobs against the same rows the test suite is about to assert on. Stop what you started before running the suite, and confirm the port is actually free rather than assuming the kill worked.
+
+The development database is shared state of the same kind, across runs rather than across processes. It accumulates: every suite run leaves its rows behind, and a service that reads a batch of them will eventually read hundreds. **A suite failure that appears only after the suite has been run repeatedly is a stale-data suspect before it is anything else** — reset the database and re-measure before believing any other explanation. Both rules were learned in one incident (ADR-045): a failure was confidently attributed to a leftover process, the suite passed once after that process was stopped, and the attribution looked confirmed — until the same failure returned with the port free, alongside a second file whose own error read `Number of calls: 460`. Four hundred and sixty payments accumulated over about six runs. Which of the two conditions caused the original failure was never isolated, and the lesson is not the diagnosis but its shape: **a plausible cause plus one passing run is not evidence, and it is most convincing exactly when it is about your own environment.**
 
 Every file in the repository should have an obvious reason to exist — a real name, in a real location, doing a real job. Never leave a stray, unnamed, or unexplained file behind — a debug scratch file, a leftover from testing a command, an accidental redirect. Before ending a session, check for anything you created that isn't part of the actual deliverable, and remove it or explain it. A repository root a new engineer can't parse at a glance is itself a form of technical debt.
 
