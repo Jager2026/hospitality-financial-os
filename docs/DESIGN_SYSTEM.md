@@ -1,6 +1,6 @@
 ---
 title: DESIGN_SYSTEM
-version: 1.1.0
+version: 1.2.0
 status: Active — Part 1 (structure, hierarchy, state) and Part 2 (surfaces, palette, type, spacing, density) both written
 classification: Internal
 owner: Founder
@@ -125,6 +125,20 @@ In all four references, *the numbers themselves are neutral*. Accent marks actio
 - **Forbidden:** accenting a figure because it is important, tinting the hero number to make it feel bigger, or colour-coding a set of figures so the palette re-ranks what the layout has already ranked.
 
 The practical test: **if the accent were removed entirely, the hierarchy of the screen must survive unchanged.** If it collapses, colour was carrying weight that size and space should have been carrying.
+
+## Three rules that are one decision, and must be re-opened together
+
+These were written weeks apart, for unrelated problems, and they turned out to be the same decision seen from three sides. Recording the link explicitly, because **each is individually reversible-looking and jointly load-bearing** — changing one silently invalidates the other two.
+
+1. **Accent never carries importance.** (This section.) Ranking is done by size and space.
+2. **The accent is one swappable token, and a restaurant may own its value.** (*The accent is a token from the first line of CSS*, and `MASTERPLAN.md`'s branding candidate.)
+3. **The wordmark is never the accent.** (*Product Identity On Screen*.)
+
+The chain: (2) is only safe *because* of (1) — if accent ranked anything, letting a restaurant change it would let a restaurant change what a screen means. And (3) falls out of (1) rather than being a separate aesthetic preference: accent marks actions and status, and a wordmark is neither.
+
+That last derivation produced something nobody set out to design: **the boundary between what a restaurant owns and what we own.** A restaurant brands the surface it paid for; it cannot recolour our name, because our name was never eligible for the accent in the first place. That answer was not available when any of the three rules were written — it emerged from them.
+
+**So the trigger is joint, not individual: if accent ever starts ranking, all three are re-opened on the same day.** Not "revisit the accent rule" — the customisation feature stops being safe, and the identity boundary stops being derived from anything. A future engineer changing (1) needs to know they are changing three things.
 
 ## The system is a monochrome base plus one accent token (Founder decision)
 
