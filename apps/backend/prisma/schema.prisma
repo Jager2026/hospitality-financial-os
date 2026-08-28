@@ -327,6 +327,13 @@ model Role {
   id          String   @id @default(uuid()) @db.Uuid
   name        String   @unique
   description String?
+  /// ADR-044: this Role may only ever be granted by us, never offered to a Restaurant.
+  /// "Administrator" is seeded as platform-level and holds every Permission; before this column
+  /// existed, POST /memberships validated only that a roleId EXISTED, so any Owner could grant it.
+  /// A constraint on the DATA rather than on the UI: filtering a dropdown while the endpoint still
+  /// accepts anything is the exact shape ADR-031 records as "a documented input that is silently
+  /// ignored" — the interface looks correct and the API is not.
+  platformOnly Boolean @default(false) @map("platform_only")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 

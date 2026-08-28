@@ -55,7 +55,13 @@ const MANAGER_PERMISSIONS = [
   "data.export",
 ];
 
-const ROLES: Array<{ name: string; description: string; permissions: readonly string[] }> = [
+const ROLES: Array<{
+  name: string;
+  description: string;
+  permissions: readonly string[];
+  /** ADR-044: true = ours to grant, never offered to a Restaurant. */
+  platformOnly?: boolean;
+}> = [
   {
     name: "Owner",
     description: "Full control of an Organization and its Restaurants",
@@ -65,6 +71,9 @@ const ROLES: Array<{ name: string; description: string; permissions: readonly st
     name: "Administrator",
     description: "Platform-level administrator",
     permissions: ALL_PERMISSIONS,
+    // ADR-044. The description already said "platform-level"; nothing enforced it. Any Owner
+    // could grant this Role through POST /memberships, which validated only that the id existed.
+    platformOnly: true,
   },
   {
     name: "Manager",
@@ -106,8 +115,16 @@ export async function seedRbac(prisma: PrismaClient): Promise<void> {
   for (const role of ROLES) {
     const roleRow = await prisma.role.upsert({
       where: { name: role.name },
-      create: { name: role.name, description: role.description },
-      update: { description: role.description },
+      // platformOnly is in BOTH create and update deliberately: an existing deployment already
+      // has these rows, so leaving it out of update would mean the column stayed false in
+      // production while being true in a fresh database — the flag would be correct only where it
+      // was never needed (ADR-044).
+      create: {
+        name: role.name,
+        description: role.description,
+        platformOnly: role.platformOnly ?? false,
+      },
+      update: { description: role.description, platformOnly: role.platformOnly ?? false },
     });
 
     const permissionRows = await prisma.permission.findMany({

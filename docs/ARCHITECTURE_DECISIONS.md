@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.32.0
-status: Active — forty-three ADRs, all Accepted
+version: 1.33.0
+status: Active — forty-four ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -951,6 +951,38 @@ The Founder's reasoning, recorded because it is a product argument rather than a
 **Consequences:** `permittedScope` in `restaurant-reachability.util.ts`; `TransactionService.buildWhere` and `PaymentService.findAllForUser` scope through it; `TRANSACTION_PERMISSION`/`PAYMENT_READ_PERMISSION` constants so route and query share one string. `permission-scope.e2e.spec.ts` — eight assertions across the real HTTP surface, five of which document correct behaviour and are worth keeping as regression cover for routes that were never broken. Falsified: reverting the permission filter to `user.memberships` fails the new unit test with *"expected [Array(1)] to not include …"*. No schema change, no migration.
 
 **Not fixed here, raised instead:** `GET /memberships` builds a list the same way and has no permission decorator. It returns colleagues rather than money, so the argument above does not obviously apply — a waiter arguably should see who else works there. Recorded rather than changed, because widening or narrowing it is a product decision, not a defect.
+
+---
+
+## ADR-044 — `GET /roles`, and a Role a Restaurant May Never Grant
+**Status:** Accepted (Founder decision)
+
+**Context — two problems that turned out to be one.** `POST /memberships` has required a `roleId` since Sprint 4, and **nothing has ever returned one.** No `RoleController` existed. That is exactly the shape ADR-039 named — a required input with nothing addressable behind it — and it made the Invite Employee screen unbuildable; the e2e fixture had to read the id from the database to get past it.
+
+Building the endpoint surfaced the second problem, which is the serious one. **`Administrator` is a seeded Role holding every Permission, described as "Platform-level administrator" — and `POST /memberships` validated only that the `roleId` *existed*.** Any restaurant Owner could grant it. The description said platform-level; nothing enforced it. The moment a roles endpoint fed a dropdown, `Administrator` would appear as an option to every customer.
+
+**Decision 1 — a column, not a filter.** `Role.platformOnly` (boolean, default false; `Administrator` seeded true). The Founder's framing, and it is the right one: **this is a constraint on the data, not on the design.** Filtering a dropdown while the endpoint still accepts anything is precisely the failure ADR-031 records as the worse kind — the interface looks correct, the API is not, and the response to a direct call looks like success.
+
+Named `platformOnly` rather than `assignableByCustomer`: "customer" in this domain is the **guest paying a bill** (`MASTERPLAN.md` — "No account. No registration."), not the restaurant. Reusing it for the restaurant would put two meanings on one word in a project that maintains a `DOMAIN_GLOSSARY.md` for exactly that hazard. Checked rather than assumed — `customer` appears in this codebase only in the guest sense, so the confusion would have been introduced by this ADR rather than inherited.
+
+The flag is written in **both** `create` and `update` of the seed's upsert. Leaving it out of `update` would mean the column stayed `false` in the already-deployed production database while being `true` in any fresh one — correct only where it was never needed.
+
+**Decision 2 — the rule binds on every write path that accepts a `roleId`, and there were four rather than two.** The rule was first stated as two-sided: the list omits these Roles, the invite rejects them. **Two-sided was already wrong when it was written.**
+
+- `GET /roles` — omits them.
+- `POST /memberships` (invite) — rejects them.
+- **`PATCH /memberships/{id}` — also takes a `roleId`, and validated only existence.** Promoting an existing colleague to `Administrator` was in fact *easier* than inviting one: no invitation, no acceptance, one request. Found while closing the other two.
+- `POST /memberships/invitations/accept` — closed as defence in depth. `invite()` now refuses, so such a row can only predate the check and none exist; the line is there so nobody has to reason about the vintage of a row before trusting a grant of every Permission in the system.
+
+**The method matters more than the count: the doors were settled by grepping for the field, not by reasoning about the flows.** Reasoning found two. The grep found four.
+
+Refusals answer `"Role not found"` rather than `"forbidden"`, deliberately: to a Restaurant this Role does not exist, and confirming it does would invite someone to go looking for a way to it.
+
+**Decision 3 — `GET /roles` is gated on `membership.invite`**, not a new permission. The list exists to populate the invite screen, so the people who may invite are exactly the people who need it; a `roles.view` permission would be one whose absence nobody could explain. Reference data, identical for every caller, so no reachability scoping — a Role is not owned by an Organization.
+
+**Consequences:** migration `sprint14_role_platform_only` (additive, one nullable-free boolean with a default — no backfill needed). New `RoleModule`, importing `AuthModule` because `JwtAuthGuard` has its own constructor dependencies (`CLAUDE.md`'s Architecture Review paragraph, learned from Sprint 3). Six tests, each door asserted separately so a fix closing three would not look complete, and each falsified on its own: removing the list filter reproduces the UI-only fix exactly (*"expected ['Administrator', 'Manager', …] to not include 'Administrator'"*); removing either enforcing check gives *"promise resolved instead of rejecting"*. Every rejection is paired with the same call succeeding on an assignable Role, so the refusals are real discrimination rather than a broken path.
+
+**Still open, recorded rather than solved:** `Role.name` remains both the stable upsert key and the human-readable label (`IMPLEMENTATION_PLAN.md`, Deferred, triggered by Lithuanian). This endpoint returns `name` and `description` as they are seeded — real data, nothing invented in a component — but the day those need translating, the key and the label have to separate.
 
 ---
 
