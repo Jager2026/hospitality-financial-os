@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.13.0
+version: 2.14.0
 status: Active
 classification: Critical
 priority: Highest
@@ -262,6 +262,20 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **This is not a tidiness item.** `CLAUDE.md`'s Architecture Review paragraph exists because this exact predicate has already shipped wrong twice — `RestaurantService.findAllForUser` and `TipService.assertReachable`, both by comparing `restaurantId === null` without the `organizationId` check. Thirteen independently-maintained copies of a predicate the project has twice got wrong is a risk surface, not a style preference.
 
   Audited alongside it and found **fully adopted**, so this is one instance rather than a habit: `splitPlatformFee` (both intended call sites), `restaurant-ledger-window.util` (both), `timezone-day.util` (both, via different exported functions), `seedRbac` (consumed by `global-setup.ts` as intended). **No trigger — this is scheduled work, not a watch item.**
+
+  **Costed by reading all thirteen rather than estimating from the count, because they are not one job:**
+
+  | Group | Sites | Shape | Effort | Regression risk |
+  |---|---|---|---|---|
+  | **A** | 7 | Byte-identical to `isRestaurantReachable(user, restaurant)` — `membership` L63, `payment` L201/L219, `restaurant` L194, `settings` L51, `tip` L131, `transaction` L276 | ~30 min | **Very low.** The same expression, and every one of these modules already has reachability tests. |
+  | **B** | 4 | Reachability **+** permission → `hasPermissionAtRestaurant` — `membership` L141, `restaurant` L217, `settings` L67 are drop-in; **`payment` L272 is not** (`getGrantingMembershipOrThrow` returns the granting Membership, not a boolean, and needs a `findGrantingMembership` helper) | ~45 min | **Low, concentrated in one site** — and that site is on the money path. |
+  | **C** | 2 | **Not the same call.** `membership` L123 and `wallet` L155 reach a *Membership*, not a Restaurant: their `restaurantId` may legitimately be null, and Wallet adds an own-wallet short-circuit plus its own `restaurantId !== null` requirement. | — | Forcing these into the shared signature would be the actual danger. |
+
+  **Recommendation: consolidate the eleven, deliberately exclude the two, and say so in the utility.** That converts a silently-growing exception into a bounded, named one — which is the real defect here, not the duplication itself.
+
+  **Existing tests cover the change**; nothing new is needed to prove correctness. What *is* needed is the mechanism that stops it recurring: **a check that fails if the raw predicate reappears inline**, the same shape as `fixture-safety.spec.ts`. Without it the count starts climbing again the next time someone writes a service.
+
+  **Total: roughly two hours including that guard.**
 
 - **Fixtures build their Role and Permissions from the seed, mechanically rather than by discipline.** `CLAUDE.md`'s Testing Philosophy now forbids the literal; this item is what would make the rule unbreakable rather than remembered — the same preference for a mechanism that produced the fixture-safety check and the absent warning colour.
 
