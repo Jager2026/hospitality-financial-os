@@ -21,6 +21,43 @@ export function isRestaurantReachable(
   );
 }
 
+/**
+ * The reachability predicate for a **list** query, narrowed to Memberships that actually carry the
+ * permission — ADR-043.
+ *
+ * `isRestaurantReachable` and `hasPermissionAtRestaurant` above answer for one known Restaurant.
+ * A list query has no such Restaurant: it builds a `WHERE` from every Membership the caller holds.
+ * Doing that without the permission filter is where the leak was, and the shape is worth naming
+ * because it is invisible in review:
+ *
+ *   - `PermissionsGuard` asks "does this caller hold the permission on **any** Membership."
+ *   - the list builds its scope from **every** Membership.
+ *   - **nothing asks whether those are the same Membership.**
+ *
+ * So a permission held in one Organization silently widens a list built from a Membership in
+ * another. Proved rather than argued: a zero-permission Waiter exported another restaurant's
+ * transaction rows, with the amounts in them.
+ *
+ * Returns the ids to scope by. Callers pass the permission the route requires, so the filter and
+ * the route's own `@RequirePermission` can never disagree.
+ */
+export function permittedScope(
+  user: AuthenticatedUser,
+  permission: string,
+): { organizationIds: string[]; restaurantIds: string[] } {
+  const carrying = user.memberships.filter((m) => m.role.permissions.includes(permission));
+  return {
+    organizationIds: [
+      ...new Set(carrying.filter((m) => m.restaurantId === null).map((m) => m.organizationId)),
+    ],
+    restaurantIds: [
+      ...new Set(
+        carrying.filter((m) => m.restaurantId !== null).map((m) => m.restaurantId as string),
+      ),
+    ],
+  };
+}
+
 /** Fine-grained, per-resource permission check — same shape as RestaurantService.assertPermission.
  * PermissionsGuard only checks "does the user hold this permission on ANY Membership" (a fast
  * global reject); this checks whether one of the SPECIFIC Memberships that actually reaches this

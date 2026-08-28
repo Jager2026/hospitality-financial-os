@@ -176,7 +176,15 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
           id: membership.id,
           organizationId: restaurant.organizationId,
           restaurantId: null,
-          role: { id: managerRole.id, name: "Owner", permissions: ["payments.manage"] },
+          // ADR-043: this fixture fetched the Manager role but labelled it "Owner" and gave it
+          // one permission — matching neither real Role. A hand-built AuthenticatedUser that
+          // drifts from seed.ts proves things about a system that does not exist; the same drift
+          // was already recorded once in seed.ts own comment. Corrected to the real Manager.
+          role: {
+            id: managerRole.id,
+            name: "Manager",
+            permissions: ["payments.manage", "reports.view"],
+          },
         },
       ],
     };

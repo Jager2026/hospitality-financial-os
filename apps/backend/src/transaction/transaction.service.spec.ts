@@ -165,7 +165,11 @@ describe("TransactionService (real database)", () => {
           id: randomUUID(),
           organizationId,
           restaurantId: null,
-          role: { id: randomUUID(), name: "Owner", permissions: [] },
+          // ADR-043: an Owner with no permissions cannot exist — seed.ts grants Owner all ten.
+          // This fixture modelled an impossible user, and every list assertion built on it was
+          // therefore proving something about a system that does not exist. Corrected to match
+          // the real seed rather than relaxed to keep the test green.
+          role: { id: randomUUID(), name: "Owner", permissions: ["reports.view"] },
         },
       ],
     };
@@ -454,6 +458,53 @@ describe("TransactionService (real database)", () => {
       expect(chargeback.resolvedAt).toBeNull(); // still under review — not resolved yet
       expect(chargeback.id).toEqual(expect.any(String));
       expect(chargeback.createdAt).toBeInstanceOf(Date);
+    },
+  );
+
+  it(
+    "ADR-043: the list is scoped by the Membership that CARRIES reports.view, not by any " +
+      "Membership at all — the same reachable user sees the row with the permission and not " +
+      "without it",
+    async () => {
+      // The discriminating pair, at unit level. Correcting the fixtures above made the suite
+      // green again; without this, reverting permittedScope() to the old reachability-only
+      // filter would leave every one of them passing. That is exactly how the leak survived:
+      // five tests asserted "a Membership is enough to read a restaurant financial list",
+      // each believing it described reachability.
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
+      const piId = `pi_${randomUUID()}`;
+      const payment = await seedPayment(restaurant.id, 1200n, 0n, waiterMembership.id, piId);
+      const { rawBody, signature } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piId, amount: 1200, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawBody, signature);
+      const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
+
+      const withPermission = ownerUserReaching(org.id);
+      const withoutPermission: AuthenticatedUser = {
+        ...withPermission,
+        memberships: withPermission.memberships.map((m) => ({
+          ...m,
+          role: { ...m.role, permissions: [] },
+        })),
+      };
+
+      const permitted = await transactionService.findAllForUser(withPermission, {
+        page: 1,
+        limit: 20,
+      });
+      expect(permitted.data.map((t) => t.id)).toContain(transaction!.id);
+
+      const denied = await transactionService.findAllForUser(withoutPermission, {
+        page: 1,
+        limit: 20,
+      });
+      expect(denied.data.map((t) => t.id)).not.toContain(transaction!.id);
+
+      // And the CSV, which is the same predicate reached through a different route.
+      const csv = await transactionService.exportCsv(withoutPermission, {});
+      expect(csv).not.toContain(transaction!.id);
     },
   );
 });

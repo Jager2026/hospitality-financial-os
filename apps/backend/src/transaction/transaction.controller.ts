@@ -35,7 +35,12 @@ export class TransactionController {
     return this.transactionService.exportCsv(user, query);
   }
 
+  // ADR-043: was the only route of its kind without a permission decorator. The absence was an
+  // OMISSION, not a design: the Dashboard, Analytics and the CSV export of this same data all
+  // require a permission, and different formats of one question must not have different bars.
   @Get()
+  @UseGuards(PermissionsGuard)
+  @RequirePermission("reports.view")
   findAll(
     @Query(new ZodValidationPipe(transactionListQuerySchema)) query: TransactionListQueryDto,
     @CurrentUser() user: AuthenticatedUser,

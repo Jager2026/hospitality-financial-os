@@ -245,7 +245,9 @@ describe("PaymentService (real database)", () => {
     const authedUser = asAuthenticatedUser(user, membership, {
       id: managerRoleId,
       name: "Manager",
-      permissions: ["payments.manage"],
+      // ADR-043: a real seeded Manager carries reports.view as well. The old fixture held only
+      // the write permission and the list still returned rows — the test was asserting the leak.
+      permissions: ["payments.manage", "reports.view"],
     });
 
     const keyFirst = `scope-first-${randomUUID()}`;

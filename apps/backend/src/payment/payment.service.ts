@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import type { Payment, Restaurant } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
+import { permittedScope } from "../common/restaurant-reachability.util";
 import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import type { CreatePaymentDto } from "./dto/create-payment.schema";
@@ -28,6 +29,11 @@ export interface PaymentHistoryPage {
   data: Payment[];
   meta: { page: number; limit: number; total: number; pages: number };
 }
+
+/** ADR-043: reading a restaurant's payment history is the same question the Dashboard and the
+ * Transactions list answer, so it carries the same threshold. Different formats of one question
+ * must not have different bars. */
+export const PAYMENT_READ_PERMISSION = "reports.view";
 
 @Injectable()
 export class PaymentService {
@@ -133,18 +139,16 @@ export class PaymentService {
     user: AuthenticatedUser,
     filters: { restaurantId?: string; status?: Payment["status"]; page: number; limit: number },
   ): Promise<PaymentHistoryPage> {
-    const orgWideOrgIds = [
-      ...new Set(
-        user.memberships.filter((m) => m.restaurantId === null).map((m) => m.organizationId),
-      ),
-    ];
-    const restaurantIds = [
-      ...new Set(
-        user.memberships
-          .filter((m) => m.restaurantId !== null)
-          .map((m) => m.restaurantId as string),
-      ),
-    ];
+    // ADR-043. Found by auditing for the shape the transaction leak had, not by a test reaching
+    // here: this list was built from every Membership the caller holds, so a Waiter at one
+    // restaurant saw its full payment history — amounts and tips — with no permission anywhere in
+    // the path. A Payment is the restaurant's takings, not the waiter's; their own money is the
+    // Wallet and `GET /tips/me`, reached by ownership rather than by a claim on someone else's
+    // finances.
+    const { organizationIds: orgWideOrgIds, restaurantIds } = permittedScope(
+      user,
+      PAYMENT_READ_PERMISSION,
+    );
 
     const reachableWhere = {
       OR: [
