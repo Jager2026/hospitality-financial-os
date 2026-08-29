@@ -32,6 +32,25 @@ export class OutboxPollerService {
     this.logger.setContext(OutboxPollerService.name);
   }
 
+  // READ THIS BEFORE ADDING A SECOND CONSUMER — there is no claim step.
+  //
+  // This selects `publishedAt: null` and marks the row published only later, inside dispatch()'s
+  // transaction. Between those two moments the row is visible to every other poller: no
+  // `SELECT … FOR UPDATE SKIP LOCKED`, no claimed_at column, no advisory lock. Two instances read
+  // the same rows and both dispatch them.
+  //
+  // It has never caused a problem, for two reasons, and NEITHER of them is this mechanism:
+  //   1. production runs a single backend instance, and
+  //   2. the only consumer, WalletProjectionService, recomputes a balance IN FULL rather than
+  //      applying a delta — so dispatching twice happens to produce the same number.
+  //
+  // Reason 2 is a property of that one handler, not a guarantee this poller offers. A consumer
+  // that increments a counter, appends a row, or sends anything outward (an email, a payout, a
+  // webhook) turns a double dispatch into a double effect on the money path. The handler-registry
+  // comment above says a second consumer is what earns the abstraction; this comment says a second
+  // consumer is also what makes the missing claim step real. Fix the claim first.
+  //
+  // Tracked in IMPLEMENTATION_PLAN.md (Deferred), found while writing ADR-045.
   @Interval(POLL_INTERVAL_MS)
   async poll(): Promise<void> {
     const unpublished = await this.prisma.outboxEvent.findMany({

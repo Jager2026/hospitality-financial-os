@@ -52,6 +52,20 @@ async function bootstrap(): Promise<void> {
   const alerter = app.get(UnhandledErrorAlerter);
   const logger = app.get(Logger);
 
+  // Deliberately NOT fatal — and the trade-off is conditional, so it is stated where it is made.
+  //
+  // Registering this handler suppresses Node's default, which since v15 is to raise an unhandled
+  // rejection as an uncaught exception and terminate. So the process now survives what used to
+  // kill it. That is better than the invisible restart loop **only because the failure is
+  // announced**: a service that degrades quietly is worse than one that crashes, because a crash
+  // is at least a signal the platform can show.
+  //
+  // Which makes the alert load-bearing rather than a nicety. `ALERT_WEBHOOK_URL` is optional and
+  // `AlertService.sendAlert()` returns silently when it is unset — so if it is ever lost, the
+  // `logger.error` below is the entire remaining mechanism. It runs first and unconditionally for
+  // that reason (ADR-038), but a log with no drain is exactly the state ADR-045 was written to
+  // stop depending on. If this handler is kept, the alerting channel has to be treated as part of
+  // the production contract, not as optional configuration.
   process.on("unhandledRejection", (reason: unknown) => {
     const name = reason instanceof Error ? reason.name : "UnhandledRejection";
     const message = reason instanceof Error ? reason.message : String(reason);
