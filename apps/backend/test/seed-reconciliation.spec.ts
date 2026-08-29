@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { seedRbac } from "../prisma/seed";
+import { findStaleGrants, seedRbac } from "../prisma/seed";
 
 /**
  * ADR-046. `seedRbac` used to be able to add and correct, never to remove: the RolePermission loop
@@ -63,6 +63,40 @@ describe("seedRbac reconciles RolePermission rather than only adding to it", () 
     expect(owner.rolePermissions).toHaveLength(permissionCount);
     expect(manager.rolePermissions.length).toBeGreaterThan(0);
     expect(manager.rolePermissions.length).toBeLessThan(permissionCount);
+  });
+
+  // findStaleGrants is what the command-line gate reads to decide whether to stop and ask
+  // (ADR-046 addendum). It has to be read-only, and it has to see exactly what seedRbac would
+  // delete — a preview that disagreed with the action would be worse than no preview.
+  describe("findStaleGrants — the preview the confirmation gate is built on", () => {
+    it("names the grant that would be revoked, and does not revoke it", async () => {
+      const waiter = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
+      const dangerous = await prisma.permission.findUniqueOrThrow({
+        where: { name: "roles.manage" },
+      });
+      await prisma.rolePermission.create({
+        data: { roleId: waiter.id, permissionId: dangerous.id },
+      });
+
+      const planned = await findStaleGrants(prisma);
+
+      expect(planned).toContainEqual(
+        expect.objectContaining({ role: "Waiter", permission: "roles.manage" }),
+      );
+      // Read-only is the whole point: an operator who is shown this and declines must still have
+      // the row. Asserted, because "it only reads" is exactly the kind of claim that stops being
+      // true when someone later reuses the helper.
+      const stillThere = await prisma.rolePermission.findMany({ where: { roleId: waiter.id } });
+      expect(stillThere).toHaveLength(1);
+
+      await seedRbac(prisma);
+      expect(await findStaleGrants(prisma)).toHaveLength(0);
+    });
+
+    it("reports nothing when the database already matches the matrix — otherwise the gate would block every ordinary run", async () => {
+      await seedRbac(prisma);
+      expect(await findStaleGrants(prisma)).toHaveLength(0);
+    });
   });
 
   it("does not touch a Role it does not define — the seed's authority stops at its own matrix", async () => {
