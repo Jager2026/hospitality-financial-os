@@ -17,6 +17,9 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
 
   function envWith(overrides: Record<string, string>) {
     return {
+      // Explicit since NODE_ENV lost its default — the value vitest itself sets, so the base case
+      // matches how the suite really runs rather than inventing a shape.
+      NODE_ENV: "test",
       DATABASE_URL: "postgresql://u:p@localhost:5432/db",
       REDIS_URL: "redis://localhost:6379",
       JWT_ACCESS_SECRET: "a".repeat(32),
@@ -128,11 +131,13 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
       expect(() => validateEnv(envWith({ NODE_ENV: "test" }))).not.toThrow();
     });
 
-    it("does NOT fire when NODE_ENV itself is missing — the guard's own stated limit, asserted rather than assumed", () => {
-      // NODE_ENV carries .default("development"), so an environment that lost it falls back and
-      // this rule never runs. Production sets NODE_ENV explicitly, which is what makes the rule
-      // effective there; this test exists so the dependency is visible instead of implied.
-      expect(() => validateEnv(envWith({}))).not.toThrow();
+    // This test used to assert the opposite, and the change is the point. While NODE_ENV carried
+    // .default("development"), an environment that lost it fell back silently and every production
+    // rule in this file stopped firing — the gate could go missing on its own. NODE_ENV is now
+    // required, so the gate cannot disappear without the boot failing and naming it.
+    it("cannot be bypassed by losing NODE_ENV itself — the gate every production rule hangs on is now required", () => {
+      const { NODE_ENV: _omitted, ...withoutNodeEnv } = envWith({});
+      expect(() => validateEnv(withoutNodeEnv)).toThrow(/NODE_ENV/);
     });
   });
 

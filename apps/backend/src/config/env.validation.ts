@@ -4,7 +4,23 @@ import { z } from "zod";
 // them (CLAUDE.md: "Nothing should be built just in case").
 const envSchema = z
   .object({
-    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    // Required, with no default, and the reason is that this variable decides whether other
+    // safety mechanisms run at all. `.default("development")` meant an environment that lost it
+    // silently became a development environment: `StripeService`'s boot-time liveness probe
+    // (ADR-038 Decision 2 — the only thing that catches a one-character truncation in a Stripe
+    // key) is gated on `NODE_ENV === "production"` and would simply not run, and so are the
+    // production rules below. **A guard whose gate can go missing is a guard with an off switch
+    // nobody can see.**
+    //
+    // The cost of removing the default was measured rather than assumed, because "it will break
+    // local development" is the obvious objection and it turned out to be false. Every path that
+    // actually boots this app already sets NODE_ENV explicitly: Railway sets it in production;
+    // `apps/backend/.env` and `.env.example` set it for local development; vitest sets `test`
+    // itself (verified with a probe, not from documentation); `playwright.config.ts` sets `test`
+    // for the e2e harness; and `docker/docker-compose.yml` runs only Postgres and Redis, with no
+    // application container at all. Nothing that exists relied on the default. A developer whose
+    // older `.env` predates this now gets a boot error naming the variable — which is the point.
+    NODE_ENV: z.enum(["development", "test", "production"]),
     PORT: z.coerce.number().int().positive().default(3001),
     DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
     REDIS_URL: z.string().min(1, "REDIS_URL is required"),
@@ -146,14 +162,14 @@ function isLoopbackUrl(value: string): boolean {
 }
 
 /**
- * A known weakness in the check above, written down rather than left for someone to discover.
+ * The weakness this file used to carry, kept as a note because the fix is easy to undo by accident.
  *
- * It is gated on `NODE_ENV === "production"`, and `NODE_ENV` itself carries `.default("development")`.
- * So a production deploy that lost `NODE_ENV` would fall back to development, and this requirement
- * would not fire — the guard depends on the same class of variable it exists to guard. It holds
- * today because Railway sets `NODE_ENV` explicitly (verified against the live service), and it is
- * the standard gate every environment-specific rule in this file would use. Named here so the
- * limit is on the record: this catches a lost `ALERT_WEBHOOK_URL`, not a lost `NODE_ENV`.
+ * Every production rule above is gated on `NODE_ENV === "production"`. While `NODE_ENV` carried
+ * `.default("development")`, that gate could go missing on its own: a deploy that lost the variable
+ * would quietly become a development environment and every rule below it would stop firing. **The
+ * guard depended on exactly the class of variable it existed to guard.** It was closed by making
+ * `NODE_ENV` required rather than by adding a second gate — restoring the default would silently
+ * re-open it, and nothing else about this file would look wrong.
  */
 
 export type Env = z.infer<typeof envSchema>;
