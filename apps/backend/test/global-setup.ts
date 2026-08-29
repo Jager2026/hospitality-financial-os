@@ -31,5 +31,55 @@ export async function setup(): Promise<void> {
   await seedCurrencies(prisma);
   await seedRbac(prisma);
 
+  await reportAccumulatedRows(prisma);
+
   await prisma.$disconnect();
+}
+
+/**
+ * One line, printed unconditionally, blocking nothing.
+ *
+ * The development database is shared across runs and never cleaned: every suite run leaves its
+ * rows behind, and services that read a batch of them eventually read hundreds. Three failures in
+ * one sprint were caused by that accumulation, in two different spec files, and each cost real
+ * time to attribute — because the numbers had to be gone and looked for.
+ *
+ * A threshold that FAILED the run was considered and rejected. Any limit would be arbitrary, a
+ * long debugging session would legitimately cross it, and the fix people would reach for is
+ * raising the limit — which is `CLAUDE.md`'s rubber-stamp degradation, arriving by the front door.
+ *
+ * So: instrument, do not gate. The morning's diagnosis was only found because a number happened to
+ * appear in a failure message (`Number of calls: 460`). This puts that number at the top of every
+ * run instead, where nobody has to remember the rule to benefit from it. Nothing to bypass,
+ * nothing to tune, and it stays useful even once the suite cleans up after itself
+ * (`IMPLEMENTATION_PLAN.md`, Deferred).
+ */
+async function reportAccumulatedRows(prisma: PrismaClient): Promise<void> {
+  const [payments, outbox, unpublished] = await Promise.all([
+    prisma.payment.count(),
+    prisma.outboxEvent.count(),
+    prisma.outboxEvent.count({ where: { publishedAt: null } }),
+  ]);
+
+  // The unpublished count is called out against BATCH_SIZE specifically, because that is the one
+  // number here with a hard edge rather than a vague "too many". OutboxPollerService takes 50 rows
+  // per poll, oldest first, so once older debris fills a batch, the poller specs' own fresh events
+  // never enter one and the specs fail for a reason that has nothing to do with the code.
+  //
+  // The suite leaves permanently-unpublished events behind every run — deliberately malformed rows
+  // from the tests that assert the retry path, which by construction can never publish. How many
+  // varies: 0 after a reset, then 45, 10 and 61 across observed runs, because some events do get
+  // published and the debris depends on ordering. **No per-run rate is claimed here; only that it
+  // accumulates and that 50 is where it starts to bite** — a failure was seen at 61.
+  const POLLER_BATCH_SIZE = 50;
+  const starving = unpublished >= POLLER_BATCH_SIZE;
+
+  console.log(
+    `[db] accumulated rows — payments: ${payments}, outbox: ${outbox} (${unpublished} unpublished)` +
+      (starving
+        ? ` — WARNING: unpublished >= the poller's batch size of ${POLLER_BATCH_SIZE}, so outbox ` +
+          `specs will starve. Run: pnpm run db:reset`
+        : `. A failure that appears only after repeated runs is a stale-data suspect first. ` +
+          `Reset with: pnpm run db:reset`),
+  );
 }

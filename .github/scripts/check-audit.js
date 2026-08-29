@@ -21,65 +21,109 @@
 // not a place to file things forever; keeping it empty is what makes the gate mean something.
 // Adding an entry here again should feel like a decision, not a reflex.
 const { execSync } = require("node:child_process");
+const { evaluate, AuditUnavailableError } = require("./audit-evaluate");
 
 /** @type {Record<string, string>} */
 const IGNORED_ADVISORIES = {};
 
 /**
- * DO NOT "simplify" the `?? "{}"` below into `|| "{}"`, and read this before touching it at all.
+ * Three outcomes, and the third is the reason this function exists in this shape.
  *
- * The fallback exists for the normal case: `pnpm audit` exits non-zero the moment it finds an
- * advisory, so the JSON body arrives on the error object's `stdout` rather than as a clean return.
+ * `pnpm audit` exits non-zero the moment it finds an advisory, so on the normal "found something"
+ * path the JSON body arrives on the error object's `stdout` rather than as a clean return. But the
+ * command also exits non-zero when it could not run at all — pnpm missing from PATH, registry
+ * unreachable — and then `stdout` is the EMPTY STRING.
  *
- * But when the command fails for a DIFFERENT reason — pnpm missing from PATH, the registry
- * unreachable — `stdout` is the empty string, not `undefined`. `??` does not treat `""` as absent,
- * so the fallback never runs, `JSON.parse("")` throws, and the script dies with a non-zero exit.
- * **That is the safe direction, and it happens by accident rather than by design.** Verified by
- * running this file with pnpm removed from PATH: `SyntaxError: Unexpected end of JSON input`,
- * exit 1.
+ * The previous `err.stdout ?? "{}"` did not distinguish those. It happened to fail closed, because
+ * `??` does not treat `""` as absent, so `JSON.parse("")` threw and killed the run. Safe, but by
+ * accident: written as `|| "{}"` — which reads like an obvious cleanup — the empty string becomes
+ * `{}`, which is zero advisories, which prints "no advisories found" and exits 0. **A security gate
+ * reporting a clean result for a scan that never ran.**
  *
- * Switching to `||` would make `""` fall back to `"{}"`, which parses to zero advisories, which
- * prints "No high/critical advisories found." and exits 0. **A security gate reporting a clean
- * result for a scan that never ran** — "passed" made indistinguishable from "never checked".
+ * So the distinction is now explicit and named. Exit 1 means "checked, and found something".
+ * Exit 2 means "could not check" — a different failure that deserves a different message, because
+ * the fix is different too. Both fail CI; only one of them means the dependencies are bad.
  *
- * Whether to replace the accident with a deliberate check is an open decision, deliberately not
- * taken while adding type checking to this file.
+ * @returns {string} raw JSON from a run that actually produced output
  */
 function runAudit() {
+  /** @type {string} */
+  let stdout;
+
   try {
-    // Exits non-zero the moment any advisory meets --audit-level, so stdout is captured via the
-    // error object rather than a clean return — the JSON body is what matters, not the exit code.
-    return execSync("pnpm audit --audit-level=high --json", { encoding: "utf8" });
+    stdout = execSync("pnpm audit --audit-level=high --json", { encoding: "utf8" });
   } catch (err) {
-    // Behaviour deliberately unchanged here — see the note above runAudit().
-    return /** @type {{ stdout?: string }} */ (err).stdout ?? "{}";
+    const captured = /** @type {{ stdout?: unknown }} */ (err).stdout;
+    stdout = typeof captured === "string" ? captured : "";
   }
+
+  if (stdout.trim() === "") {
+    unavailable(
+      "`pnpm audit` produced no output at all.",
+      "The audit did not run — this is NOT the same as finding no vulnerabilities.",
+    );
+  }
+
+  return stdout;
+}
+
+/**
+ * @param {...string} lines
+ * @returns {never}
+ */
+function unavailable(...lines) {
+  console.error("\n  Dependency audit could not be completed.\n");
+  for (const line of lines) console.error(`  ${line}`);
+  console.error(
+    "\n  Failing the build deliberately: a gate that cannot run its check must not report success.\n",
+  );
+  process.exit(2);
 }
 
 const raw = runAudit();
-const report = JSON.parse(raw);
-const advisories = Object.values(report.advisories ?? {});
 
-const unignored = advisories.filter(
-  (a) => ["high", "critical"].includes(a.severity) && !(a.github_advisory_id in IGNORED_ADVISORIES),
-);
-
-if (unignored.length > 0) {
-  console.error(
-    `${unignored.length} high/critical advisory(ies) not covered by an explicit ignore:`,
+/** @type {unknown} */
+let report;
+try {
+  report = JSON.parse(raw);
+} catch (err) {
+  unavailable(
+    "`pnpm audit` produced output that is not valid JSON.",
+    `Parser said: ${err instanceof Error ? err.message : String(err)}`,
+    `First 200 characters: ${raw.slice(0, 200)}`,
   );
-  for (const a of unignored) {
+}
+
+/** @type {{ unignored: any[]; ignoredFound: any[] }} */
+let result;
+try {
+  result = evaluate(report, IGNORED_ADVISORIES);
+} catch (err) {
+  if (err instanceof AuditUnavailableError) {
+    unavailable(
+      "`pnpm audit` returned JSON this gate does not recognise.",
+      err.message,
+      "If pnpm changed its output format, this script must be updated — not bypassed.",
+    );
+  }
+  throw err;
+}
+
+if (result.unignored.length > 0) {
+  console.error(
+    `${result.unignored.length} high/critical advisory(ies) not covered by an explicit ignore:`,
+  );
+  for (const a of result.unignored) {
     console.error(`  [${a.severity}] ${a.github_advisory_id} — ${a.title} (${a.module_name})`);
   }
   process.exit(1);
 }
 
-const ignoredFound = advisories.filter(
-  (a) => ["high", "critical"].includes(a.severity) && a.github_advisory_id in IGNORED_ADVISORIES,
-);
-if (ignoredFound.length > 0) {
-  console.log(`${ignoredFound.length} high/critical advisory(ies) present but explicitly ignored:`);
-  for (const a of ignoredFound) {
+if (result.ignoredFound.length > 0) {
+  console.log(
+    `${result.ignoredFound.length} high/critical advisory(ies) present but explicitly ignored:`,
+  );
+  for (const a of result.ignoredFound) {
     console.log(
       `  [${a.severity}] ${a.github_advisory_id} — ${IGNORED_ADVISORIES[a.github_advisory_id]}`,
     );
