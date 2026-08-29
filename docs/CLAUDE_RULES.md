@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.9.0
+version: 2.10.0
 status: Active
 classification: Critical
 priority: Highest
@@ -201,7 +201,11 @@ The same applies to processes, not only files. A server started by hand to verif
 
 **A variable's optionality is a claim about consequences, and nothing re-checks that claim when a new dependency arrives.** `.optional()` or a `.default()` says, in effect, "the system works acceptably without this." That is usually true when written and quietly stops being true the moment some new code depends on the value — and the code that creates the dependency is never the code that declared the optionality, so nobody is looking at both. The failure is silent by construction: the app boots, the config validates, and one behaviour is simply missing. Three instances in this codebase, all found in one audit and all since closed (ADR-045): `ALERT_WEBHOOK_URL` became load-bearing when `unhandledRejection` started reporting-and-continuing instead of exiting; `FRONTEND_URL`'s localhost default became a customer-facing failure when it became Stripe's onboarding `return_url`; `NODE_ENV`'s development default silently disabled ADR-038's own boot-time liveness probe. **When adding a dependency on a value, check how that value is declared — and when declaring something optional, the honest form of the claim is what specifically still works without it.**
 
-Each of the three needed a different remedy, and reaching for the same one three times would have failed twice. Requiring presence worked only for the first. The second carries a `.default()`, so it is never absent by the time validation runs — presence cannot be checked at all, and the rule has to constrain the *value* instead, which also catches the explicitly-wrong configuration that is no less harmful than the missing one. The third was the gate the other two hang on, so nothing conditional could protect it; the default had to go. **Before writing the guard, work out which of the three shapes the variable has.**
+**Amendment, and it is the part most likely to be got wrong next time: "require it in production" is the reflex, and it does not work on a variable that has a default.** A `.default()` means the value is never absent by the time validation runs — unset and explicitly-wrong arrive as the same thing, so a presence check inspects a value that is always there and passes always. **Such a rule has to constrain the VALUE, not the presence.** Doing so is also strictly better, because it catches the explicitly-wrong configuration, which is no less harmful than the missing one — a production `FRONTEND_URL` deliberately pointed at localhost breaks the customer exactly as thoroughly as a lost one.
+
+So: **before writing the guard, work out which of three shapes the variable has.** Optional with no default — require it. Defaulted — constrain the value, since presence is unobservable. A gate that other rules are conditional on — remove the default entirely, because nothing conditional can protect the condition itself. Reaching for the first remedy three times would have failed twice.
+
+One adjacent trap, found while documenting the first: **optional means absent, not blank.** `ALERT_WEBHOOK_URL=""` is not an unset variable — it is a present one holding an empty string, and it fails a URL rule that `undefined` would have skipped. An `.env.example` line offering an empty value for an optional variable therefore breaks the setup it is meant to help. Caught by testing the line before shipping it, having written it wrong first.
 
 One thing generalises past config: **a conditional guard is only as reliable as the thing it is conditional on.** `if (production)` is a dependency, and if that dependency can itself go missing, the guard has an off switch nobody can see. Ask what makes the condition true, and whether *that* can quietly stop being true.
 
