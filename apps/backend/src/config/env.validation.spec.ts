@@ -94,4 +94,36 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
       /STRIPE_SECRET_KEY is too short/,
     );
   });
+
+  // ADR-045. ALERT_WEBHOOK_URL stopped being an ops convenience the moment main.ts began
+  // reporting-and-continuing after an unhandled rejection instead of exiting. All three cases are
+  // required together: the rejection alone would pass against an implementation that demands the
+  // variable everywhere (which would break every developer machine and the test suite), and the
+  // acceptances alone would pass against no rule at all.
+  describe("ALERT_WEBHOOK_URL is required in production (ADR-045)", () => {
+    const WEBHOOK = "https://hooks.example.com/services/T000/B000/XXXX";
+
+    it("refuses to boot in production without it — alerting off is not a state we start in", () => {
+      expect(() => validateEnv(envWith({ NODE_ENV: "production" }))).toThrow(
+        /ALERT_WEBHOOK_URL is required when NODE_ENV=production/,
+      );
+    });
+
+    it("boots in production with it", () => {
+      const parsed = validateEnv(envWith({ NODE_ENV: "production", ALERT_WEBHOOK_URL: WEBHOOK }));
+      expect(parsed.ALERT_WEBHOOK_URL).toBe(WEBHOOK);
+    });
+
+    it("stays optional outside production — a developer machine and the test suite must still boot", () => {
+      expect(() => validateEnv(envWith({ NODE_ENV: "development" }))).not.toThrow();
+      expect(() => validateEnv(envWith({ NODE_ENV: "test" }))).not.toThrow();
+    });
+
+    it("does NOT fire when NODE_ENV itself is missing — the guard's own stated limit, asserted rather than assumed", () => {
+      // NODE_ENV carries .default("development"), so an environment that lost it falls back and
+      // this rule never runs. Production sets NODE_ENV explicitly, which is what makes the rule
+      // effective there; this test exists so the dependency is visible instead of implied.
+      expect(() => validateEnv(envWith({}))).not.toThrow();
+    });
+  });
 });
