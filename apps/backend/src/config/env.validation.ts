@@ -57,6 +57,13 @@ const envSchema = z
     // the Restaurant Portal, not this API. No frontend route exists at this path yet (Sprint 3 here
     // is backend-only); the redirect target is real, the page behind it isn't, same kind of gap as
     // any other "API ready, UI not built yet" state.
+    //
+    // The localhost default is right for a developer machine and wrong for production, where it
+    // would send a real restaurant owner to their own machine at the end of Stripe onboarding.
+    // Constrained below rather than made required, and the distinction matters: because this
+    // carries a `.default()`, an unset variable and an explicitly-localhost one are indistinguishable
+    // after parsing. Requiring "present" would catch neither. Rejecting a loopback host in
+    // production catches both, and the second is no less wrong than the first.
     FRONTEND_URL: z.string().url().default("http://localhost:3000"),
     // Sprint 11 (Security Hardening): CORS_ORIGIN replaces main.ts's previous bare `enableCors()`
     // (NestJS's own default, which reflects any Origin — OWASP A05 Security Misconfiguration). No
@@ -100,7 +107,43 @@ const envSchema = z
           "is deliberate — the alternative is a service that runs with every alert silently off.",
       });
     }
+
+    // The failure this prevents does not announce itself, and it lands at the worst possible
+    // moment: a restaurant owner finishing Stripe onboarding — the last step before they can take
+    // money — is redirected to a machine that is not theirs. No exception, no log, no 500. The
+    // customer simply arrives nowhere, at the point in the funnel where they are most likely to
+    // give up and least likely to report a bug.
+    if (isLoopbackUrl(env.FRONTEND_URL)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["FRONTEND_URL"],
+        message:
+          `FRONTEND_URL must not point at a loopback address when NODE_ENV=production (got ` +
+          `"${env.FRONTEND_URL}"). It is the Stripe onboarding return_url, so a localhost value ` +
+          `sends a real restaurant owner to their own machine at the end of onboarding — silently. ` +
+          `Note this variable has a localhost DEFAULT, so an unset value looks exactly like this.`,
+      });
+    }
   });
+
+/**
+ * True for a URL whose host is the local machine. Parsed with the URL API rather than matched as a
+ * string: `http://LOCALHOST:3000`, `http://127.0.0.1`, `http://[::1]:3000` and a trailing-dot
+ * `localhost.` are all the same mistake, and a substring check would miss most of them while
+ * falsely flagging a legitimate host that merely contains the word.
+ */
+function isLoopbackUrl(value: string): boolean {
+  let host: string;
+  try {
+    host = new URL(value).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return false; // Not parseable as a URL — z.string().url() already rejected it upstream.
+  }
+
+  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
+  // 127.0.0.0/8 in full: 127.0.0.1 is the common one, but the whole block is loopback.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
 
 /**
  * A known weakness in the check above, written down rather than left for someone to discover.
