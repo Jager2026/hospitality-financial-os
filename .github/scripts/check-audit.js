@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // Sprint 13 (Deployment follow-up): `pnpm audit --audit-level=high` alone can't ignore specific
 // advisories on the pnpm version this project is pinned to (9.12.0) — `audit.ignore` /
 // `--ignore <GHSA-id>` were only added in pnpm 10.11+, confirmed by actually running it against
@@ -21,15 +22,37 @@
 // Adding an entry here again should feel like a decision, not a reflex.
 const { execSync } = require("node:child_process");
 
+/** @type {Record<string, string>} */
 const IGNORED_ADVISORIES = {};
 
+/**
+ * DO NOT "simplify" the `?? "{}"` below into `|| "{}"`, and read this before touching it at all.
+ *
+ * The fallback exists for the normal case: `pnpm audit` exits non-zero the moment it finds an
+ * advisory, so the JSON body arrives on the error object's `stdout` rather than as a clean return.
+ *
+ * But when the command fails for a DIFFERENT reason — pnpm missing from PATH, the registry
+ * unreachable — `stdout` is the empty string, not `undefined`. `??` does not treat `""` as absent,
+ * so the fallback never runs, `JSON.parse("")` throws, and the script dies with a non-zero exit.
+ * **That is the safe direction, and it happens by accident rather than by design.** Verified by
+ * running this file with pnpm removed from PATH: `SyntaxError: Unexpected end of JSON input`,
+ * exit 1.
+ *
+ * Switching to `||` would make `""` fall back to `"{}"`, which parses to zero advisories, which
+ * prints "No high/critical advisories found." and exits 0. **A security gate reporting a clean
+ * result for a scan that never ran** — "passed" made indistinguishable from "never checked".
+ *
+ * Whether to replace the accident with a deliberate check is an open decision, deliberately not
+ * taken while adding type checking to this file.
+ */
 function runAudit() {
   try {
     // Exits non-zero the moment any advisory meets --audit-level, so stdout is captured via the
     // error object rather than a clean return — the JSON body is what matters, not the exit code.
     return execSync("pnpm audit --audit-level=high --json", { encoding: "utf8" });
   } catch (err) {
-    return err.stdout ?? "{}";
+    // Behaviour deliberately unchanged here — see the note above runAudit().
+    return /** @type {{ stdout?: string }} */ (err).stdout ?? "{}";
   }
 }
 

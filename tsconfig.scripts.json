@@ -1,0 +1,22 @@
+{
+  // The two standalone Node scripts that are themselves GATES: one decides whether a manual
+  // production deploy proceeds, the other fails CI on a high/critical advisory. Neither lives in a
+  // workspace package, so `pnpm --recursive run typecheck` never saw them — a guard that can
+  // quietly stop guarding, which is this sprint's recurring shape (ADR-045).
+  //
+  // `checkJs` is deliberately FALSE: each file opts in with its own `// @ts-check`. That way the
+  // opt-in is visible where someone reads the file, and adding an unrelated script here later does
+  // not silently acquire (or silently escape) checking.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "types": ["node"],
+    "skipLibCheck": true
+  },
+  "include": ["scripts/preflight-deploy.js", ".github/scripts/check-audit.js"]
+}

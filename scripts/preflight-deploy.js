@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * Preflight gate for manual production deploys (`railway up`).
  *
@@ -24,6 +25,10 @@
 
 const { execFileSync } = require("node:child_process");
 
+/**
+ * @param {...string} args
+ * @returns {string}
+ */
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
@@ -39,7 +44,9 @@ try {
     failures.push(`On branch "${branch}", not "main".`);
   }
 } catch (err) {
-  failures.push(`Could not determine the current branch: ${err.message}`);
+  failures.push(
+    `Could not determine the current branch: ${err instanceof Error ? err.message : String(err)}`,
+  );
 }
 
 // 2. Working tree must be clean — including untracked files, which `railway up` uploads too.
@@ -57,7 +64,9 @@ try {
     );
   }
 } catch (err) {
-  failures.push(`Could not read the working tree state: ${err.message}`);
+  failures.push(
+    `Could not read the working tree state: ${err instanceof Error ? err.message : String(err)}`,
+  );
 }
 
 // 3. HEAD must equal origin/main — fetched fresh, not trusted from a stale local ref. Without the
@@ -79,7 +88,9 @@ try {
     );
   }
 } catch (err) {
-  failures.push(`Could not compare HEAD against origin/main: ${err.message}`);
+  failures.push(
+    `Could not compare HEAD against origin/main: ${err instanceof Error ? err.message : String(err)}`,
+  );
 }
 
 if (failures.length > 0) {
