@@ -4,7 +4,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.spec.ts"],
+    // test/*.spec.ts (top level only) covers specs that must import from prisma/ or test/, which a
+    // spec under src/ cannot do — tsconfig.json pins rootDir to ./src. Deliberately NOT recursive:
+    // test/load/ has its own config and its own script (test:load), because those specs fire real
+    // concurrent payment load and would flood the shared database that every other spec asserts on.
+    include: ["src/**/*.spec.ts", "test/*.spec.ts"],
     setupFiles: ["./test/setup.ts"],
     globalSetup: ["./test/global-setup.ts"],
   },

@@ -138,6 +138,44 @@ export async function seedRbac(prisma: PrismaClient): Promise<void> {
         update: {},
       });
     }
+
+    // Reconcile, rather than only add. Until this existed the loop above was the whole mechanism,
+    // and it could only ever grant: removing a Permission from a Role in this file changed nothing
+    // on a database that already had the row. **A permission granted once stayed granted forever**,
+    // and the file would go on describing a restriction that was not in force — the same shape as
+    // ADR-044's `platformOnly` flag, which shipped as code and never reached production data.
+    //
+    // Deliberately narrow, and the narrowness is the safety mechanism:
+    //
+    //   * Only `RolePermission` join rows. Never a `Permission` (deleting one would cascade to
+    //     every Role and break code that names it) and never a `Role` (Memberships point at it).
+    //   * Only for Roles named in ROLES above. A Role this file does not define was created by
+    //     something else, and the seed has no authority over it. No such Role exists today —
+    //     production holds exactly these four — so this costs nothing now and bounds the blast
+    //     radius if that ever changes.
+    //
+    // Every revocation is printed. This is the one operation here that destroys state, it runs
+    // under a human today (the seed is not part of any deploy), and that human should see what it
+    // took away rather than a summary count.
+    const intendedIds = permissionRows.map((p) => p.id);
+    const stale = await prisma.rolePermission.findMany({
+      // An empty intended set means "this Role should hold nothing", which has to delete every row
+      // rather than none. Written as two explicit branches instead of relying on how Prisma treats
+      // `notIn: []` — a claim about someone else's code that would be load-bearing here, and this
+      // project has already paid for two of those (ADR-031, fourth finding).
+      where:
+        intendedIds.length > 0
+          ? { roleId: roleRow.id, permissionId: { notIn: intendedIds } }
+          : { roleId: roleRow.id },
+      include: { permission: true },
+    });
+
+    for (const row of stale) {
+      console.log(`  REVOKING ${role.name} -> ${row.permission.name}`);
+      await prisma.rolePermission.delete({
+        where: { roleId_permissionId: { roleId: row.roleId, permissionId: row.permissionId } },
+      });
+    }
   }
   console.log(`Seeded ${PERMISSIONS.length} permissions and ${ROLES.length} roles.`);
 }
