@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
-    "typecheck": "pnpm --recursive run typecheck",
+    "typecheck": "pnpm --recursive run typecheck && tsc -p tsconfig.scripts.json",
     "test": "pnpm --recursive run test",
     "prisma:generate": "pnpm --filter backend run prisma:generate",
     "prisma:validate": "pnpm --filter backend run prisma:validate",
@@ -25,6 +25,7 @@
     "deploy:frontend": "pnpm run preflight:deploy && railway up --service frontend --detach"
   },
   "devDependencies": {
+    "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
