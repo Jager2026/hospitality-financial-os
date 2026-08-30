@@ -216,6 +216,23 @@ All five alert messages in the codebase were read:
 
 ---
 
+# 6. Retention — determined, and the claim that was blocking it was wrong
+
+**Founder determination, recorded as the Founder's, not as this document's own legal finding:**
+
+- **Ten years** for data connected to transactions — the accounting retention floor.
+- **The general contract rule** for everything else.
+
+**The correction that made this answerable, recorded because the wrong version was asserted first and would otherwise have stood.** The waiter's employment-status classification was believed to block retention periods. **It does not.** It blocks GPM — the tip-tax estimate's rate, legal basis, and who the tax agent is (ADR-029 Decision 2, `THREAT_MODEL.md`). Retention is decided by accounting law, which does not wait on that classification. The two questions were being answered as one, and only one of them was actually open.
+
+The practical consequence is the one that matters for the privacy policy: **retention periods can be written down now.** They were not blocked on anything.
+
+**What this determination immediately implies, and it is not free:** `AuditLog` does not have one retention period. A row recording a payment is transaction-connected and falls under the ten-year floor; a row recording a failed login is not, and falls under the general rule. Nothing in the schema distinguishes them today — `AuditLog` has an `entity` column that could, but no code reads it for this purpose. **A single retention period applied to the whole table would be either unlawfully short for the first kind or needlessly long for the second.** Named here rather than assumed away; it needs a decision before any purge job is written.
+
+**And retention cuts the other way too.** It is the reason the financial record survives an erasure request rather than a reason to be cautious about erasure: `Membership`, `LedgerLine`, `Payment`, `Wallet`, `Transaction`, `Refund` and `Adjustment` are retained **because the ten-year floor requires them**, not because deleting them would be awkward. §2's boundary is what makes that survivable — those rows attribute to `Membership.id`, never to a person.
+
+---
+
 # What this map does not answer
 
 - Whether any given Restaurant is a sole trader. The schema does not record it, and the legal answer differs per row.
