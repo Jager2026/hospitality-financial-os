@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.39.0
-status: Active — forty-seven ADRs, all Accepted
+version: 1.40.0
+status: Active — forty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -1215,6 +1215,45 @@ That nullability is exactly what makes the shared helper unsafe there, and the s
 Deliberately **not an allowlist**. The three excluded sites compare against a Membership's or a Wallet's `organizationId`, never a Restaurant's, so the pattern excludes them **by construction**. An allowlist would be a file someone edits to make the build green — the rubber-stamp degradation `CLAUDE.md` names, and a shape already rejected twice this sprint.
 
 **Consequences.** The utility's correction comment can finally be retired: the bound it describes is now enforced rather than asserted. Ten fewer places for the next version of a bug that has already occurred three times. The three exclusions are documented **in the utility itself**, where someone reaching for it will read them, rather than only here.
+
+---
+
+## ADR-048 — The seed runs on every deploy, and may never revoke while doing so
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** Two questions have been deliberately kept apart since ADR-046: *does the seed run automatically?* and *may the seed revoke?* Answering them together would have produced a system where every deploy can silently remove permissions, so they were separated and this ADR was required to answer both explicitly, in either direction.
+
+What made the question urgent is not hypothetical. **ADR-044's `platformOnly` fix shipped as code and never reached production data for eleven days**, because nothing runs the seed. The API refused nothing, because the column it reads was still `false`. A decision written into `seed.ts` is, today, a decision that has not happened.
+
+What makes it dangerous is equally concrete. `seedRbac` can now delete `RolePermission` rows, and the precedent for a stale matrix is in this repository: `test/global-setup.ts` kept its own copy and drifted to 4 of 10 Permissions and 3 of 4 Roles without anyone noticing. **A stale matrix that can only add is a documentation bug. A stale matrix that can delete is an outage.**
+
+**Decision: automate, additively. `seed.ts` joins `preDeployCommand`, and it is invoked WITHOUT `--allow-revocations`.**
+
+That single detail is the whole design, because it turns ADR-046's confirmation gate from a courtesy extended to manual runs into the mechanism that keeps the two questions separate in production:
+
+- A deploy **applies** everything additive — new Permissions, corrected descriptions, `platformOnly` flags. The ADR-044 class closes: intent reaches production by deploying, not by remembering.
+- A deploy **cannot remove** anything. If `seed.ts` and production disagree about a grant that exists but is no longer intended, `findStaleGrants` returns it, the gate refuses, the command exits non-zero, **and the deploy fails naming exactly which Role would have lost which Permission**.
+
+**"Automate" and "may revoke" are therefore answered differently — yes and no — which is what keeping them apart was for.**
+
+**What protects production from an incomplete `seed.ts`** — the question this ADR was required to answer:
+
+Under this decision, an incomplete `seed.ts` **cannot cause a loss**. Omit a Permission from a Role and the deploy stops rather than revoking. The failure is loud, blocking, and names the exact rows, which is the opposite of the silent divergence that cost eleven days.
+
+The residual risk is stated rather than argued away: a *wrongly added* grant still ships. That risk is unchanged from today's manual runs, and it is materially different in kind — an addition requires someone editing the matrix in a reviewed diff, whereas drift requires nobody doing anything at all. Divergence-by-neglect is the failure this project has actually suffered, twice.
+
+**And it converts ADR-046's one-off measurement into a standing condition.** That ADR verified production against the intended matrix once — 0 revocations, 0 grants pending — and a point-in-time fact decays. From now on that comparison runs on **every deploy**, and a divergence stops the deploy instead of waiting to be noticed by someone taking a measurement.
+
+**Consequences.**
+
+`railway.backend.json` gains a second `preDeployCommand` step. It runs after `prisma:migrate:deploy` and must: a new column added by a migration is what the seed then populates, which is precisely the ADR-044 sequence that failed when only the first half was automated.
+
+**The flag's absence is the decision, and it is visible in the diff.** Adding `--allow-revocations` there later would be a one-word change that silently converts this into "every deploy may revoke" — so it is named here explicitly: **that word must never appear in `railway.backend.json` without its own ADR.** The reason the gate was built as a flag rather than an interactive prompt (ADR-046 addendum) was exactly this — to make the dangerous half a visible, reviewable line rather than an implicit consequence.
+
+**A deploy can now fail for a data reason rather than a code reason**, which is new and deliberate. The failure message names the Role, the Permission, and the fix: reconcile the matrix in `seed.ts`, not the flag.
+
+**Not decided here:** whether the seed should ever be allowed to revoke automatically. That remains open and needs its own ADR, and this decision is designed so that it can be taken later without being taken by accident.
 
 ---
 
