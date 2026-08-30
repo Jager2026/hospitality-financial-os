@@ -81,12 +81,18 @@ jobs:
       # Both servers under test are the real production builds, started by Playwright's own
       # webServer from the real `start` scripts — not `dev`. A harness that only ever exercises the
       # development server proves the development server works.
-      - name: Build backend
-        run: pnpm --filter backend run build
-
-      - name: Build frontend
-        run: pnpm --filter frontend run build
-
+      #
+      # That build happens inside `test:e2e` below, via `apps/e2e/scripts/build-apps.mjs`, and NOT
+      # as a step here. This workflow used to carry its own "Build backend" / "Build frontend"
+      # steps, and they were **redundant and wrong at the same time**: `build:apps` rebuilt both
+      # apps moments later, so their output was always discarded — which is the only reason nobody
+      # noticed the frontend bundle they produced had no `NEXT_PUBLIC_API_URL` and therefore
+      # pointed at `localhost:3001` instead of the harness's backend on 3101.
+      #
+      # Found by ADR-050's build guard, which now runs on every build instead of only when it
+      # believes it is in production, and refused the step outright. A duplicated build that is
+      # thrown away is not free: it is a second place that has to agree about ports and
+      # environment, and it silently did not.
       - name: Install Playwright browser
         run: pnpm --filter e2e exec playwright install --with-deps chromium
 

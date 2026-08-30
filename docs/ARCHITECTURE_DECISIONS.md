@@ -1361,6 +1361,10 @@ Setting `NODE_ENV=production` on CI's build step was the obvious repair and is r
 - **CI sets the real production URL**, not a placeholder. It is public, it is what Railway builds with, and it makes CI's bundle equivalent to production's in the respect this guard is about.
 - **The guard is now tested** (`check-public-env.spec.ts`), as a real subprocess, in discriminating pairs — including a case asserting that no value of `NODE_ENV`, absent included, disables it. Falsified: restoring the old activation fails four of the five tests. The one that still passes is the one expecting acceptance, which is the correct asymmetry — a guard that checks nothing accepts everything.
 
+**What the guard found the moment it started running, which is the argument for the decision.** `e2e.yml` carried its own `Build backend` / `Build frontend` steps, and the frontend one set no `NEXT_PUBLIC_API_URL` at all. It had been producing a bundle pointing at `localhost:3001` instead of the harness's backend on 3101 — invisible because `test:e2e` rebuilds both apps correctly moments later through `build-apps.mjs`, so the wrong bundle was always discarded before a browser saw it.
+
+Both steps are deleted rather than given the missing variable: they were a duplicate build whose only effect was to be thrown away, and a duplicate is a second place that has to agree about ports and environment. It silently did not. **A guard that had never run found a real inconsistency on its first execution** — which is what the previous section's decision was for, and is the reason it is recorded here rather than as an incidental fix.
+
 **The audit this prompted, and its result.** Every environment-conditional guard in the codebase was enumerated:
 
 | guard | gated on | verdict |
