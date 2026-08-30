@@ -94,11 +94,17 @@ export class RestaurantController {
     return this.restaurantService.update(id, dto, user);
   }
 
+  // ADR-054: the ACTION is closing a venue, not deleting it — restaurants close, and the
+  // accounting for the years they traded is still needed. The HTTP method stays `DELETE` and the
+  // permission stays `restaurant.delete`: both are identifiers rather than words a customer
+  // reads, and changing the permission would be an RBAC data migration whose reconciliation gate
+  // (ADR-048) would refuse the next deploy. The method name is renamed because it is read by
+  // engineers, and it was the part that lied.
   @Delete("restaurants/:id")
   @HttpCode(HttpStatus.NO_CONTENT)
   @AuditEntity("Restaurant")
-  async remove(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
-    await this.restaurantService.remove(id, user);
+  async close(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
+    await this.restaurantService.close(id, user);
   }
 
   @Post("restaurants/:id/onboarding-link")
