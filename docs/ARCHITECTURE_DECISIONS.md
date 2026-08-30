@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.37.0
+version: 1.38.0
 status: Active — forty-six ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -1162,6 +1162,31 @@ There is no "after" measurement here, and the reason is not an omission. For ADR
 **Consequence, and the Founder asked for this explicitly: running the seed is now strictly more dangerous than it was.** Before, `seedRbac` could only add and correct; running it against any database was safe in the sense that nothing could be lost. Now it can revoke. That does not change the mechanism's correctness — it changes who may run it and when, and a manual run has become a privileged operation rather than an idempotent convenience.
 
 **It does not make the deploy question inevitable, but it moves it in both directions at once**, and that is the honest summary. Reconciliation that never runs in production is a document, exactly like `platform_only` was — so this makes automating the seed **more necessary**. And reconciliation that runs on every deploy means every deploy can revoke permissions — so it makes automating the seed **more dangerous**. The two decisions the Founder separated (*the seed runs on every deploy* / *the seed may delete*) are now one apart rather than two, and the remaining one is the one with teeth. The question that decision must answer is unchanged and unanswered here: **if the seed is authoritative and runs automatically, what protects production from an incomplete `seed.ts`?** `test/global-setup.ts` already proves the premise is real — its hand-copied matrix went stale at 4 of 10 Permissions and 3 of 4 Roles. A stale matrix that can only add is a documentation bug; a stale matrix that can delete is an outage.
+
+### Addendum to ADR-046 — a confirmation gate, because the state we left it in was the worst of the three
+
+**The Founder named the problem before it bit anyone, and the naming is the contribution.** After the reconciliation landed, production held a `seed.ts` that *can revoke permissions* and that *nobody runs*. That is worse than either alternative. A seed that cannot revoke is merely inaccurate. A seed that revokes and runs automatically is at least a known, reviewed risk. **A seed that can revoke and is run occasionally by hand is a loaded mechanism with no owner** — and the first person to run `pnpm db:seed` "to apply the changes" would perform a privileged operation without being told it was one.
+
+**Decision: a run that would revoke stops and says what, instead of doing it.** `--allow-revocations`, or `SEED_ALLOW_REVOCATIONS=1`, proceeds. An accidental run cannot revoke silently; a deliberate one is one flag away. Not a block — a gate.
+
+**Gating the script rather than `seedRbac()` is the load-bearing detail.** The function stays a plain library call for `test/global-setup.ts` and the specs, which create and revoke rows constantly and must never be prompted. Only the human-facing entry point asks. Had the gate gone inside `seedRbac`, every test run would have had to opt out of it, and an opt-out that everything sets is not a gate.
+
+**A flag rather than an interactive prompt, chosen for what it does to the decision still open.** An interactive prompt cannot survive automation — a deploy has no stdin and would hang. The flag has to be written into `railway.backend.json`, where it is visible in a diff, reviewed like any other config, and unmistakably says *"the seed may revoke on every deploy."* **The gate shapes that decision rather than pre-empting it**, which was the requirement: relieve the acute problem without quietly settling the large one.
+
+**The preview and the action share one implementation.** `findStaleGrants` is exported, read-only, and is what both the gate and `seedRbac` consult. A separately-written preview could disagree with what the run actually deletes, which would be worse than showing nothing — a second definition of "stale" is the same drift this whole area exists to prevent. Asserted: the helper reports the grant *and leaves it in place*.
+
+**Verified on the real database, all three paths:**
+
+| state | command | result |
+|---|---|---|
+| nothing to revoke | `tsx prisma/seed.ts` | seeds normally, exit 0 |
+| one revocation pending | `tsx prisma/seed.ts` | refuses, names `Waiter -> roles.manage`, **exit 1** |
+| — | (checked immediately after) | **the row is still there — nothing was applied, not even currencies** |
+| same state | `--allow-revocations` | `REVOKING Waiter -> roles.manage`, exit 0 |
+
+The refusal happens before any write at all, including `seedCurrencies`: a run that is going to be refused must not have half-applied something first.
+
+**Its limit, stated so it is not mistaken for the answer.** Once the flag is added to automation it is permanent and silent thereafter. **This stops accidental revocation; it does not decide whether the seed should be authoritative.** That remains an open ADR, and its question is unchanged: if the seed runs automatically, what protects production from an incomplete `seed.ts`? What has changed is the urgency — the acute failure mode (an unaware operator) is closed, so the large decision can be made deliberately rather than under pressure.
 
 ---
 
