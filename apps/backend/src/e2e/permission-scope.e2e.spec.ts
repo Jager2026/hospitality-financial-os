@@ -75,6 +75,20 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
   let restaurantA: string; // reachable AND permitted for dualRole
   let restaurantB: string; // reachable, but only through a zero-permission Membership
 
+  // A Payment and a Transaction that genuinely belong to Restaurant B, so the by-id reads below
+  // ask about a real row rather than a missing one — a 404 for "no such row" would look exactly
+  // like a 404 for "not yours", and the whole measurement turns on telling those apart.
+  //
+  // The Payment is created through the REAL endpoint by B's own Owner rather than seeded:
+  // `Payment.idempotencyKey` is a foreign key into the idempotency table, so a hand-built row is
+  // not merely inauthentic, it cannot exist. The Transaction is seeded, and its shape was wrong
+  // on the first attempt — four fields that do not exist on the model. Caught by the database
+  // rejecting it, which is the only reason it did not become a fixture describing a system that
+  // is not this one.
+  let stranger: Actor; // Owner of Restaurant B, used to create B's own rows through the real API
+  let paymentAtB: string;
+  let transactionAtB: string;
+
   async function registerAndLogin(label: string): Promise<Actor> {
     const email = `scope-${label}-${randomUUID()}@example.com`;
     await request(app.getHttpServer()).post("/api/v1/auth/register").send({
@@ -155,7 +169,7 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
     // A second, unrelated Organization, owned by someone else. The subject is invited into it as
     // a Waiter — through the real invite and accept endpoints, so the Membership and its Role are
     // exactly what the product produces.
-    const stranger = await registerAndLogin("stranger");
+    stranger = await registerAndLogin("stranger");
     restaurantB = await createRestaurant(stranger, "Scope Other Restaurant");
 
     const waiterRole = await prisma.role.findUnique({ where: { name: "Waiter" } });
@@ -184,6 +198,28 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
       relogin.body.data.memberships.length,
       "the subject must genuinely hold two Memberships for this test to mean anything",
     ).toBe(2);
+
+    // Created through the REAL endpoint by B's own Owner. `Payment.idempotencyKey` is a foreign
+    // key into the idempotency table, so a hand-seeded row is not merely inconvenient — it cannot
+    // exist. Going through the endpoint also means the row is exactly what the product produces.
+    const createdAtB = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("Authorization", `Bearer ${stranger.accessToken}`)
+      .set("Idempotency-Key", randomUUID())
+      .send({ restaurantId: restaurantB, amount: 5000, tipAmount: 0 });
+    expect(createdAtB.status, JSON.stringify(createdAtB.body)).toBe(201);
+    paymentAtB = createdAtB.body.data.id as string;
+
+    const transaction = await prisma.transaction.create({
+      data: {
+        paymentId: paymentAtB,
+        restaurantId: restaurantB,
+        grossAmount: 5000n,
+        currency: "EUR",
+        status: "COMPLETED",
+      },
+    });
+    transactionAtB = transaction.id;
   }, 60_000);
 
   afterAll(async () => {
@@ -294,7 +330,7 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
     expect(ids.length, `leaked ${ids.length} rows: ${JSON.stringify(res.body)}`).toBe(0);
   });
 
-  it("the same, for taking a payment at someone else's restaurant", async () => {
+  it("the same, for taking a payment at someone else's restaurant — and for the RIGHT reason", async () => {
     // The sharpest of the set: `payments.manage` held in Organization A must not let this person
     // create a charge on Restaurant B's Stripe account.
     const res = await request(app.getHttpServer())
@@ -303,6 +339,87 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
       .set("Idempotency-Key", randomUUID())
       .send({ restaurantId: restaurantB, amount: 1000, tipAmount: 0 });
     expect(res.status, `leaked: ${JSON.stringify(res.body)}`).not.toBe(201);
+
+    // `not.toBe(201)` was the whole assertion until now, and it is not enough. This route's
+    // service checks REACHABILITY, not the permission at the target restaurant, and the caller is
+    // genuinely reachable at B through the Waiter Membership — so a refusal here could equally
+    // well be an unrelated 400 (an un-onboarded Stripe account, a currency mismatch), leaving the
+    // test green while the scoping it claims to prove does not exist.
+    //
+    // Asserting the reason is what separates "denied" from "happened to fail". A status of 400
+    // fails this deliberately: it would mean the protection is a side effect of setup, not a rule.
+    expect(
+      [403, 404],
+      `refused, but for an unrelated reason — status ${res.status}, body ${JSON.stringify(res.body)}`,
+    ).toContain(res.status);
+  });
+
+  // ─── The by-id reads: three routes carrying NO @RequirePermission at all ─────────────────────
+  //
+  // `GET /payments/:id`, `GET /payments/:id/status` and `GET /transactions/:id` are guarded by
+  // JwtAuthGuard alone and scoped by reachability inside their services. There is no coarse
+  // permission check above them to be "doubled" — reachability is the entire rule.
+  //
+  // ADR-043 closed exactly this shape for the LIST routes, having found that a Waiter saw a
+  // restaurant's full payment history, amounts and tips included. The by-id routes were not part
+  // of that change and have never been covered by any test.
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // `it.fails` — these three assert the CORRECT behaviour and are marked as currently failing.
+  //
+  // Measured, not inferred: all three return **200** with a full body to a caller whose only
+  // relationship to Restaurant B is a zero-permission Waiter Membership. `GET /payments/:id`
+  // returns amount, tip, currency, processor id and idempotency key; `GET /transactions/:id`
+  // returns gross, net revenue, net tip, net platform fee, tax, refunds and chargebacks.
+  //
+  // THREAT_MODEL.md carries this as an open finding. The fix is deliberately NOT in this change —
+  // the measurement and the remedy are separate pieces of work, and a vulnerability recorded
+  // before it is fixed is one nobody can quietly decide was never real.
+  //
+  // `it.fails` rather than `it.skip`, deliberately: a skipped test is invisible and rots, while
+  // this one **fails the moment the leak is closed** ("expected to fail but passed"), forcing
+  // whoever fixes it to come here and turn it into an ordinary `it`. It is a marker that destroys
+  // itself on success.
+  it.fails(
+    "a payment at a restaurant reached only as a zero-permission Waiter is not readable by id",
+    async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/payments/${paymentAtB}`)
+        .set("Authorization", `Bearer ${dualRole.accessToken}`);
+      expect(res.status, `leaked a payment: ${JSON.stringify(res.body)}`).not.toBe(200);
+    },
+  );
+
+  it.fails("nor is its status", async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/payments/${paymentAtB}/status`)
+      .set("Authorization", `Bearer ${dualRole.accessToken}`);
+    expect(res.status, `leaked a payment status: ${JSON.stringify(res.body)}`).not.toBe(200);
+  });
+
+  it.fails("nor the transaction behind it", async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/transactions/${transactionAtB}`)
+      .set("Authorization", `Bearer ${dualRole.accessToken}`);
+    expect(res.status, `leaked a transaction: ${JSON.stringify(res.body)}`).not.toBe(200);
+  });
+
+  it("but the SAME reads succeed at the caller's own restaurant — without this, the three above prove nothing", async () => {
+    // A route that refused everything would satisfy all three denials, and a route that answered
+    // everything satisfies this one. Together they say the three above are measuring scope rather
+    // than a broken route — which matters more than usual here, because those three are currently
+    // recording a leak and a reader must be able to tell a leak from a misconfigured fixture.
+    const own = await request(app.getHttpServer())
+      .post("/api/v1/payments")
+      .set("Authorization", `Bearer ${dualRole.accessToken}`)
+      .set("Idempotency-Key", randomUUID())
+      .send({ restaurantId: restaurantA, amount: 5000, tipAmount: 0 });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/payments/${own.body.data.id as string}`)
+      .set("Authorization", `Bearer ${dualRole.accessToken}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
   });
 
   it("the same, for inviting staff into someone else's restaurant", async () => {
