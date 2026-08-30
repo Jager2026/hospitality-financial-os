@@ -8,5 +8,10 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // Specs are excluded from the BUILD, not from typechecking (tsconfig.typecheck.json still
+  // covers them). Two reasons, and the second was the surprise: test code was being compiled into
+  // the production bundle — 50 *.spec.js files shipped to Railway — and `rootDir: ./src` meant a
+  // spec could never import a shared fixture from test/ without failing the build.
+  "exclude": ["src/**/*.spec.ts"]
 }
