@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import { AppException } from "../../common/exceptions/app.exception";
 import { PrismaService } from "../../prisma/prisma.service";
+import { ACTIVE_MEMBERSHIP_WHERE, MEMBERSHIP_ROLE_INCLUDE } from "../active-memberships";
 import { TokenService } from "../token.service";
 
 export interface AuthenticatedUser {
@@ -41,12 +42,14 @@ export class JwtAuthGuard implements CanActivate {
 
     const payload = await this.tokenService.verifyAccessToken(token);
 
+    // The `where` is the whole point and is not decoration: without it a Membership set to
+    // INACTIVE by `PATCH /memberships/{id}/disable` still arrived here with its Role and every
+    // permission attached, and nothing downstream could tell — `AuthenticatedUser` carries no
+    // status field. See `active-memberships.ts`.
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: {
-        memberships: {
-          include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
-        },
+        memberships: { where: ACTIVE_MEMBERSHIP_WHERE, include: MEMBERSHIP_ROLE_INCLUDE },
       },
     });
 

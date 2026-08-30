@@ -129,8 +129,13 @@ describe("AuthService — login", () => {
         },
       ],
     });
+    // The `status`/`deletedAt` filter is spelled out here rather than compared against the shared
+    // constant, deliberately: this is the assertion that fails if someone removes it, and it
+    // should fail with a diff that names what went missing. Without it, `PATCH
+    // /memberships/{id}/disable` is a no-op — a disabled Manager kept reading the dashboard, proven
+    // by execution in `e2e/disabled-membership.e2e.spec.ts` before this filter existed.
     expect(findMany).toHaveBeenCalledWith({
-      where: { userId: user.id },
+      where: { userId: user.id, status: "ACTIVE", deletedAt: null },
       include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
     });
     expect(update).toHaveBeenCalledWith({
