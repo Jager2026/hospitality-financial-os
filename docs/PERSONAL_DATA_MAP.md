@@ -149,7 +149,15 @@ Therefore:
 - `PATCH /memberships/{id}/disable` sets `status: "INACTIVE"`, which is a different thing — the row remains active data, merely not usable for login.
 - **There is no route that deletes a User.** The only `@Delete` in the codebase is `DELETE /restaurants/:id`.
 
-**And soft delete does not redact anything.** A soft-deleted row is fully readable; the effect is that 16 read sites filter `deletedAt: null`.
+**Soft delete on a Restaurant works — as an operational deactivation. It is not, and never was, a privacy mechanism.** The earlier wording here ("does not redact anything; a soft-deleted row is fully readable") was true and misleading in the same sentence, and it produced the reasonable but wrong conclusion that the flag hides nothing. Corrected, with the actual counts:
+
+**Eleven Restaurant reads filter `deletedAt: null`**, including `restaurant-reachability.util.ts:178` — the single consolidated gate (ADR-047) through which every restaurant-scoped operation passes. A deleted Restaurant drops out of the owner's list (`restaurant.service.ts:106`), cannot be fetched (`:190`), cannot take a payment (`payment.service.ts:212`), be configured (`settings.service.ts:48`), have tips set (`tip.service.ts:123`), be invited into (`membership-invitation.service.ts:59`, `membership.controller.ts:147`), or list staff (`membership.service.ts:56`).
+
+**Four reads deliberately do not filter, and the split is the same one ADR-051 drew.** `payment.service.ts:194` and `:159`, `transaction.service.ts:235`, and the wallet's name lookups reach a Restaurant through historical financial rows — a payment taken before the restaurant closed still happened. Reporting reads must not filter. One more, `restaurant.service.ts:158`, resolves a Stripe `account.updated` webhook by `stripeAccountId` and must find the row regardless; whether a closed restaurant should still absorb Stripe status updates is an open question, noted rather than answered.
+
+**What it genuinely does not do is redact.** The row keeps `legalName`, `email`, `phone`, `address`, `companyNumber`, `vatNumber` — every field that is personal data when the Restaurant is a sole trader (§1). Deleting a Restaurant removes an operation, not a person.
+
+**And none of it is tested.** There is no assertion anywhere in the suite that a deleted Restaurant disappears from any of those eleven paths. The behaviour above is established by reading the code, not by executing it — which is a weaker claim than this document should be making about an access-affecting flag, and is named here rather than glossed.
 
 **The seven Membership reads have now been untangled, and doing so found a live authorization defect (ADR-051).** Four filtered, three did not — and the three splits cleanly in two:
 
