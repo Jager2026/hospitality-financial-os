@@ -4,6 +4,7 @@ import { CURRENT_PLATFORM_TERMS_VERSION } from "../common/agreements/agreement-v
 import type { User } from "@prisma/client";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
+import { ACTIVE_MEMBERSHIP_WHERE, MEMBERSHIP_ROLE_INCLUDE } from "./active-memberships";
 import { isPasswordBreached } from "./hibp.util";
 import type { LoginDto } from "./dto/login.schema";
 import type { RegisterDto } from "./dto/register.schema";
@@ -200,9 +201,15 @@ export class AuthService {
   // fresh rather than passed in by the caller, so register/login/refresh can't drift out of sync
   // with each other on what "the current Memberships" means.
   private async toAuthResult(user: User, tokens: TokenPair): Promise<AuthResult> {
+    // "Same query shape as JwtAuthGuard's own" is now enforced by sharing the definition rather
+    // than promised in a comment — the two literals had already drifted apart on the thing that
+    // mattered most, and neither filtered a disabled Membership out. Sharing it also keeps the
+    // login response honest: advertising a Membership the Guard will refuse to honour would send
+    // the Portal's own post-login fork (`destinationAfterLogin`) to a restaurant the caller
+    // cannot actually open.
     const memberships = await this.prisma.membership.findMany({
-      where: { userId: user.id },
-      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
+      where: { userId: user.id, ...ACTIVE_MEMBERSHIP_WHERE },
+      include: MEMBERSHIP_ROLE_INCLUDE,
     });
 
     return {

@@ -149,7 +149,21 @@ Therefore:
 - `PATCH /memberships/{id}/disable` sets `status: "INACTIVE"`, which is a different thing — the row remains active data, merely not usable for login.
 - **There is no route that deletes a User.** The only `@Delete` in the codebase is `DELETE /restaurants/:id`.
 
-**And soft delete does not redact anything.** A soft-deleted row is fully readable; the effect is that 16 read sites filter `deletedAt: null`. Seven Membership reads exist in the backend and not all of them apply that filter — untangling which is future work, noted rather than resolved.
+**And soft delete does not redact anything.** A soft-deleted row is fully readable; the effect is that 16 read sites filter `deletedAt: null`.
+
+**The seven Membership reads have now been untangled, and doing so found a live authorization defect (ADR-051).** Four filtered, three did not — and the three splits cleanly in two:
+
+| read | filters | verdict |
+|---|---|---|
+| `membership.service.ts` ×3, `payment.service.ts` | `deletedAt`, and `status` where relevant | correct |
+| `jwt-auth.guard.ts`, `auth.service.ts` (`toAuthResult`) | **neither** | **the defect** — fixed by ADR-051 |
+| `analytics.service.ts`, `dashboard.service.ts` | neither | **correct as-is**, see below |
+
+The authorization path filtered nothing, which meant `PATCH /memberships/{id}/disable` set `status = "INACTIVE"` and the disabled person kept every permission. Proven by execution before it was fixed: a disabled Manager read the restaurant's dashboard with a token minted after the disable.
+
+The two analytics reads attach names to already-ranked results. They are **historical**, and must not filter: a disabled waiter's tips still happened, and excluding them would misstate what a restaurant earned. **Authorization reads filter; reporting reads do not** — and applying one rule uniformly would have silently corrupted every report spanning a staffing change.
+
+This is also the map's first finding to change behaviour rather than describe it, and it arrived from a question about erasure rather than about access. The two are the same question asked at different times: **what does the system do when a person is supposed to stop being present?**
 
 **So: today there is no mechanism, soft or hard, to remove or obscure a person's data. A GDPR erasure request has no code path at all.** Stated plainly because it is the single most consequential fact in this document.
 
@@ -199,6 +213,6 @@ All five alert messages in the codebase were read:
 - Whether any given Restaurant is a sole trader. The schema does not record it, and the legal answer differs per row.
 - Whether the CSV exports carry personal fields beyond the one identified. Sampled, not enumerated.
 - Stripe's retention period for the identity data it holds on our connected accounts.
-- Which of the seven Membership read paths apply the `deletedAt` filter.
+- Whether disabling a Membership should also revoke that person's refresh tokens (ADR-051 — a session question, deliberately separate from the access question it answers).
 
 Each is listed rather than guessed, and none of them changes §2's boundary.

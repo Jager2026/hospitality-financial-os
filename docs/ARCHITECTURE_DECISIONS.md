@@ -1384,5 +1384,33 @@ The discriminating property is not which variable is read. It is **whether the p
 
 ---
 
+## ADR-051 — Disabling a Membership did nothing, and the fix belongs at the query rather than at every reader
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** `PATCH /memberships/{id}/disable` is the product's only mechanism for taking someone's access away — a manager leaves, a waiter is let go, an account is compromised. It set `Membership.status = "INACTIVE"` and **changed nothing about what that person could do.**
+
+`JwtAuthGuard` loaded `user.memberships` with no filter. `AuthenticatedUser.memberships` carried no `status` field at all, so `PermissionsGuard` and `restaurant-reachability.util.ts` could not have consulted one even in principle. The only `status !== "ACTIVE"` check in the auth path is on the **`User`** row — a different row, untouched by disabling a Membership. `AuthService.toAuthResult` had the same gap, so the login response also advertised memberships that were no longer meant to exist.
+
+**Found while answering an unrelated question** about `PERSONAL_DATA_MAP.md`'s open items, by reading which Membership queries filter `deletedAt` — and noticing that the authorization path filtered neither `deletedAt` nor `status`.
+
+**Established by execution, not by reading**, because the claim was about something that does *not* happen — the shape this project has been wrong about before, when a text search certified a cross-Organization check that short-circuiting made unreachable. `e2e/disabled-membership.e2e.spec.ts` boots the real app: a Manager reads the dashboard (200), the Owner disables their Membership, the row is confirmed `INACTIVE` in the database, and the Manager reads the dashboard again — **200, with a token minted after the disable.** Also 200 with the token they already held, which rules out a stale-token explanation: the Guard re-reads from the database on every request.
+
+**Decision: exclude the rows at the query, in one shared definition, rather than adding `status` to `AuthenticatedUser` and checking it at each reader.**
+
+Two Guards and six services read `user.memberships`. A rule each of them must remember is a rule that gets forgotten once, in the file nobody looked at — and the forgetting is invisible, because the code still compiles and the tests still pass. Filtering where the memberships enter the request makes *"the caller holds this Membership"* mean *"…and it is currently in force"* everywhere, with nothing to remember.
+
+`ACTIVE_MEMBERSHIP_WHERE` and `MEMBERSHIP_ROLE_INCLUDE` live in `auth/active-memberships.ts` and are imported by both consumers. `toAuthResult`'s own comment already claimed "same query shape as JwtAuthGuard's own" — **a promise that two literals will stay equal, which this codebase has twice paid for** (`global-setup.ts`'s permission matrix; the hand-typed Role fixtures). They had in fact already drifted on the thing that mattered least and agreed on the thing that mattered most, which was being wrong.
+
+**`deletedAt: null` is included although nothing writes it on a Membership today.** It costs nothing now and has to already be in place on the day an erasure path exists (`PERSONAL_DATA_MAP.md` §4) — otherwise soft-deleting a person would be the same silent no-op this ADR closes.
+
+**Which reads deliberately do NOT get this filter, because the distinction is the interesting part.** `analytics.service.ts` and `dashboard.service.ts` look up Membership rows to attach names to already-ranked results. Those are **historical** reads: a disabled waiter's tips still happened, and excluding them would misstate what a restaurant earned. **Authorization reads must filter; reporting reads must not.** Filtering everything would have been the easy uniform answer and would have quietly corrupted every report that spans a staffing change.
+
+**Consequences.** Disabling now takes effect on the caller's next request, with no logout required — the Guard re-reads per request, so there is no revocation delay and no token to invalidate. A login by someone whose only Membership is disabled returns zero memberships, which the Portal's own post-login fork already handles as the "no Memberships" case.
+
+**Not addressed here:** whether a disabled Membership should be visible in the staff list (it currently is, which is correct — a manager needs to see who they disabled), and whether disabling should also revoke that person's refresh tokens. The second is a real question and is deliberately separate: it changes session semantics rather than access semantics, and nothing today depends on it now that permissions are re-read per request.
+
+---
+
 ## Superseded / Retired
 - **CTO Operating Manual** — superseded by ADR-011; content to be merged into `CLAUDE_RULES.md`, then removed from the repository.
