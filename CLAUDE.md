@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.11.0
+version: 2.12.0
 status: Active
 classification: Critical
 priority: Highest
@@ -205,7 +205,13 @@ The same applies to processes, not only files. A server started by hand to verif
 
 So: **before writing the guard, work out which of three shapes the variable has.** Optional with no default — require it. Defaulted — constrain the value, since presence is unobservable. A gate that other rules are conditional on — remove the default entirely, because nothing conditional can protect the condition itself. Reaching for the first remedy three times would have failed twice.
 
-One adjacent trap, found while documenting the first: **optional means absent, not blank.** `ALERT_WEBHOOK_URL=""` is not an unset variable — it is a present one holding an empty string, and it fails a URL rule that `undefined` would have skipped. An `.env.example` line offering an empty value for an optional variable therefore breaks the setup it is meant to help. Caught by testing the line before shipping it, having written it wrong first.
+**The empty string is a present value, not an absent one — and this is a class, not an anecdote, because it has now bitten three times in three unrelated places within two days.** Absence and emptiness are different states, `??` and `.optional()` only ever see the first, and every language-level convenience for "is it missing?" quietly agrees with them.
+
+- **`ALERT_WEBHOOK_URL=""` in `.env.example`.** Not an unset variable: a present one holding `""`, which fails a URL rule that `undefined` would have skipped. The line meant to help someone set the project up would have broken their boot. Caught by testing the line before shipping it, having written it wrong first.
+- **`FRONTEND_URL`'s default.** A `.default()` guarantees the value is never absent, so "require it in production" inspects something that is always there. Presence was unobservable; only the *value* could be constrained.
+- **`err.stdout` in the CI security gate.** When `pnpm audit` cannot run, stdout is `""`, not `undefined`, so `?? "{}"` never fired and `JSON.parse("")` threw. The gate failed closed **by accident** — and one plausible cleanup (`||` for `??`) would have converted it into a gate reporting a clean scan that never ran.
+
+The three share one shape and one lesson: **whenever code asks "is this missing?", check what it does with empty.** The answer differs for `??` (empty passes through), `||` (empty is falsy, so it is treated as missing), `.optional()` (empty is present and gets validated), and `if (!x)` (empty counts as missing). Picking the wrong one is invisible until the empty case actually happens, which is exactly when something else has already gone wrong.
 
 **A mechanism that legitimate work has to bypass routinely degrades into a rubber stamp.** Not occasionally — by design, because the bypass becomes the habit and the habit stops carrying thought. Two versions were avoided within two days, both by moving the mechanism rather than weakening it. A confirmation gate placed inside `seedRbac()` would have had to be waived by every test run and `global-setup`, so it went on the command-line entry point instead, where the only caller is a human. And a check listing "optional variables that look risky" would have needed an allowlist, which someone edits to make the build green — the same decay that let `test/global-setup.ts`'s permission matrix go stale for a whole sprint. **When designing a guard, ask who has to get past it on an ordinary day. If the answer is "most callers", the guard is in the wrong place** — and the fix is usually to move it to the boundary where the exceptional case actually lives, not to add an exception list.
 
