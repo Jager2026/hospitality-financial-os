@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -28,5 +28,44 @@ describe("repository invariants", () => {
     const docs = readFileSync(join(REPO_ROOT, "docs", "CLAUDE_RULES.md"), "utf8");
 
     expect(docs).toBe(root);
+  });
+
+  // The mechanism against recurrence, required before the consolidation was allowed to land.
+  //
+  // The count went from three to thirteen without anyone deciding to widen it: each new module
+  // simply wrote the predicate inline, and the utility's own comment went on describing a bound
+  // that had stopped being true. Consolidating without a check would reset the counter and leave
+  // the same drift free to happen again — and this predicate has already shipped wrong three
+  // times (RestaurantService.findAllForUser, TipService.assertReachable, and the
+  // cross-Organization leak in MembershipService).
+  //
+  // Deliberately NOT an allowlist. The three legitimate nullable-target sites
+  // (MembershipService ×2, WalletService) compare against a Membership's or Wallet's
+  // organizationId, never a Restaurant's, so this pattern excludes them **by construction**. An
+  // allowlist would be a file someone edits to make the build green — the rubber-stamp
+  // degradation CLAUDE.md names, and the reason that shape was rejected twice already this sprint.
+  it("keeps the restaurant reachability predicate out of every call site (one implementation, not thirteen)", () => {
+    const SRC = join(REPO_ROOT, "apps", "backend", "src");
+    const UTIL = join(SRC, "common", "restaurant-reachability.util.ts");
+    const PREDICATE = "m.organizationId === restaurant.organizationId";
+
+    function walk(dir: string): string[] {
+      return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return walk(full);
+        if (!entry.name.endsWith(".ts") || entry.name.endsWith(".spec.ts")) return [];
+        return [full];
+      });
+    }
+
+    const offenders = walk(SRC)
+      .filter((file) => file !== UTIL)
+      .filter((file) => readFileSync(file, "utf8").includes(PREDICATE))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(
+      offenders,
+      `Use isRestaurantReachable/hasPermissionAtRestaurant/findGrantingMembership from restaurant-reachability.util.ts instead of writing the predicate inline. Offending files:\n${offenders.join("\n")}`,
+    ).toEqual([]);
   });
 });

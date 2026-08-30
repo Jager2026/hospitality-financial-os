@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.38.0
-status: Active — forty-six ADRs, all Accepted
+version: 1.39.0
+status: Active — forty-seven ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -1187,6 +1187,34 @@ There is no "after" measurement here, and the reason is not an omission. For ADR
 The refusal happens before any write at all, including `seedCurrencies`: a run that is going to be refused must not have half-applied something first.
 
 **Its limit, stated so it is not mistaken for the answer.** Once the flag is added to automation it is permanent and silent thereafter. **This stops accidental revocation; it does not decide whether the seed should be authoritative.** That remains an open ADR, and its question is unchanged: if the seed runs automatically, what protects production from an incomplete `seed.ts`? What has changed is the urgency — the acute failure mode (an unaware operator) is closed, so the large decision can be made deliberately rather than under pressure.
+
+---
+
+## ADR-047 — Ten reachability call sites become one helper; three deliberately do not
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** ADR-005's reachability rule — an org-wide Membership reaches every Restaurant in its own Organization, a restaurant-scoped one reaches only the Restaurant it names — was written inline at thirteen call sites. The utility extracted for it in Sprint 9 carried a comment saying three sites were left alone "to avoid unrelated churn"; that sentence was accurate when written and then **the exception silently grew**, because each new module wrote the predicate inline rather than importing anything.
+
+The count is not an aesthetic complaint. **This predicate has shipped wrong three times**: `RestaurantService.findAllForUser` (Sprint 4, live), `TipService.assertReachable` (Sprint 6, caught in self-review), and the cross-Organization leak in `MembershipService` found while surveying for this very consolidation.
+
+**Decision 1 — ten sites now call the shared helpers**, across `membership`, `payment`, `restaurant`, `settings`, `tip` and `transaction`. Only the *predicate* is shared. **Each site keeps its own `throw`**, because they are genuinely different: `NOT_FOUND`, `RESTAURANT_NOT_FOUND` and `PAYMENT_NOT_FOUND` all appear, and `TransactionService` deliberately answers "Transaction not found." for an unreachable Restaurant. Sharing the throwing wrapper would have forced those messages to converge, which is a product decision this refactor has no mandate to make.
+
+**Decision 2 — `payment.service.ts`'s site gets `findGrantingMembership` rather than being bent to fit.** `getGrantingMembershipOrThrow` uses `.find()` and returns the Membership; `hasPermissionAtRestaurant` returns a boolean from `.some()`. Substituting the boolean helper would have changed the signature of a money-path method. So the utility gained a finder, and `hasPermissionAtRestaurant` is now defined as `findGrantingMembership(...) !== undefined` — the same test over the same predicate, one implementation instead of two that happen to agree.
+
+Checked rather than assumed: payment's caller **discards** the returned Membership (`payment.service.ts:59`), so the `find`/`some` difference is not observable today. The return type is preserved anyway — narrowing a money-path signature for a refactor's convenience is not a trade this refactor is entitled to make.
+
+**Decision 3 — three sites are excluded, and the reasoning is now proof rather than judgement.** `MembershipService.getReachableOrThrow`, `MembershipService.assertPermission` and `WalletService.assertReachable` reach a **Membership** or a **Wallet**, whose `restaurantId` is legitimately nullable — unlike a Restaurant's `id`, which never is.
+
+That nullability is exactly what makes the shared helper unsafe there, and the survey proved it: with an org-wide target, `m.restaurantId === target.restaurantId` is `null === null` for any caller holding an org-wide Membership in **any** Organization, and `||` short-circuits before the `organizationId` comparison runs. `MembershipService` had shipped that and leaked across Organizations; `WalletService` faces the same nullable target and is correct, because it refuses org-wide Wallets outright with an explicit `restaurantId !== null` guard.
+
+**The two looked like the same call and differed on precisely the check that decides.** Folding them into one helper would have propagated whichever version was chosen — and the broken one is the one that reads like the others. **Three honest copies of a rule are safer than ten honest ones plus two pretending to be the same call.**
+
+**Decision 4 — a check, because the counter has already run away once.** `repo-invariants.spec.ts` fails if `m.organizationId === restaurant.organizationId` appears in any backend source file outside the utility. Falsified by reintroducing the predicate in `tip.service.ts`: the suite fails and names the file.
+
+Deliberately **not an allowlist**. The three excluded sites compare against a Membership's or a Wallet's `organizationId`, never a Restaurant's, so the pattern excludes them **by construction**. An allowlist would be a file someone edits to make the build green — the rubber-stamp degradation `CLAUDE.md` names, and a shape already rejected twice this sprint.
+
+**Consequences.** The utility's correction comment can finally be retired: the bound it describes is now enforced rather than asserted. Ten fewer places for the next version of a bug that has already occurred three times. The three exclusions are documented **in the utility itself**, where someone reaching for it will read them, rather than only here.
 
 ---
 
