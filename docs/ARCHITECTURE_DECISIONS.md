@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.34.0
-status: Active — forty-four ADRs, all Accepted
+version: 1.35.0
+status: Active — forty-five ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -564,6 +564,18 @@ The three findings above are all cases of a *tool* misleading us. This one is th
 
 Neither was careless. Both were the kind of statement that reads as obviously true, describes a library's behaviour rather than our own, and cannot be checked by looking harder at our source — because the behaviour lives in someone else's. **Review has no access to it.** That is the whole point: re-reading our code can confirm what we asked the library to do and never what the library does with it.
 
+**A fifth entry — deliberately named as an adjacent class rather than folded into the fourth, because the mechanism is different and folding it in would weaken both.**
+
+The fourth entry is scoped, in its own words, to *someone else's code*, and its stated reason is that **review has no access to it**. A third wrong claim followed within two weeks (ADR-045: a suite failure attributed to a leftover verification process), and that scoping does not fit it. The subject was **my own environment, on my own machine** — a process I had started myself. Review had complete access. Nothing was hidden; nothing was checked.
+
+So the failure cannot be "the truth was unreachable". It was this: **a plausible cause was adopted, one run was taken as confirmation, and no evidence capable of distinguishing that cause from its alternatives was ever gathered.** The run passed. It would have passed under the competing explanation too — stale accumulated rows, which is what the second failing file's own error (`Number of calls: 460`) eventually revealed. The evidence was *consistent* with the hypothesis and *discriminated* nothing.
+
+**Stated that way, this project already has the concept and the vocabulary for it, one domain over.** `CLAUDE.md`'s Testing Philosophy requires that a test would fail against a plausible wrong implementation — otherwise it is decoration, not protection. The fifth entry is that same standard applied to **diagnosis** instead of to tests: *a diagnosis is worth nothing unless the check behind it would have come out differently had the diagnosis been wrong.* One green run after a fix is the diagnostic equivalent of a test that passes against both the correct and the naive implementation.
+
+**A note on what the three cases do and do not share.** It is tempting to unify them as "a green run accepted as proof", and that is true only of the third: the first two had **no execution at all** — both claims were derived by reasoning and never run before being stated. The honest common structure is one level up, and it covers all three: *an explanation was adopted, and the observation that would have separated it from its alternatives was never made.* Sometimes because it was impossible from our source (entries one and two). Sometimes because it was easy, available, and skipped (this one).
+
+Recorded here rather than in ADR-045 because it belongs to this collection, and because of the one genuinely encouraging difference: **this is the first of the three caught before the claim left the session.** The first two reached the Founder, and one reached Stripe support. The mechanism that caught it was not more care — it was the Testing Review rule requiring each CI failure to be re-diagnosed from its own log, which is what forced a second look at a second file instead of stopping at the resemblance.
+
 **The rule this fixes, and it is cheap:** before a claim about third-party behaviour is written down, acted on, or sent to anyone outside this project, run the smallest thing that would distinguish it from its opposite. A four-line script, one real request, one deliberately-wrong assertion. Both of these would have cost a minute; the first cost eleven days of a misdirected support thread.
 
 Worth noting where this *did* work: `RedisThrottlerStorage`'s own discriminating test (two instances, one Redis) was written from an assumption about `@nestjs/throttler`'s storage contract and passed immediately — because it was written as executable from the start rather than as a sentence to be checked later.
@@ -991,6 +1003,88 @@ Refusals answer `"Role not found"` rather than `"forbidden"`, deliberately: to a
 **Consequences:** migration `sprint14_role_platform_only` (additive, one nullable-free boolean with a default — no backfill needed). New `RoleModule`, importing `AuthModule` because `JwtAuthGuard` has its own constructor dependencies (`CLAUDE.md`'s Architecture Review paragraph, learned from Sprint 3). Six tests, each door asserted separately so a fix closing three would not look complete, and each falsified on its own: removing the list filter reproduces the UI-only fix exactly (*"expected ['Administrator', 'Manager', …] to not include 'Administrator'"*); removing either enforcing check gives *"promise resolved instead of rejecting"*. Every rejection is paired with the same call succeeding on an assignable Role, so the refusals are real discrimination rather than a broken path.
 
 **Still open, recorded rather than solved:** `Role.name` remains both the stable upsert key and the human-readable label (`IMPLEMENTATION_PLAN.md`, Deferred, triggered by Lithuanian). This endpoint returns `name` and `description` as they are seeded — real data, nothing invented in a component — but the day those need translating, the key and the label have to separate.
+
+---
+
+## ADR-045 — An unhandled error leaves the process; and the class of failure that looks like health
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** The Founder asked, before connecting Sentry, for the first step to be a fact rather than a plan: *what happens today, in production, to an error nobody caught?* Measured rather than assumed, the answer had two halves, and they were not equally bad.
+
+**Inside the HTTP pipeline**, `AllExceptionsFilter` did exactly what it was built to do: logged at ERROR with the full exception, returned a generic 500 to the client. Complete, structured, and **visible only to someone who thought to go and look**. There is no log drain; Railway's log view is a page a human opens. A failure that is recorded and unread is not distinguishable, operationally, from one that was never recorded.
+
+**Outside it, there was nothing at all.** `process.on` was never called anywhere in the codebase — checked by grep, not by memory. A rejected promise in `OutboxPollerService`, `PaymentReconciliationService`, or any `@Interval` job never touches a request, so it never reached the filter. Node terminated the process; Railway restarted it under `restartPolicyType: ON_FAILURE`; the log line went with the dead process. **This is the half that is covered by nothing, and it is the half that runs the money jobs.**
+
+The Founder named why the healthcheck cannot close this, and the formulation is the reason this ADR exists rather than a one-line fix: **"a service crashing and restarting in a loop looks, from outside, exactly like a service that is working."** `/health` answers again after every restart. The check is green throughout. On a system whose entire design preference is for failures that announce themselves (ADR-038's liveness probe, the Outbox lag alert, the reconciliation drift alert), this was the one that did not.
+
+**Decision 1 — the first step is our own `AlertService`, not a third party.** Sentry may still be right later, but it would have arrived as a vendor SDK *and* a policy about what leaves the process, decided together and reviewable only as a bundle. The policy is the part that matters and the part that is ours: what counts as one incident, how often it may speak, and which fields are allowed on the wire. Those are settled here, on a channel that already exists and already carries four alert types. Sentry then becomes a second sink for a policy that has been running, not the thing that defines it.
+
+**Decision 2 — deduplication is mandatory, and the discipline is `OutboxPollerService`'s: once per incident.** An unhandled error is most often in a hot path, and a hot path fails at request rate. Without dedup, the mechanism built to make failure visible is the mechanism that makes the alert channel unreadable — and an unreadable channel is how the *next* alert gets missed. The incident signature is `name at METHOD route-pattern`, on a fifteen-minute cooldown, in a map bounded at 500 entries.
+
+The signature uses Express's **route pattern** (`/api/v1/payments/:id`), not the raw URL. A URL carrying ids makes every occurrence unique, which is deduplication that compiles, passes a "called once" test, and does nothing.
+
+**Decision 3 — this dedup state stays in memory, and that is not inconsistent with ADR-042 three days earlier.** ADR-042 moved rate-limit counters *out* of memory for a reason that does not apply here: **a rate limiter's correctness is the count.** Two instances each counting to ten is a documented limit of 10/min that is actually 20/min — the mechanism silently does not do what it says. Alert deduplication has no such property. Its job is flood prevention. Two instances alerting once each per incident is two alerts instead of one, which costs nothing and loses nothing; a Redis dependency inside the error path, by contrast, adds a way for the error handler itself to fail. **The distinction is worth stating because "we moved that to Redis" is exactly the kind of precedent that gets applied by resemblance rather than by reason.**
+
+**Decision 4 — the alert body carries the error name, its message, the route and the status. Never the exception object.** The Founder's requirement, and it is a security decision, not tidiness: the logger has redaction configured in `app.module.ts`; **a webhook POST has no redaction at all.** A Prisma error's message can embed the failing query and its parameters. Passing `err` to a webhook would be a path by which request bodies, tokens or card-adjacent data leave the process — precisely what `CLAUDE.md`'s Logging Philosophy forbids. The safe set is chosen at the two call sites and asserted by a test that checks the exact key set reaching the wire, so a future field cannot be added silently.
+
+**Decision 5 — two `process.on` handlers, with deliberately different fatality policies.**
+
+- `uncaughtException` **still exits(1)**, after a 500 ms unref'd delay to let the alert leave first. After an uncaught exception the runtime is in an undefined state, and continuing risks writing Ledger rows from it. ADR-002's immutable financial history is not something to gamble on a half-initialised process. The crash is not prevented — only reported before it lands.
+- `unhandledRejection` **does not exit.** A rejected promise is usually a localised async failure, not a corrupted runtime, and the restart loop was the actual problem being solved.
+
+**The safety of not exiting rests entirely on the alert being delivered, and that dependency is written here rather than left implied.** Continuing after a rejected promise is better than a restart loop **only because the failure is announced**. A degraded process that says nothing is worse than the crash loop it replaced: the loop at least produced a restart, which is a signal a platform can show. So the decision is conditional, and these are the conditions as they actually stand today, verified rather than assumed:
+
+- `ALERT_WEBHOOK_URL` is **optional** in `env.validation.ts`, and `AlertService.sendAlert()` opens with `if (!url) return;` — **a silent return, with no log line of its own.** Unset the variable and every alert in the system stops, including this one, with nothing anywhere reporting that it stopped.
+- The mitigation already in place is the codebase's established order, followed here and visible at `stripe.service.ts:109` and `redis-throttler.storage.ts:123`: **the unconditional `logger.error` comes first, then the alert.** The failure is therefore never *unrecorded*. But ADR-045 exists precisely because a recorded-and-unread failure is what we are trying to stop relying on, so the log is a floor, not the answer.
+- Delivery failure (non-2xx, or an unreachable webhook) is caught and logged at `warn`, never thrown — correct for the caller, and one more thing nobody is watching.
+
+**Recommended, not done here:** make `ALERT_WEBHOOK_URL` required when `NODE_ENV=production`, so its absence fails the boot rather than silencing the alerting layer. That is ADR-038's own philosophy — it validates secret *shape* at boot for exactly this reason — and it is verified to be zero-risk today: production has the variable set (checked by listing variable **names** on the backend service; no values were read or printed). Left for the Founder's decision rather than folded into an unrelated PR, because it changes what a deploy does.
+
+**This second choice changes production behaviour, and the change is the point rather than a side effect.** Registering an `unhandledRejection` handler suppresses Node's default, which since v15 is to raise it as an uncaught exception and terminate. Verified on the real built process, not reasoned about: after triggering a rejection outside any request, `/health` answered 200 **and the log showed exactly one application bootstrap** — the process had not died and been replaced, it had continued. The trade-off is explicit: a persistently failing background job now runs degraded instead of crash-looping. **That is strictly better only because the alert exists — degraded-and-silent would be worse than the loop.** The alert is what makes this decision safe, so the two are not separable.
+
+**Consequences.**
+
+**A real dependency-injection failure, found by starting the application rather than by any test.** `AlertModule` was visible only inside `ThrottlerModule.forRootAsync({ imports: [AlertModule] })` — a factory-scoped import, not a module-scope one. `AllExceptionsFilter` compiled, typechecked, and passed 49 test files with the new constructor parameter; the real boot refused with a Nest resolution error. This is the exact failure mode `CLAUDE.md`'s Architecture Review paragraph describes from Sprint 3, arriving again through a different door — the rule as written says "confirm the module imports whatever provides the Guard's dependencies", and this was a *filter*, not a Guard. The class is broader than the rule that recorded it: **anything Nest constructs for you needs its dependencies in scope, and nothing before runtime will say otherwise.**
+
+**Both halves falsified separately on the real built process**, against a live alert sink, because unit tests cannot prove a `process.on` registration:
+
+- HTTP half: route answered 500, one alert `Unhandled error: Error at GET /api/v1/boom/http`.
+- Dedup: five further identical failures produced **zero** additional alerts.
+- Non-HTTP half: `Unhandled error: Error (unhandled rejection)`, the path covered by nothing before this ADR.
+- Survival: `/health` 200, one bootstrap in the log.
+
+The temporary controller and sink used for this were removed in the same PR; they are named here so the evidence is reproducible rather than folklore.
+
+**A test-hygiene finding, and a correction to how it was first diagnosed — the correction is the useful half.** The full run after falsification failed in `outbox-poller.service.spec.ts` on a wallet `updatedAt` 142 ms newer than asserted. The first explanation was immediate and plausible: the falsification process was still running against the same development database, so its poller had republished the event. It was stopped, the suite passed, and that looked like confirmation.
+
+It was not. Two runs later the failure returned with the port free, joined by all five tests in `payment-reconciliation.service.spec.ts` — and *that* file's own error said what was actually happening: **`Number of calls: 460`.** Reconciliation was iterating four hundred and sixty payments accumulated across roughly six repeated suite runs against one development database. Stale data, not a stray process. After `db:reset`, two consecutive full runs passed 50/50.
+
+**What is established: both conditions were present, and neither was isolated.** The leftover process was real and had to be stopped regardless; the stale rows were real and demonstrably broke the second file. Which one caused the first failure was never determined, and the honest record says so rather than keeping the tidier story.
+
+**Recorded as its own class in ADR-031's collection — the fifth entry — deliberately not folded into the fourth.** The fourth is scoped to claims about *someone else's* code, on the stated grounds that review has no access to the truth. That does not describe this: the subject was my own process on my own machine, fully inspectable, and simply not inspected. The mechanism is different, and the generalisation is `CLAUDE.md`'s discriminating-test standard applied to diagnosis — **the run that appeared to confirm the explanation would have passed under the competing one too.**
+
+The rules that follow are the two that hold independently of which cause it was, and both are now in `CLAUDE.md`'s Workspace Hygiene: a long-lived process started for manual verification is shared state and must be stopped before the suite runs; and a development database accumulates across runs, so a suite failure that appeared after repeated runs is a stale-data suspect before it is anything else. **Each failing file was diagnosed from its own log** (`CLAUDE.md`, Testing Review) — which is the only reason the second cause was found at all, since resemblance to the first would have stopped the search.
+
+**A real property of the Outbox found while reading it for this, reported rather than fixed here.** `poll()` selects `publishedAt: null` and marks the row published only later, inside the dispatch transaction — **there is no claim step, no lock, no `SKIP LOCKED`.** Two poller instances therefore read the same unpublished rows and both dispatch them. Today this is harmless, and the reason it is harmless is worth stating precisely: `WalletProjectionService` recomputes a balance in full rather than applying a delta, so running it twice yields the same number. **That is a property of the only consumer that exists, not of the mechanism** — and this file's own comment names Restaurant and Analytics projections as the next ones. Production runs a single backend instance, so it has never fired; that is the same shape as ADR-042's finding, where a documented rate limit was correct only because of an instance count written down in no document. Not fixed in this PR because it is not this PR's subject and it touches the money path. Recorded in `IMPLEMENTATION_PLAN.md`'s Deferred list with an explicit trigger: **before a second backend instance, or before a second Outbox consumer, whichever comes first.**
+
+**A second finding, unrelated to alerting, found while writing this ADR — and it is the more embarrassing one.** ADR-011 requires root `CLAUDE.md` and `docs/CLAUDE_RULES.md` to be byte-identical: one document, two locations. **They had not been, since PR #70.** A header rewrite prepended a new frontmatter block instead of editing the existing one, so both files carried a stale second block, and the two copies claimed different versions of a document asserted to be the same one.
+
+It survived four pull requests **because the bodies never diverged** — the rules Claude actually reads were correct the whole time. That is exactly what makes it worth recording: a duplicated document does not fail loudly. It fails on the day the two copies answer the same question differently, and until then it looks fine from either side. The Founder's standing preference applies directly — *close it with a mechanism, not with discipline* — so the fix is not the edit. It is `repo-invariants.spec.ts`, which reads both files and asserts equality on every pull request, falsified by changing a single version digit (*"- version: 2.6.1 / + version: 2.6.0"*). The invariant was a sentence in an ADR for eleven sprints; it is now a check.
+
+**Not solved here, and named so it is not mistaken for solved:** this reports unhandled errors. It does not report *handled* ones — an `AppException` returning 402 fifty times in a minute is invisible to this mechanism and may matter more than any crash. That is rate-of-error monitoring, it needs somewhere to aggregate, and it is the strongest argument for Sentry step 2 (`IMPLEMENTATION_PLAN.md`, Deferred).
+
+---
+
+### Addendum to ADR-044 — why `roleId` was the outlier, and what that predicts
+
+The Founder asked for this to be written down separately, on the grounds that it says where to look next. It does.
+
+`roleId` was not badly handled because someone was careless with it. It was badly handled because **it was the one dangerous input with no endpoint behind it.** For ten sprints the API accepted a `roleId` and never returned a list of Roles. Every other dangerous input — `restaurantId`, `waiterMembershipId`, `membershipId` — had a `GET` that produced legitimate values, and building that `GET` forced someone to answer *which ones may this caller see?* Answering it once produced a scoping predicate, and the write paths then had something to validate against.
+
+`roleId` never got asked that question, because nothing ever listed Roles. So each write path validated the only thing it could reason about alone: does this id exist? Four separate places independently arrived at the same insufficient check — not by copying, but because **each was reasoning in isolation about an input whose legitimate range was written down nowhere.**
+
+**The predictive form: look for inputs the API accepts but never emits.** A field with no read endpoint has no owner, no defined range, and therefore no shared validation — and its checks will be weakest exactly where it is most dangerous, because "exists" is all a caller-blind check can assert. This is the same audit as `CLAUDE.md`'s input-grep method (added Sprint 14) approached from the other side: grep the inputs to find the doors, then ask of each door whether anything in the system defines what may come through it.
 
 ---
 

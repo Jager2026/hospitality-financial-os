@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.15.0
+version: 2.16.0
 status: Active
 classification: Critical
 priority: Highest
@@ -304,6 +304,27 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **The fix is explicitly not "turn on snapshots for the redis volume."** A restored, stale revocation set is worse than an empty one, and the distinction is the whole reason this needs design rather than a toggle: an empty set is honestly wrong in a way we can reason about — every outstanding token is valid, we know it, and we can act on it. A stale set is *dishonestly* wrong — some genuinely revoked tokens are valid again while the system reports itself protected, which is the failure mode that gets discovered by an incident rather than by a check.
 
   **Deferred until after the frontend. Founder decision, with the reasoning recorded because it is what makes the deferral defensible rather than convenient:** the blast radius is bounded by the token's own TTL (at most 7 days, after which every affected token expires by signature regardless), there are zero real users today so there is nothing outstanding to un-revoke, and the real solution needs actual design — a Postgres table, a strategy for pruning expired rows, and, most consequentially, the latency cost of a database read in the token-verification path **on every authenticated request**, which is exactly why ADR-019 put this in Redis to begin with. That last point is the reason this cannot be a quick fix: it re-opens ADR-019's original trade-off rather than patching around it.
+
+- **The Outbox poller has no claim step (ADR-003), found while reading it for ADR-045.** `OutboxPollerService.poll()` selects `publishedAt: null` and marks the row published only later, inside the dispatch transaction. Between those two moments the row is visible to any other poller: no `SELECT … FOR UPDATE SKIP LOCKED`, no claimed-at column, no advisory lock. **Two instances read the same rows and both dispatch them.**
+
+  **Two things hold it harmless today, and neither is the mechanism.** The first is that production runs a single backend instance. The second is easy to mistake for safety and must be written down as what it is: `WalletProjectionService` **recomputes a balance in full rather than applying a delta**, so running it twice produces the same number. That is a property of the only consumer that exists — not a guarantee the Outbox offers. **A consumer that increments, appends, or sends anything outward converts double dispatch into double counting, on the money path.** This is ADR-042's shape one layer down: correctness resting on an infrastructure fact recorded in no document, except that here the fact is a coincidence of the current handler rather than an instance count.
+
+  **Not fixed on discovery, deliberately** — it changes the Outbox's concurrency contract, it needs its own tests, and it was found in the middle of an unrelated alerting change.
+
+  **The trigger is two triggers, and they are not the same kind of event. Keeping them separate is the point.**
+
+  - **A second backend instance.** Requires a deliberate act — someone raises the replica count in Railway. It is a decision, it has an owner, and it can be gated: whoever scales the backend must land this first. The hazard is that the act is *one click* and looks purely operational, so nothing about it prompts a question about the Outbox.
+  - **A second Outbox consumer.** Requires no decision at all — it arrives through ordinary feature work. `SYSTEM_ARCHITECTURE.md` already names Restaurant and Analytics projections as next, and `outbox-poller.service.ts`'s own comment says a handler registry earns its cost when the second consumer lands. **That sprint will be about the projection, not about concurrency**, and the person writing it has no reason to look at how rows are claimed.
+
+  The second is the one to defend against, precisely because it does not announce itself: the first fires when someone chooses something, the second fires when someone builds the feature that was always planned. **Whichever comes first, but the second is the one that will arrive without anybody deciding it should.**
+
+- **Error-rate monitoring, and the Sentry decision it belongs to (step 2 of ADR-045).** Step 1 shipped: an unhandled error now leaves the process as a deduplicated alert, and a failure outside the HTTP cycle is caught at all for the first time. **It closes one specific hole and deliberately not the adjacent one.**
+
+  What remains uncovered is *handled* errors. An `AppException` returning 402 fifty times in a minute passes through `AllExceptionsFilter`'s typed branches, never reaches the unhandled path, and is invisible to everything built in ADR-045 — while being, for a payments product, plausibly more urgent than any crash. Fifty declined payments in a minute is either a Stripe incident or a bug we shipped, and today the only way to learn it is for a restaurant to phone.
+
+  This needs somewhere to **aggregate** — a rate over a window, per route, per error code — which is a different mechanism from a webhook POST and the strongest honest argument for a third-party tool. **Trigger: before the first pilot restaurant, or the first production payment, whichever comes first** — both are the moment "nobody has phoned" stops being evidence that nothing is wrong.
+
+  The Founder's four conditions on Sentry stand and are recorded here so they survive the chat that produced them: no PII in events; the redaction list must have **one source shared by pino and Sentry**, because two lists diverge and the second one silently stops matching; the SDK is evaluated as a dependency like any other; and it is added as a *second sink for our policy*, never as the thing that defines it.
 
 ---
 

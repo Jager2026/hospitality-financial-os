@@ -66,6 +66,11 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     }),
     PrismaModule,
     RedisModule,
+    // ADR-045: imported at the top level, not only inside ThrottlerModule.forRootAsync — the
+    // APP_FILTER below now depends on UnhandledErrorAlerter, and a provider that is only visible
+    // inside another module factory typechecks fine and fails at boot. Found by starting the real
+    // app, exactly as CLAUDE.md Architecture Review paragraph says this class is always found.
+    AlertModule,
     HealthModule,
     LedgerModule,
     OutboxModule,

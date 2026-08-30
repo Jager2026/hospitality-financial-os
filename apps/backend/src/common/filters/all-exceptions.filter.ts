@@ -8,6 +8,7 @@ import { AUDIT_LOG_WRITTEN_FLAG } from "../http/audit-log-written.flag";
 import type { AuthedRequest } from "../http/authed-request";
 import { MUTATING_METHODS } from "../http/mutating-methods";
 import { PrismaService } from "../../prisma/prisma.service";
+import { UnhandledErrorAlerter } from "../alerting/unhandled-error-alerter";
 
 interface ErrorBody {
   success: false;
@@ -30,6 +31,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
   constructor(
     private readonly logger: PinoLogger,
     private readonly prisma: PrismaService,
+    private readonly alerter: UnhandledErrorAlerter,
   ) {
     this.logger.setContext(AllExceptionsFilter.name);
   }
@@ -62,7 +64,29 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // to AuditLog: this is an application defect, not a business/security event (CLAUDE.md,
     // Logging Philosophy — "Log business events. Not noise"), and the full trace is already
     // captured below for developers.
+    // Full detail to the logger, for a developer reading Railway logs.
     this.logger.error({ err: exception }, "Unhandled exception");
+
+    // And out of the process — because until now this line WAS the whole mechanism: structured,
+    // complete, and visible only to someone who thought to go and look (ADR-045).
+    //
+    // The alert carries the error NAME, its message and where it happened — never the exception
+    // object and never the request. `err` above can hold a Prisma error whose message embeds the
+    // failing query and its parameters, which is precisely the payload CLAUDE.md forbids letting
+    // out of the process. The logger has redaction configured (app.module.ts); a webhook POST does
+    // not, so the safe set is chosen here rather than filtered somewhere downstream.
+    const name = exception instanceof Error ? exception.name : "UnknownError";
+    const message = exception instanceof Error ? exception.message : String(exception);
+    // The route pattern where Express resolved one ("/api/v1/payments/:id"), the raw URL only as a
+    // fallback. The pattern is what makes two occurrences the same incident; a URL carrying ids
+    // would make every one unique and defeat deduplication.
+    const route = `${request.method} ${request.route?.path ?? request.url}`;
+    this.alerter.report(`${name} at ${route}`, {
+      name,
+      message,
+      route,
+      status: HttpStatus.INTERNAL_SERVER_ERROR,
+    });
     response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       success: false,
       error: { code: "UNKNOWN_ERROR", message: "Something went wrong. Please try again." },
