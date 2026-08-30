@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.18.0
+version: 2.19.0
 status: Active
 classification: Critical
 priority: Highest
@@ -267,7 +267,7 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
 
   Not urgent today — no Role's permission list has ever narrowed. It becomes urgent the first time one does, and that is exactly the moment nobody will be watching for it. **Fix shape: reconcile rather than add — delete `RolePermission` rows for that Role whose permission is not in the intended list, in the same pass.** Small, but it changes a seed from additive to authoritative, which deserves saying out loud rather than slipping in.
 
-- **The ADR-005 reachability predicate is hand-rolled in 13 places while a shared utility exists.** `restaurant-reachability.util.ts` was extracted at the pattern's fourth occurrence, and its own comment records the exception: *"the three existing call sites are left as-is to avoid unrelated churn in already-shipped modules."* **There are now thirteen**, across `membership`, `payment`, `restaurant`, `settings`, `tip`, `transaction` and `wallet` — the decision was applied to new call sites, the un-migrated count grew afterwards, and the comment describing the exception went stale without anyone noticing.
+- **~~The ADR-005 reachability predicate is hand-rolled in 13 places while a shared utility exists.~~ CLOSED by ADR-047.** The heading stood in the present tense after the body below was marked closed — an entry contradicting itself, found in the Sprint 14 documentation sweep. `restaurant-reachability.util.ts` was extracted at the pattern's fourth occurrence, and its own comment records the exception: *"the three existing call sites are left as-is to avoid unrelated churn in already-shipped modules."* **There are now thirteen**, across `membership`, `payment`, `restaurant`, `settings`, `tip`, `transaction` and `wallet` — the decision was applied to new call sites, the un-migrated count grew afterwards, and the comment describing the exception went stale without anyone noticing.
 
   **This is not a tidiness item.** `CLAUDE.md`'s Architecture Review paragraph exists because this exact predicate has already shipped wrong twice — `RestaurantService.findAllForUser` and `TipService.assertReachable`, both by comparing `restaurantId === null` without the `organizationId` check. Thirteen independently-maintained copies of a predicate the project has twice got wrong is a risk surface, not a style preference.
 
@@ -307,7 +307,7 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
 
   **Deferred until after the frontend. Founder decision, with the reasoning recorded because it is what makes the deferral defensible rather than convenient:** the blast radius is bounded by the token's own TTL (at most 7 days, after which every affected token expires by signature regardless), there are zero real users today so there is nothing outstanding to un-revoke, and the real solution needs actual design — a Postgres table, a strategy for pruning expired rows, and, most consequentially, the latency cost of a database read in the token-verification path **on every authenticated request**, which is exactly why ADR-019 put this in Redis to begin with. That last point is the reason this cannot be a quick fix: it re-opens ADR-019's original trade-off rather than patching around it.
 
-- **Does the seed run on deploy, and may it delete? Two decisions, deliberately not merged into one.** `railway.backend.json` runs migrations before a deploy and nothing else, so `seed.ts` has never executed automatically. ADR-044's addendum records what that cost: a shipped privilege-escalation fix that was not in effect in production for eleven days, because the code read a column the data never received. **The formulation to keep is the Founder's — `seed.ts` describes production rather than making it so.**
+- **~~Does the seed run on deploy, and may it delete?~~ ANSWERED by ADR-048 — yes, and no, respectively.** The entry below is kept because the *separation* of the two questions is the reasoning ADR-048 rests on, and because this item stood open in the plan after the ADR that closed it had merged. `railway.backend.json` runs migrations before a deploy and nothing else, so `seed.ts` has never executed automatically. ADR-044's addendum records what that cost: a shipped privilege-escalation fix that was not in effect in production for eleven days, because the code read a column the data never received. **The formulation to keep is the Founder's — `seed.ts` describes production rather than making it so.**
 
   The Founder's instruction is that these are two separate decisions and must not arrive together:
 

@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.15.0
+version: 2.16.0
 status: Active
 classification: Critical
 priority: Highest
@@ -196,6 +196,10 @@ Never refactor for ego. Refactor because future engineers deserve better.
 ---
 
 # Workspace Hygiene
+
+**A tool you wrote to check something errs in its own favour, and it does so quietly.** A claim about someone else's code lives until its first execution; a claim produced by *your own* audit script lives until someone checks the script against a case whose answer is already known. One documentation sweep produced three false findings in a single session, none of them from the code under audit: a parser attributed each route's `@RequirePermission` to the *following* route and reported eight phantom contract mismatches; a verification script blamed a missing environment variable when the real cause was an earlier step failing; and a database cleanup guard aborted on a data mismatch that did not exist, because Postgres constant-folded a literal `1/0` in a `CASE` branch before the condition was ever evaluated.
+
+The asymmetry is what makes this worth a rule: a broken checker usually fails by **finding something**, and a finding is exactly what an audit is looking for, so nothing about the result feels wrong. **Before reporting what a tool you just wrote has found, run it against a case whose answer you already know** — one that must come back clean and one that must come back dirty. That is the same discriminating-pair standard the tests are held to, applied to the instrument rather than the subject.
 
 **Run the whole gate before pushing, not the part that looks relevant — and the whole gate includes `build`.** Lint, typecheck and tests are the ones a change *feels* like it needs; the build is the one that enforces `rootDir`, decides what actually deploys, and is therefore the one whose absence is invisible until CI. Skipping it let 50 compiled spec files ship in the production bundle unnoticed, and let a fixture import that could never compile reach CI instead of being caught in seconds. **A gate you run selectively is a gate you have already weakened.**
 
