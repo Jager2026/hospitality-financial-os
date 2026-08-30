@@ -5,7 +5,7 @@
   "description": "Next.js Restaurant Portal + Waiter Portal. Sprint 1: app shell only — no real screens yet (UX_MAP.md screens arrive with their owning modules from Sprint 3 onward).",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/check-public-env.mjs && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
