@@ -17,9 +17,19 @@ function fakeReflector(required: string | undefined): Reflector {
   return { getAllAndOverride: vi.fn().mockReturnValue(required) } as unknown as Reflector;
 }
 
-// DoD groundwork for Sprint 3+ (first real @RequirePermission caller). Not exercised anywhere
-// yet, so a regression here — e.g. `some` silently becoming `every`, or the permission check
-// getting inverted — would previously have shipped unnoticed until the first real route used it.
+// Written as groundwork before the first `@RequirePermission` caller existed. **Sixteen routes
+// across seven controllers now depend on it**, so the original note — "not exercised anywhere yet"
+// — described a state that ended eleven sprints ago while still reading as current. `CLAUDE.md`
+// cites this very comment as the shape to watch for: a plan that outlives its sprint and goes on
+// looking like one.
+//
+// What the tests below still protect is unchanged and now load-bearing rather than anticipatory:
+// `some` silently becoming `every`, or the check being inverted, would fail every gated route at
+// once.
+//
+// Note what they do NOT touch: the fixtures here name no Role and use an arbitrary permission
+// string, deliberately. This guard is a pure function over the shape — it never reads the
+// database — so a seeded Role would add a dependency without adding proof.
 describe("PermissionsGuard", () => {
   it("allows the request through when the route has no @RequirePermission", () => {
     const guard = new PermissionsGuard(fakeReflector(undefined));

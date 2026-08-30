@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.14.0
+version: 2.15.0
 status: Active
 classification: Critical
 priority: Highest
@@ -196,6 +196,8 @@ Never refactor for ego. Refactor because future engineers deserve better.
 ---
 
 # Workspace Hygiene
+
+**Run the whole gate before pushing, not the part that looks relevant — and the whole gate includes `build`.** Lint, typecheck and tests are the ones a change *feels* like it needs; the build is the one that enforces `rootDir`, decides what actually deploys, and is therefore the one whose absence is invisible until CI. Skipping it let 50 compiled spec files ship in the production bundle unnoticed, and let a fixture import that could never compile reach CI instead of being caught in seconds. **A gate you run selectively is a gate you have already weakened.**
 
 **Branch from `main` unless the work genuinely depends on code in an open pull request — and check what `main` actually is before branching, rather than assuming the previous PR merged.** A stack of branches built on unmerged PRs breaks against squash-merge **mechanically, regardless of content**: squashing puts a single new commit on `main`, every descendant still carries the originals, and each one goes `CONFLICTING` the moment its parent lands. Nothing about the code has to overlap for this to happen.
 
