@@ -26,6 +26,11 @@ const { evaluate, AuditUnavailableError } = require("./audit-evaluate");
 /** @type {Record<string, string>} */
 const IGNORED_ADVISORIES = {};
 
+// Generous relative to a healthy run (seconds), deliberately short relative to a CI job. The point
+// is not to be strict, it is to guarantee this gate always reaches an answer — pass, fail, or an
+// explicit "could not check" — rather than occupying a runner indefinitely.
+const AUDIT_TIMEOUT_MS = 120_000;
+
 /**
  * Three outcomes, and the third is the reason this function exists in this shape.
  *
@@ -49,12 +54,34 @@ const IGNORED_ADVISORIES = {};
 function runAudit() {
   /** @type {string} */
   let stdout;
+  /** @type {boolean} */
+  let timedOut = false;
 
   try {
-    stdout = execSync("pnpm audit --audit-level=high --json", { encoding: "utf8" });
+    stdout = execSync("pnpm audit --audit-level=high --json", {
+      encoding: "utf8",
+      // This command talks to the registry, and a network call with no ceiling is a way for CI to
+      // hang rather than fail. It is the same class as the distinction above: a gate that never
+      // answers reports nothing and looks, from the outside, exactly like one still working — and
+      // a stuck workflow gives no reason for being stuck. Not hypothetical: this exact call was
+      // observed hanging for twenty hours when run without a ceiling.
+      timeout: AUDIT_TIMEOUT_MS,
+    });
   } catch (err) {
-    const captured = /** @type {{ stdout?: unknown }} */ (err).stdout;
+    const e = /** @type {{ stdout?: unknown; signal?: unknown; code?: unknown }} */ (err);
+    const captured = e.stdout;
     stdout = typeof captured === "string" ? captured : "";
+    // Node reports a `timeout` kill as the signal it used (SIGTERM by default) rather than as a
+    // distinct error code, so this is how a timeout is actually recognised.
+    timedOut = e.signal === "SIGTERM" || e.code === "ETIMEDOUT";
+  }
+
+  if (timedOut) {
+    unavailable(
+      `\`pnpm audit\` did not finish within ${AUDIT_TIMEOUT_MS / 1000}s and was terminated.`,
+      "Usually the registry being slow or unreachable. The audit did not complete, so its result",
+      "is unknown — which is not the same as finding no vulnerabilities.",
+    );
   }
 
   if (stdout.trim() === "") {
