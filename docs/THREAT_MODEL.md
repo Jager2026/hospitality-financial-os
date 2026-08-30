@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.11.0
+version: 1.12.0
 status: Active
 classification: Critical
 owner: Founder
@@ -93,7 +93,11 @@ Every entry below cites a real ADR number and a real, already-existing mechanism
 
 Entries 9–15 below are Sprint 11's OWASP Top 10:2025 review (`IMPLEMENTATION_PLAN.md`), folded into this document's own existing structure rather than kept as a separate checklist — each cites the specific ADR/mechanism that closes it, same rule as every entry above. Not every one of the ten categories produced a new entry: #4 and #5 above already close A07:2025 (Authentication Failures) and are labeled accordingly rather than duplicated.
 
-## 9. Cross-Organization or cross-Restaurant data access via a legitimately-authenticated caller (OWASP A01:2025, Broken Access Control)
+## 9. ~~Cross-Organization or cross-Restaurant data access via a legitimately-authenticated caller~~ — **REOPENED, see "Open, Not Answered"**
+
+> **This entry is retained here, struck through, rather than deleted.** It was listed as Closed while the threat it describes materialised twice, and removing the claim would remove the evidence of how a closed claim survives being wrong. The live entry is now in **Open, Not Answered**. Everything below is the text as it stood, kept for the record.
+
+### The original entry, as written
 **Threat:** An authenticated User with a real Membership at Organization/Restaurant A reads or writes data belonging to Organization/Restaurant B — either because an org-wide Membership's `organizationId` is never actually compared against the target resource's own, or a restaurant-scoped Membership's reach is computed too broadly. The single most consequential access-control bug shape in this codebase, real not hypothetical: `RestaurantService.findAllForUser` shipped with exactly this gap in Sprint 4 (used every Membership's `organizationId` regardless of scope, so a restaurant-scoped Manager could see every Restaurant in the Organization the moment a second one existed) — caught live, not by a test.
 
 **Closed by:** ADR-005 — the reachability rule itself: an org-wide Membership (`restaurantId IS NULL`) reaches every Restaurant in its own Organization; a restaurant-scoped one reaches only the exact Restaurant it names — never "any org-wide Membership anywhere." Enforced twice, by design: `PermissionsGuard` (coarse — does the caller hold this permission on *any* Membership) then a resource-scoped service-layer check (fine — does the *specific* Membership that actually reaches this resource hold it), `restaurant-reachability.util.ts`'s `isRestaurantReachable`/`hasPermissionAtRestaurant`.
@@ -234,6 +238,50 @@ Only the Daily figure matches its label exactly. "A month" is 27 days and "three
 
 **One residual gap, unchanged in substance:** every mechanism above lives inside Railway. Together they defend against disk failure, against our own mistakes, and — because snapshots and PITR are independent — against one backup system failing on its own. None of them defends against losing access to the Railway account itself. The off-platform copy stays deliberately deferred with a named trigger (`IMPLEMENTATION_PLAN.md`: before the first real pilot restaurant).
 
+## 23. Any restaurant Owner could grant `Administrator`, a Role holding every Permission in the system (OWASP A01:2025)
+
+**Threat:** `Administrator` is seeded with all ten Permissions and was described as platform-level, but nothing enforced that description. Every write path taking a `roleId` validated only that the id existed — so an Owner could invite, or promote an existing colleague to, a Role with complete control over every Organization. **Promotion was the easier route**: no invitation, no acceptance, one `PATCH`.
+
+**Closed by:** ADR-044. `Role.platformOnly` as a column rather than a filtered dropdown — a filtered interface over an endpoint that accepts anything is the failure mode where the screen looks correct and the API is not. Enforced in all four write paths that accept a `roleId`, and `GET /roles` omits such Roles from the assignable list.
+
+**How the doors were counted, which matters more than the count:** by grepping for the field, not by reasoning about the flows. Reasoning found two; the grep found four. The one reasoning missed (`PATCH /memberships/{id}`) was the most dangerous of them.
+
+**A second, structural finding recorded with it:** `roleId` was the one dangerous input the API accepted but never emitted. For ten sprints nothing returned a list of Roles, so nothing ever had to answer *which ones may this caller see* — and four write paths independently settled for "does the id exist". The predictive form: **look for inputs the API accepts but never returns.**
+
+**Live-verified in production (Sprint 14 closing check), not only by tests:** `GET /roles` returned `Manager, Owner, Waiter`; `POST /memberships` and `PATCH /memberships/{id}` both refused an `Administrator` `roleId` with `400 VALIDATION_ERROR`; both refusals landed in `AuditLog` as `post_failed` / `patch_failed`.
+
+**One caveat this entry must carry:** the fix shipped as code eleven days before it took effect in production, because the column it reads is seeded and nothing ran the seed. See #25.
+
+## 24. A failure outside the HTTP request cycle left no trace anywhere
+
+**Threat:** `AllExceptionsFilter` sees every failure inside the HTTP pipeline and nothing outside it. A rejected promise in `OutboxPollerService`, `PaymentReconciliationService` or any `@Interval` job never touches a request — so Node terminated the process, Railway restarted it under `ON_FAILURE`, and the log line died with the process. `process.on` was never called anywhere in the codebase, verified by grep rather than recalled.
+
+The healthcheck cannot catch this, and the reason is the entry: **a service crashing and restarting in a loop looks, from outside, exactly like a service that is working.** `/health` answers again after every restart.
+
+**Closed by:** ADR-045. Two `process.on` handlers with deliberately different fatality policies — `unhandledRejection` reports and continues, `uncaughtException` still exits after letting the alert leave — plus deduplicated alerting through the existing `AlertService`, carrying only name, message, route and status. Never the exception object: the logger has redaction configured, a webhook POST does not, and a Prisma error's message can embed the failing query and its parameters.
+
+**Load-bearing dependency, recorded because it is what makes the decision safe rather than reckless:** not exiting is better than a restart loop *only because the failure is announced*. `ALERT_WEBHOOK_URL` is therefore required in production and the app refuses to boot without it.
+
+**Verified on the real built process against a live sink**, both halves separately, because a unit test cannot prove a `process.on` registration: an HTTP exception produced one alert; five identical repeats produced none; a rejection outside the HTTP cycle — the half nothing covered — produced its own alert; and the log showed a single bootstrap, so the process had genuinely survived rather than restarted.
+
+**Live-verified in production (Sprint 14 closing check):** the reconciliation alert for a genuinely stuck Payment was delivered end to end — `Alert webhook delivered successfully … status=200`, naming the Payment id.
+
+## 25. A Permission removed from `seed.ts` stayed granted forever, and a decision written into the seed never reached production at all
+
+**Threat:** Two halves of one gap, and the second is what made the first invisible.
+
+`seedRbac` was `upsert`-only: it could add and correct, never remove. Removing a Permission from a Role in `seed.ts` changed nothing on a database that already had the row, so the file went on describing a restriction that was not in force.
+
+And nothing ran the seed. `preDeployCommand` ran migrations only, so **ADR-044's `platformOnly` fix sat in production as `false` for eleven days** while the code that reads it refused nothing. The API was correct; the data it consults had never been told.
+
+**Closed by:** ADR-046 (the seed reconciles rather than only adding, scoped narrowly to `RolePermission` rows of Roles the file defines — never a `Permission`, never a `Role`) and ADR-048 (the seed runs on every deploy, invoked **without** `--allow-revocations`).
+
+**The flag's absence is the whole design.** A deploy applies everything additive and **cannot remove anything**: if `seed.ts` and production disagree about a grant that exists but is no longer intended, the deploy fails naming which Role would have lost which Permission. So "runs automatically" and "may revoke" are answered differently — yes and no — and an incomplete `seed.ts` cannot cause a loss.
+
+**Residual risk, stated rather than argued away:** a wrongly *added* grant still ships. Unchanged from manual runs, and different in kind — an addition requires someone editing a reviewed diff, whereas drift requires nobody doing anything at all.
+
+**Live-verified on the first real deploy after the decision:** `prisma:seed` ran after `prisma:migrate:deploy`, reported `Seeded 10 permissions and 4 roles`, and the deploy succeeded. The refusal path was proven separately with the exact command the deploy runs: with an unintended grant present it exits 1 and names `Waiter -> roles.manage`.
+
 ---
 
 # Accepted Risk (Not Closed — Deliberately Left Open)
@@ -250,6 +298,32 @@ This is listed here, separately from the Closed Threats above, on purpose: it is
 # Open, Not Answered
 
 Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet, or the answer depends on a decision outside this codebase entirely. Listed honestly rather than filled in with a guess, per the Founder's own instruction.
+
+## Cross-Organization access by a legitimately-authenticated caller — reopened, and split, because the two halves no longer have the same evidence
+
+**Reopened from Closed Threat #9 (Sprint 14).** The Founder's argument for reopening is the general one and it is sufficient: *a class that recurs after being declared closed is not closed.* It recurred twice after that declaration, both times proven with data rather than argued:
+
+- **ADR-043** — a zero-permission Waiter exported another Restaurant's transaction rows, amounts included. The guard asked whether the caller held the permission on *any* Membership; the list built its scope from *every* Membership; nothing asked whether those were the same one.
+- **PR #84** — an org-wide Owner of an unrelated Organization read another Organization's org-wide Membership **in full, and re-roled it**. Three routes affected: `GET /memberships/{id}`, `PATCH /memberships/{id}`, `PATCH /memberships/{id}/disable`.
+
+**But the sharper reason to reopen is what the closing evidence actually claimed.** Entry #9 was closed partly on a systematic sweep (ADR-028 Decision 5) that reported *"21 real reachability/permission-scoped sites … all confirmed comparing `organizationId` correctly. Zero new findings this pass."*
+
+That sweep could not have found PR #84's defect, and the reason is worth more than the bug. **The comparison was present.** It sat in the second clause of `m.restaurantId === target.restaurantId || (m.restaurantId === null && m.organizationId === target.organizationId)`. When the target was itself org-wide, the first clause was `null === null` — true — and `||` short-circuited before the second clause ever ran. A search that looks for the comparison *finds* it; only reading the evaluation order shows it is unreachable.
+
+**Presence of a check is not evidence of its evaluation.** A sweep that greps for the right idiom certifies vocabulary, not behaviour — and this entry was closed on exactly that kind of certification.
+
+### The two halves, which now differ
+
+**(a) Restaurant-scoped reach — materially stronger, but not independently closed.** ADR-047 consolidated ten call sites onto `isRestaurantReachable` / `hasPermissionAtRestaurant` / `findGrantingMembership`, so there is now *one* implementation rather than ten agreeing copies, and `repo-invariants.spec.ts` fails if the predicate is written inline again. The right-hand side is always a Restaurant id, which is never null, so the short-circuit above cannot arise here.
+
+**(b) Nullable-target reach — this is the half that keeps failing.** `MembershipService.getReachableOrThrow`, `MembershipService.assertPermission` and `WalletService.assertReachable` compare against a **Membership** or **Wallet**, whose `restaurantId` is legitimately nullable. They are deliberately excluded from the shared helpers (ADR-047, Decision 3) because folding them in would propagate whichever version was chosen — and one of them was the broken one. Two of the three were fixed in PR #84; `WalletService` was already correct, because it refuses org-wide Wallets outright with an explicit `restaurantId !== null` guard.
+
+### What would close this, stated so it is not closed again on vocabulary
+
+Not "the rule exists" and not "a sweep found the comparison everywhere". Two things, together:
+
+1. **Every reach check derives from one implementation**, or — where it genuinely cannot, as in (b) — **each exception is individually proven by a test that constructs the null-on-both-sides case**. Two of the three now have one (`membership.service.spec.ts`); `WalletService`'s existing test covers the org-wide Wallet case; `membership.controller.ts`'s invite scope was given one in PR #89 after being verified only by reading.
+2. **A new access check of this shape is not accepted on a reading.** `CLAUDE.md`'s Architecture Review paragraph already requires the `organizationId` comparison; it should be read as requiring that the comparison is *reached*, which is the lesson this entry now carries.
 
 ## Restoring from a volume snapshot has never been tried, and cannot be tried safely against production
 Closed Threat #22 above closed the "no backups, never restored" threat **for PITR specifically**, by an actual rehearsal. Volume snapshots are now configured too — and it would be easy, and wrong, to read #22 as covering them by analogy. **It does not.** They are a different mechanism with a different restore path, and that path has never been executed on this project.

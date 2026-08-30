@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.40.0
+version: 1.41.0
 status: Active — forty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -766,6 +766,10 @@ Stated honestly rather than glossed: the hatch remains bypassable by calling `ra
 
 **Consequences:** Both services deploy from `main` on push, gated on CI. `railway up` remains available and gated by the preflight script. `frontend`, which had been stuck on commit `eb6710a` from 16 August because nothing had redeployed it since, catches up on the first triggered deploy — and its `railway.frontend.json` gets resolved for the first time, closing the config-as-code verification left open in ADR-034. **One limitation is explicitly not claimed as verified:** that a deploy genuinely *waits* for a green check suite could only be proven by deliberately pushing a red CI run to `main`, which would mean holding the main branch broken against a live production service with no staging environment (ADR-035, deferred). The flag is confirmed set to `true`; the waiting behaviour itself is trusted from Railway's own documented semantics and remains unverified by this project. Stated as an open gap rather than folded into the verified results.
 
+**Addendum (Sprint 14) — the emergency hatch acquired a new way to be blocked, and it was not this ADR that did it.** ADR-048 added the seed to `preDeployCommand`, and `railway up` executes that too. So a Role/Permission divergence between `seed.ts` and production now refuses the **emergency** deploy as well as the ordinary one, with the only unblock being a flag ADR-048 forbids putting in the config.
+
+Recorded here rather than only there, because this is the ADR someone reads mid-incident when the normal path is unavailable. **The block stands deliberately**, and the procedure is in ADR-048: read what the refusal names, and if that revocation is genuinely intended, run the seed by hand once with `--allow-revocations`, then deploy. Not an environment variable on the service — a standing one would quietly convert every future deploy into one that may revoke, which is precisely what an incident is worst at noticing.
+
 ---
 
 ## ADR-037 — vitest 2→3, and Emptying the Audit Ignore List Rather Than Re-Justifying It
@@ -1142,7 +1146,7 @@ Not yet an incident. Production's matrix currently matches `seed.ts` exactly —
 
 - **Only `RolePermission` join rows.** Never a `Permission` — deleting one cascades to every Role and breaks code that names it by string. Never a `Role` — `Membership` rows point at it. The join table is the minimum needed to make "remove a grant" actually take effect, and widening the authority beyond it buys nothing.
 - **Only Roles named in `ROLES`.** A Role this file does not define was created by something else, and the seed has no authority over grants it never made and cannot know about. None exist today (production holds exactly the four), so the limit costs nothing now and bounds the blast radius if that changes. Asserted by a test rather than left to the comment that states it.
-- **Every revocation is printed by name.** This is the only operation in the seed that destroys state, and it runs under a human today. A count would let a wrong matrix pass as a number; `REVOKING Manager -> data.export` does not.
+- **Every revocation is printed by name.** This is the only operation in the seed that destroys state. **The sentence that stood here — "and it runs under a human today" — was true when written and false the same afternoon**, once ADR-048 put the seed into `preDeployCommand`; it is corrected rather than quietly dropped, because a claim about who runs a destructive operation is exactly the kind that must not go stale silently. It now runs on every deploy, which is precisely why it runs *without* `--allow-revocations` and why a pending revocation fails the deploy instead of applying. A count would let a wrong matrix pass as a number; `REVOKING Manager -> data.export` does not.
 
 **One implementation note worth keeping:** a Role whose intended set is empty (`Waiter`) has to delete *every* row rather than none, and the natural expression of that leans on how Prisma treats `notIn: []`. That is a claim about someone else's code, load-bearing, in a destructive branch — precisely the shape ADR-031's fourth finding was written about. It is written as two explicit branches instead, so the behaviour does not depend on knowing the answer.
 
@@ -1252,6 +1256,12 @@ The residual risk is stated rather than argued away: a *wrongly added* grant sti
 **The flag's absence is the decision, and it is visible in the diff.** Adding `--allow-revocations` there later would be a one-word change that silently converts this into "every deploy may revoke" — so it is named here explicitly: **that word must never appear in `railway.backend.json` without its own ADR.** The reason the gate was built as a flag rather than an interactive prompt (ADR-046 addendum) was exactly this — to make the dangerous half a visible, reviewable line rather than an implicit consequence.
 
 **A deploy can now fail for a data reason rather than a code reason**, which is new and deliberate. The failure message names the Role, the Permission, and the fix: reconcile the matrix in `seed.ts`, not the flag.
+
+**Interaction with ADR-036's emergency hatch, decided here because neither ADR named it.** `railway up` — the gated manual path ADR-036 deliberately keeps for emergencies — also executes `preDeployCommand`. So a matrix divergence now blocks the **emergency** deploy too, and the only thing that would unblock it is the flag this ADR forbids putting in the config. That is a real corner, and an operator meeting it mid-incident should not have to invent a procedure.
+
+**Decision: the block stands, and the escape is a separate human act rather than a standing setting.** If an emergency deploy is refused because a revocation is pending, the procedure is: read what the refusal names, decide whether that revocation is genuinely intended, and if it is, run `pnpm --filter backend run prisma:seed -- --allow-revocations` **once, by hand, against production**, then deploy normally.
+
+Two reasons for that shape rather than an emergency environment variable. **A standing `SEED_ALLOW_REVOCATIONS=1` on the service would silently convert every future deploy into one that may revoke** — the exact outcome the flag exists to prevent, arrived at through the back door of an incident. And the block is usually *correct*: production's RBAC disagreeing with intent is not a good state to deploy more code on top of, and the refusal names precisely what disagrees. **The emergency is rarely the permission matrix; being told about it is cheap, and the escape is one command.**
 
 **Not decided here:** whether the seed should ever be allowed to revoke automatically. That remains open and needs its own ADR, and this decision is designed so that it can be taken later without being taken by accident.
 
