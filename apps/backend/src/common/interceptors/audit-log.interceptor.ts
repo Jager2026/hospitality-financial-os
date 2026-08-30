@@ -16,6 +16,7 @@ import { IDEMPOTENT_REPLAY_FLAG } from "../http/idempotent-replay.flag";
 import type { AuthedRequest } from "../http/authed-request";
 import { MUTATING_METHODS } from "../http/mutating-methods";
 import { PrismaService } from "../../prisma/prisma.service";
+import { type AuditMetadata, writeAuditLog } from "../audit/audit-metadata";
 
 // ADR-010 / SYSTEM_ARCHITECTURE.md: "a shared interceptor applied to all mutating endpoints —
 // not a utility each feature must remember to call." Applied globally in main.ts.
@@ -89,22 +90,24 @@ export class AuditLogInterceptor implements NestInterceptor {
       return;
     }
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId: request.user?.id ?? null,
-        entity,
-        entityId,
-        action: request.method.toLowerCase(),
-        // ADR-033: userId (above) is already "who was logged in" for every mutating request,
-        // unconditionally — nothing new needed for that half. This generically picks up a
-        // waiterMembershipId field when a response happens to include one (the same
-        // opt-in-by-response-shape convention extractId already uses for `id`, not a
-        // Payment-specific special case wired into this shared interceptor by route/entity name)
-        // — "who was selected" as a genuinely separate, independently recorded fact.
-        metadata: this.extractWaiterMembershipId(data),
-        ipAddress: request.ip,
-        userAgent: request.headers["user-agent"] ?? null,
-      },
+    await writeAuditLog(this.prisma, {
+      userId: request.user?.id ?? null,
+      entity,
+      entityId,
+      action: request.method.toLowerCase(),
+      // ADR-033: userId (above) is already "who was logged in" for every mutating request,
+      // unconditionally — nothing new needed for that half. This generically picks up a
+      // waiterMembershipId field when a response happens to include one (the same
+      // opt-in-by-response-shape convention extractId already uses for `id`, not a
+      // Payment-specific special case wired into this shared interceptor by route/entity name)
+      // — "who was selected" as a genuinely separate, independently recorded fact.
+      //
+      // This is the one metadata value derived from a response body rather than written as a
+      // literal, and therefore the one that most needed a type around it: `AuditMetadata` is what
+      // stops the generic pickup ever widening into "copy whatever the response happens to have".
+      metadata: this.extractWaiterMembershipId(data),
+      ipAddress: request.ip ?? null,
+      userAgent: request.headers["user-agent"] ?? null,
     });
   }
 
@@ -116,16 +119,14 @@ export class AuditLogInterceptor implements NestInterceptor {
    * per-route DTO shapes has no safe way to redact one field from an arbitrary body anyway. */
   private async writeFailure(request: AuthedRequest, entity: string, err: unknown): Promise<void> {
     const { code, statusCode } = this.describeError(err);
-    await this.prisma.auditLog.create({
-      data: {
-        userId: request.user?.id ?? null,
-        entity,
-        entityId: request.user?.id ?? randomUUID(),
-        action: `${request.method.toLowerCase()}_failed`,
-        metadata: { statusCode, code },
-        ipAddress: request.ip,
-        userAgent: request.headers["user-agent"] ?? null,
-      },
+    await writeAuditLog(this.prisma, {
+      userId: request.user?.id ?? null,
+      entity,
+      entityId: request.user?.id ?? randomUUID(),
+      action: `${request.method.toLowerCase()}_failed`,
+      metadata: { statusCode, code },
+      ipAddress: request.ip ?? null,
+      userAgent: request.headers["user-agent"] ?? null,
     });
   }
 
@@ -142,11 +143,12 @@ export class AuditLogInterceptor implements NestInterceptor {
     return null;
   }
 
-  /** Returns undefined (Prisma: field omitted, column stays its default null) whenever the
-   * response has no waiterMembershipId field at all, or it's explicitly null (a payment with no
-   * tip — nobody to attribute) — a genuinely present, non-null value is the only case worth a
-   * metadata row at all. */
-  private extractWaiterMembershipId(data: unknown): { waiterMembershipId: string } | undefined {
+  /** Returns an EMPTY AuditMetadata whenever the response has no waiterMembershipId field at all,
+   * or it is explicitly null (a payment with no tip — nobody to attribute). A genuinely present,
+   * non-null value is the only case worth recording. It returned `undefined` until the metadata
+   * type landed; the change is behaviourally identical for Prisma (an empty object and an omitted
+   * field both leave the column empty) and lets the closed type apply here too. */
+  private extractWaiterMembershipId(data: unknown): AuditMetadata {
     if (
       data &&
       typeof data === "object" &&
@@ -155,6 +157,6 @@ export class AuditLogInterceptor implements NestInterceptor {
     ) {
       return { waiterMembershipId: data.waiterMembershipId };
     }
-    return undefined;
+    return {};
   }
 }
