@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.41.0
+version: 1.42.0
 status: Active — forty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -585,6 +585,26 @@ So the failure cannot be "the truth was unreachable". It was this: **a plausible
 **A note on what the three cases do and do not share.** It is tempting to unify them as "a green run accepted as proof", and that is true only of the third: the first two had **no execution at all** — both claims were derived by reasoning and never run before being stated. The honest common structure is one level up, and it covers all three: *an explanation was adopted, and the observation that would have separated it from its alternatives was never made.* Sometimes because it was impossible from our source (entries one and two). Sometimes because it was easy, available, and skipped (this one).
 
 Recorded here rather than in ADR-045 because it belongs to this collection, and because of the one genuinely encouraging difference: **this is the first of the three caught before the claim left the session.** The first two reached the Founder, and one reached Stripe support. The mechanism that caught it was not more care — it was the Testing Review rule requiring each CI failure to be re-diagnosed from its own log, which is what forced a second look at a second file instead of stopping at the resemblance.
+
+**A sixth entry — and the first where the wrong claim came from a vendor's own documentation, quoted accurately.**
+
+Two independent sources — the Founder and an external model — arrived at the same incorrect requirement: that this platform must present a consent screen and record the connected account's acceptance of the Stripe agreement, with IP and timestamp. Neither invented it. **The requirement is real, quoted correctly, and does not apply to us**, because every statement of it in Stripe's documentation carries a scope condition that was dropped in the retelling:
+
+> *"That requires all connected accounts **with no Stripe-hosted Dashboard access** to accept the correct Stripe service agreement."*
+> *"Handle acceptance and re-acceptance … **for accounts with no Stripe-hosted Dashboard access**, including Custom accounts."*
+> *"This content is only applicable if your platform **is liable for negative balances** and your connected accounts **don't have access to the full Stripe Dashboard**."*
+
+This platform creates accounts with `dashboard: "full"` and `losses_collector: "stripe"` (`stripe.service.ts:131`). Both conditions fail, twice over — and the recipient agreement the question presupposed cannot request `card_payments` at all, which we do request.
+
+**The class, in the Founder's own formulation: a requirement from vendor documentation holds inside the boundary the documentation states; a quotation without its boundary is not a requirement.** Scope conditions are the easiest sentence to lose, because they read as preamble rather than as content — and a requirement quoted without one is *more* convincing than the original, not less, since nothing in it invites the question "does this apply here?"
+
+**The method that resolved it is worth as much as the finding, and generalises past Stripe.** A negative reading alone — "the obligation is scoped to accounts unlike ours" — is an argument from absence, and absence is exactly what a partial reading also produces. So it was paired with a positive confirmation of who *does* perform the collection, from the same documentation:
+
+> *"Stripe's onboarding UIs automatically collect the requirements for requested capabilities … The account holder can edit any pre-filled information before they **accept the service agreement**."*
+
+**Scope out, then confirm in.** Establishing that a duty does not fall on you is half an answer; the other half is naming who carries it instead. Where that second half cannot be found, the first half is a guess.
+
+**And the sweep it prompted found two obligations that do apply and are unmet** — our own terms of service must reference the Stripe Connected Account Agreement, and our privacy policy must link Stripe's, with language Stripe specifies. We have neither document. **The corrected reading was not "nothing to do"** — it moved the work from a schema change to two documents, and made `PERSONAL_DATA_MAP.md` a prerequisite for both.
 
 **The rule this fixes, and it is cheap:** before a claim about third-party behaviour is written down, acted on, or sent to anyone outside this project, run the smallest thing that would distinguish it from its opposite. A four-line script, one real request, one deliberately-wrong assertion. Both of these would have cost a minute; the first cost eleven days of a misdirected support thread.
 
