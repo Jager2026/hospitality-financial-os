@@ -310,7 +310,7 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   The Founder's instruction is that these are two separate decisions and must not arrive together:
 
   - **The seed runs on every deploy.** Makes it authoritative *on a schedule*. On its own this is close to safe today, because the seed is `upsert`-only: it can add and correct, never remove.
-  - **The seed may delete.** Gives it the power to *revoke*. Needed for the reconciliation work below — a permission removed from `seed.ts` currently stays granted forever on any existing database.
+  - **The seed may delete — DONE (ADR-046).** It now reconciles: a Permission removed from `seed.ts` is revoked on an existing database instead of surviving forever. **This raises the stakes on the remaining decision rather than settling it.** Running the seed used to be safe in the sense that nothing could be lost; it can now revoke, which makes a manual run a privileged operation and an automatic one a standing risk. The two decisions are now one apart instead of two, and the remaining one is the one with teeth.
 
   Each alone is defensible. **Together they mean every deploy can silently revoke permissions in production**, which is a materially different system from either.
 

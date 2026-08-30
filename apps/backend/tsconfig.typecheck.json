@@ -1,0 +1,18 @@
+{
+  // Typechecking covers more than the build does, deliberately.
+  //
+  // tsconfig.json is the BUILD config: `rootDir: ./src` and `include: ["src/**/*.ts"]`, which is
+  // correct for what ships. The side effect was that `prisma/seed.ts` and everything in `test/`
+  // were never typechecked by CI at all — including the seed, which since ADR-046 deletes
+  // RolePermission rows. A file that can revoke permissions in production should not be the one
+  // file nobody's compiler looks at.
+  //
+  // No rootDir and no outDir here: this configuration never emits, so the constraint that made
+  // the build config exclude these directories does not apply.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "prisma/**/*.ts"]
+}

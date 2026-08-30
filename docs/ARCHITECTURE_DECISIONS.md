@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.36.1
-status: Active — forty-five ADRs, all Accepted
+version: 1.37.0
+status: Active — forty-six ADRs, all Accepted
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -1125,6 +1125,43 @@ The Founder asked for this to be written down separately, on the grounds that it
 `roleId` never got asked that question, because nothing ever listed Roles. So each write path validated the only thing it could reason about alone: does this id exist? Four separate places independently arrived at the same insufficient check — not by copying, but because **each was reasoning in isolation about an input whose legitimate range was written down nowhere.**
 
 **The predictive form: look for inputs the API accepts but never emits.** A field with no read endpoint has no owner, no defined range, and therefore no shared validation — and its checks will be weakest exactly where it is most dangerous, because "exists" is all a caller-blind check can assert. This is the same audit as `CLAUDE.md`'s input-grep method (added Sprint 14) approached from the other side: grep the inputs to find the doors, then ask of each door whether anything in the system defines what may come through it.
+
+---
+
+## ADR-046 — The seed reconciles `RolePermission` instead of only adding to it
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** `seedRbac` upserted every intended `Role -> Permission` grant and did nothing else. It could create and it could correct; **it could never remove.** Deleting a Permission from a Role in `seed.ts` therefore had no effect on any database that already held the row — the grant survived, and the file went on describing a restriction that was not in force.
+
+This is ADR-044's `platform_only` failure with the direction reversed. There, a *new* restriction never reached production because nothing applied it. Here, a *withdrawn* grant would never leave production because nothing could remove it. Both produce the same end state, which is the one this sprint keeps finding: **the repository describes an intent, and the running system holds something else, with nothing anywhere reporting the difference.**
+
+Not yet an incident. Production's matrix currently matches `seed.ts` exactly — verified, see below — so nothing has drifted. This closes the mechanism before it does.
+
+**Decision — reconcile, and the scope of the authority is the safety mechanism.** After upserting the intended grants for a Role, remove every `RolePermission` row for that Role that the matrix does not name. Three deliberate limits:
+
+- **Only `RolePermission` join rows.** Never a `Permission` — deleting one cascades to every Role and breaks code that names it by string. Never a `Role` — `Membership` rows point at it. The join table is the minimum needed to make "remove a grant" actually take effect, and widening the authority beyond it buys nothing.
+- **Only Roles named in `ROLES`.** A Role this file does not define was created by something else, and the seed has no authority over grants it never made and cannot know about. None exist today (production holds exactly the four), so the limit costs nothing now and bounds the blast radius if that changes. Asserted by a test rather than left to the comment that states it.
+- **Every revocation is printed by name.** This is the only operation in the seed that destroys state, and it runs under a human today. A count would let a wrong matrix pass as a number; `REVOKING Manager -> data.export` does not.
+
+**One implementation note worth keeping:** a Role whose intended set is empty (`Waiter`) has to delete *every* row rather than none, and the natural expression of that leans on how Prisma treats `notIn: []`. That is a claim about someone else's code, load-bearing, in a destructive branch — precisely the shape ADR-031's fourth finding was written about. It is written as two explicit branches instead, so the behaviour does not depend on knowing the answer.
+
+**Verification — falsified on a database with existing rows, never through `db:reset`.** A reset proves nothing here: it rebuilds from empty, where "only adds" and "reconciles" are indistinguishable. Four consecutive runs against the same populated database:
+
+1. Injected `Waiter -> roles.manage`, a grant `seed.ts` does not intend → the seed printed `REVOKING Waiter -> roles.manage` and the row was gone.
+2. Removed `data.export` from `MANAGER_PERMISSIONS` in the file → `REVOKING Manager -> data.export`, Manager 7 → 6. **This is the exact case that was impossible before.**
+3. Restored the line → the grant returned, Manager 6 → 7, nothing revoked. The mechanism is symmetric: the file, not the database, decides.
+4. Final matrix 10 / 7 / 10 / 0 with `Administrator.platformOnly = true`, matching intent.
+
+Three tests, each falsified against the previous implementation: disabling the reconciliation fails the revocation test alone (`expected [ {…} ] to have a length of +0 but got 1`) while the two guard tests keep passing — which is correct, since an implementation that cannot delete trivially satisfies "does not over-delete".
+
+**Production, measured — and deliberately not written to.** The full matrix was read from production and compared **by permission name**, not by count, since equal counts prove nothing about which grants are held. The result: 27 `RolePermission` rows, and a reconciliation run would perform **0 revocations and 0 grants**. Production is exactly in sync.
+
+There is no "after" measurement here, and the reason is not an omission. For ADR-044's `platform_only` an "after" existed because production was changed. This change is to code; **production only changes when someone runs the seed** — and whether the seed should be run, by whom and when, is exactly the decision deferred to step 3. Computing the delete-set without performing it gives the same certainty and does not quietly settle a question that has been kept open on purpose.
+
+**Consequence, and the Founder asked for this explicitly: running the seed is now strictly more dangerous than it was.** Before, `seedRbac` could only add and correct; running it against any database was safe in the sense that nothing could be lost. Now it can revoke. That does not change the mechanism's correctness — it changes who may run it and when, and a manual run has become a privileged operation rather than an idempotent convenience.
+
+**It does not make the deploy question inevitable, but it moves it in both directions at once**, and that is the honest summary. Reconciliation that never runs in production is a document, exactly like `platform_only` was — so this makes automating the seed **more necessary**. And reconciliation that runs on every deploy means every deploy can revoke permissions — so it makes automating the seed **more dangerous**. The two decisions the Founder separated (*the seed runs on every deploy* / *the seed may delete*) are now one apart rather than two, and the remaining one is the one with teeth. The question that decision must answer is unchanged and unanswered here: **if the seed is authoritative and runs automatically, what protects production from an incomplete `seed.ts`?** `test/global-setup.ts` already proves the premise is real — its hand-copied matrix went stale at 4 of 10 Permissions and 3 of 4 Roles. A stale matrix that can only add is a documentation bug; a stale matrix that can delete is an outage.
 
 ---
 
