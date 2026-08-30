@@ -98,6 +98,24 @@ export const en = {
     "This is about the password itself — it has been seen in lists collected from other services.",
   "register.error.breached.action": "Please choose a unique password you haven’t used elsewhere.",
 
+  // Close A Venue — UX_MAP.md; ADR-054. The screen itself is not built yet (the restaurant
+  // management screens are stubs), and these strings are here so the wording is settled before
+  // someone writes it in a hurry next to a destructive button. Never "delete": restaurants close,
+  // and their accounting is kept. Never "permanently" either — reopen is planned, and copy that
+  // forecloses it would have to be rewritten the moment it ships.
+  "closeVenue.title": "Close this venue",
+  "closeVenue.whatHappens":
+    "The venue stops trading through PlainTabs. It disappears from your venues, stops taking payments, and nobody can be invited to it.",
+  "closeVenue.historyKept":
+    "Its payments, transactions and reports stay exactly as they are. Closing a venue never changes what it earned.",
+  // The one thing a person could otherwise get wrong about their own money. Factual, no legal
+  // characterisation — and it must stay word-for-word aligned with the Terms of Service, which
+  // says the same thing in its own voice.
+  "closeVenue.stripe":
+    "Your Stripe account stays yours. We stop sending payments through it, and it remains open — closing it is something only you can do, by contacting Stripe directly.",
+  "closeVenue.confirm": "Close venue",
+  "closeVenue.cancel": "Keep it open",
+
   // Terms and Privacy — real routes so the links on Register are not dead. Neither document is
   // written; the pages say so plainly rather than showing a plausible-looking placeholder
   // (IMPLEMENTATION_PLAN.md, Blocking Gate Before The First Pilot Restaurant).

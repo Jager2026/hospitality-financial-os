@@ -1446,5 +1446,41 @@ The correction is worth recording: a test named *"locks the account out, and doe
 
 ---
 
+## ADR-054 — Venues close, they are not deleted; and the behaviour that was already right gets its first test
+
+**Status:** Accepted (Sprint 14)
+
+**Numbering note:** ADR-052 is in flight in open PR #105, and ADR-053 is reserved for the tips-ownership decision assigned separately. This takes 054 rather than risk two documents claiming one number.
+
+**Context.** `DELETE /restaurants/{id}` has always been a soft delete: it sets `deleted_at` and `status = INACTIVE` and writes nothing else. Around it, eleven read sites filter `deleted_at IS NULL` and eight deliberately do not.
+
+Three things were wrong about that, and only one of them was in the code.
+
+**The name lied.** The word "delete" promises removal, and the system performs a deactivation that keeps every financial row. For a restaurant that is not a defect to apologise for — it is the correct behaviour, described by the wrong word.
+
+**Nothing was tested.** Not one assertion anywhere in the suite covered any of the nineteen read sites. The behaviour was correct by reading and unproven by execution, which is a weaker basis than an access-affecting flag deserves — and this project has been wrong before about exactly that gap.
+
+**The screen never mentioned Stripe.** `close()` touches no Stripe API, and it should not: under Direct charges with `dashboard: "full"` (ADR-014) the connected account belongs to the venue's owner, who is merchant of record with their own Dashboard login. Closing on our side ends our routing of payments; the account stays open and can still take money. **That is right, and a person who closed their venue could reasonably believe the opposite.** The broken promise was never in the Stripe call — it was in the absence of a sentence.
+
+**Decision: rename the action to "close a venue", keep every route's behaviour exactly as it is, and cover it with tests.**
+
+- **Renamed where the name is read by a person or an engineer:** `RestaurantService.close`, `RestaurantController.close`, the seeded permission's description, `API_Contract.md`, and the screen copy.
+- **Not renamed:** the HTTP method (`DELETE`) and the permission identifier (`restaurant.delete`). Both are identifiers rather than words a customer reads, and renaming the permission would be an RBAC data migration whose reconciliation gate (ADR-048) would refuse the next deploy over a revocation nobody intended. **Cosmetics are not worth a blocked deploy**; the description carries the meaning instead.
+- **The authorization/reporting split stands unchanged** — the same distinction ADR-051 drew. Operational reads filter; reporting reads must not, because a payment taken before closing still happened and the ten-year floor requires it to remain in the books of its own period.
+
+**Webhooks arriving after closure are processed normally, and that is now a decision rather than an accident.** It was already the behaviour — the webhook path never reads `Restaurant` through a gate at all — but nothing recorded it and nothing tested it. Refusing them would strand money: Stripe would hold a settled charge our books never recorded, and `PaymentReconciliationService` compares exactly those two. The capture in flight when the owner clicked close, and a chargeback six months later, both belong in the Ledger.
+
+**The sub-case gets a searchable log line and deliberately no alert.** A `payment_intent.succeeded` with no matching `Payment` row means a charge created outside this platform — most plausibly by the owner in their own Stripe Dashboard. It carries a `marker` field so it can be searched for rather than noticed. **No alert, because there is nobody on call to receive one, and a channel with no recipient is worse than none — it looks like coverage.**
+
+**Reopen is not built here, and the copy is written for its arrival.** Seasonal closure is ordinary in Lithuanian hospitality; a venue that closes in November and cannot return in April loses its history and leaves. Nothing today clears `deleted_at`. The screen says "closed", never "permanently closed", so the wording does not have to be rewritten the week reopen ships.
+
+**What the tests establish, each falsified.** Removing `deleted_at IS NULL` from the venue list fails the disappearance case; adding that filter to the payment list fails the retention case; refusing post-closure webhooks fails the Ledger case. Each failed alone, with the other cases still green, so the failures are specific rather than a broken suite.
+
+The reporting half is not decoration. **A suite that only proved a closed venue disappears would pass against an implementation that erased its financial history** — the outcome the retention floor forbids, and the one a well-meaning "make delete actually delete" change would produce.
+
+**Not decided here:** reopen (its own change); whether a closed venue should still absorb Stripe `account.updated` events; and the exact wording alignment between the screen and Terms of Service §4/§11, which cannot be completed while the Terms text lives outside this repository.
+
+---
+
 ## Superseded / Retired
 - **CTO Operating Manual** — superseded by ADR-011; content to be merged into `CLAUDE_RULES.md`, then removed from the repository.

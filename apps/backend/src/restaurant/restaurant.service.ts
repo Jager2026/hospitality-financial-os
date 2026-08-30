@@ -124,7 +124,24 @@ export class RestaurantService {
     });
   }
 
-  async remove(id: string, user: AuthenticatedUser): Promise<void> {
+  /**
+   * Closes a venue (ADR-054). It stops trading through this platform; it is not erased.
+   *
+   * Operations stop — eleven read sites filter `deletedAt: null`, including the one consolidated
+   * reachability gate every restaurant-scoped route passes through, so a closed venue cannot be
+   * fetched, configured, staffed, invited into, or take another payment. **Reporting does not
+   * stop**: payment and transaction history, wallets and the Ledger continue to carry it, because
+   * a payment taken before closing still happened and the ten-year accounting floor requires it
+   * to remain in the books of its own period (`PERSONAL_DATA_MAP.md` §6).
+   *
+   * **Nothing here touches Stripe, deliberately.** Under Direct charges with `dashboard: "full"`
+   * (ADR-014) the connected account belongs to the venue's owner, who is merchant of record and
+   * holds their own Stripe Dashboard login. Closing on our side ends our routing of payments
+   * through it; it does not and must not close their account. The closure screen has to say so —
+   * `UX_MAP.md`, "Close A Venue" — because it is the one place a person could otherwise believe
+   * their ability to take money had been switched off.
+   */
+  async close(id: string, user: AuthenticatedUser): Promise<void> {
     const restaurant = await this.getReachableRestaurantOrThrow(id, user);
     this.assertPermission(user, restaurant, "restaurant.delete");
 

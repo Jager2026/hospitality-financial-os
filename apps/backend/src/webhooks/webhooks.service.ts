@@ -134,7 +134,21 @@ export class WebhooksService {
       where: { processorPaymentId: paymentIntentId },
     });
     if (!payment) {
-      this.logger.warn(`payment_intent.succeeded for unknown PaymentIntent ${paymentIntentId}`);
+      // ADR-054. Deliberately `warn`, not an alert: production's log level is `info`, so this
+      // survives, and there is nobody on call to receive an alert — a channel with no recipient
+      // is worse than none, because it looks like coverage.
+      //
+      // The marker is in the message so it can be searched for rather than noticed. A settled
+      // PaymentIntent we have no row for means the charge was created outside this platform —
+      // most plausibly by the venue's owner in their own Stripe Dashboard, which they keep after
+      // closing (they are merchant of record, ADR-014). Nothing here is wrong or actionable by
+      // code; it is a fact about the business worth being able to find later.
+      this.logger.warn(
+        { paymentIntentId, marker: "payment_intent_without_local_payment" },
+        `payment_intent.succeeded for unknown PaymentIntent ${paymentIntentId} — no Payment row ` +
+          `exists, so this charge was created outside this platform. Nothing is written to the ` +
+          `Ledger.`,
+      );
       return;
     }
     if (payment.status === "SUCCEEDED") return; // defensive no-op; claimEvent already dedupes the normal case

@@ -150,7 +150,15 @@ GET /restaurants/{id} — includes `onboardingStatus`, `cardPaymentsStatus`, `pa
 PATCH /restaurants/{id}
 
 ## Delete Restaurant
-DELETE /restaurants/{id} — soft delete only.
+DELETE /restaurants/{id} — **closes a venue** (ADR-054). Soft delete only: sets `deleted_at` and `status = INACTIVE`, and writes nothing else. Requires `restaurant.delete`.
+
+The method and the permission keep their names — both are identifiers, not words a customer reads — but **the action is closing, not deleting**, and every user-facing surface must say so. Operations stop: eleven read sites filter `deleted_at IS NULL`, so a closed venue cannot be fetched, configured, staffed, invited into, or take another payment. **Reporting does not stop**: `GET /payments`, `GET /transactions`, their exports, and the wallet routes deliberately continue to return its history, because a payment taken before closing still happened and the ten-year accounting floor requires it to stay in the books of its own period.
+
+**Webhooks for a closed venue are processed normally** — the capture that was in flight when the owner closed, and a chargeback months later, both still reach the Ledger. Refusing them would strand money Stripe has settled and our books never recorded, and `PaymentReconciliationService` compares exactly those two.
+
+**Stripe is untouched.** The connected account belongs to the venue's owner (Direct charges, `dashboard: "full"` — ADR-014). Closing ends our routing of payments through it and does not close their account.
+
+There is no reopen endpoint yet. It is planned as its own change; nothing here forecloses it.
 
 ## Restaurant Onboarding Link
 POST /restaurants/{id}/onboarding-link — generates a fresh Stripe Account Link (ADR-014) for the restaurant's Connect account and returns `{ url }` for the frontend to redirect the owner to. Short-lived (Stripe expires these links quickly); callers must not cache the URL.

@@ -34,7 +34,10 @@ const CURRENCIES = [
 const PERMISSIONS = [
   { name: "restaurant.create", description: "Create a new Restaurant" },
   { name: "restaurant.edit", description: "Edit Restaurant details and settings" },
-  { name: "restaurant.delete", description: "Soft-delete a Restaurant" },
+  {
+    name: "restaurant.delete",
+    description: "Close a venue (retains its financial history — ADR-054)",
+  },
   { name: "membership.invite", description: "Invite a new Membership" },
   { name: "membership.manage", description: "Edit or disable an existing Membership" },
   { name: "reports.view", description: "View restaurant reports and analytics" },
