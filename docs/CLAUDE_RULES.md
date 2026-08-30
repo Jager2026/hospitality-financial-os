@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.12.0
+version: 2.13.0
 status: Active
 classification: Critical
 priority: Highest
@@ -196,6 +196,12 @@ Never refactor for ego. Refactor because future engineers deserve better.
 ---
 
 # Workspace Hygiene
+
+**Branch from `main` unless the work genuinely depends on code in an open pull request — and check what `main` actually is before branching, rather than assuming the previous PR merged.** A stack of branches built on unmerged PRs breaks against squash-merge **mechanically, regardless of content**: squashing puts a single new commit on `main`, every descendant still carries the originals, and each one goes `CONFLICTING` the moment its parent lands. Nothing about the code has to overlap for this to happen.
+
+The project has paid for this twice. PR #61 closed itself when the branch it was based on was deleted. Later, nine PRs stacked on each other all conflicted the instant the first merged — every one resolved by cherry-picking its own commits onto the new `main`, and **not one of the nine had a content conflict**, which is the proof that the cost was structural rather than a consequence of the work.
+
+If the dependency is real, stacking is still allowed — but then plan the rebase as part of the work: once the parent merges, the child's own commits must be replayed onto the new `main`, and each replay restarts the required CI check before it can merge. Discover that in the plan, not in a conflict. And never reach for an administrator override to skip the restarted check; the wait is the gate doing its job.
 
 The same applies to processes, not only files. A server started by hand to verify something is shared state for as long as it lives: it holds a port, and — if it points at the development database — it keeps running its background jobs against the same rows the test suite is about to assert on. Stop what you started before running the suite, and confirm the port is actually free rather than assuming the kill worked.
 
