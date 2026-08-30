@@ -17,6 +17,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:format": "prisma format",
     "prisma:seed": "tsx prisma/seed.ts",
+    "redact:user": "tsx scripts/redact-user.ts",
     "db:reset": "prisma migrate reset --force"
   },
   "dependencies": {

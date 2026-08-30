@@ -1412,5 +1412,75 @@ Two Guards and six services read `user.memberships`. A rule each of them must re
 
 ---
 
+## ADR-052 — Erasure empties the person and keeps the financial record, and it is not on the network
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** `PERSONAL_DATA_MAP.md` §4 carried one sentence flagged as the most consequential in the document: *a GDPR erasure request has no code path at all.* Four subject rights, and this was the only one where "we will handle it manually" is a promise that cannot be kept — not because doing it by hand is laborious, but because **doing it by hand is not possible to do correctly.**
+
+The person doing it in the database has two options and both are wrong. Delete the `User` row, and `AuditLog.userId` is `ON DELETE SET NULL` — every audit entry that person ever produced silently loses its actor. Or clear the fields by hand, and the completeness of the erasure depends on someone remembering the whole schema. Erasure and auditability appear to be in direct conflict.
+
+**Decision: empty the person; retain the financial record; make the retention a period rather than a hesitation.**
+
+`Membership`, `LedgerLine`, `Payment`, `Wallet`, `Transaction`, `Refund` and `Adjustment` survive **because the ten-year accounting floor (§6) requires them**, which is a lawful-basis answer and not a reluctance to delete. That is only survivable because of the boundary in §2: every one of those rows attributes to `Membership.id`, which carries no name, no email and no contact detail. **The person can be emptied because the money was never pointed at the person.** The schema made this decision available years before anyone asked the question.
+
+Emptying rather than deleting also dissolves the apparent conflict: the row stays, so every foreign key stays valid, and the audit trail keeps its actor while the actor stops being identifiable.
+
+**The tombstone is per-row, not a shared constant.** `email` is `@unique`; a second erasure against a shared value would collide, and it would do so during someone's GDPR request. `.invalid` is reserved by RFC 2606, so a tombstone can never become a deliverable address.
+
+**Delivery: a script, not a route, and the constraint is enforced.**
+
+A subject-rights request at five restaurants is a manual, verified act. An endpoint that empties a user is the most dangerous thing this codebase could expose, and would need an authorization story elaborate enough to be no safer than a person at a terminal. `repo-invariants.spec.ts` fails if any `.module.ts` or `.controller.ts` imports the library — *"it is not a Nest provider"* is a property of today's code until something checks it, and the edit that would break it looks entirely ordinary in review.
+
+**Dry run by default; `--confirm` applies.** The same shape as ADR-048's `--allow-revocations`, and on the entry point rather than inside the library for the same reason: a gate that legitimate work must bypass routinely stops being read. Here the two-step shape also means the operator has seen the plan printed before adding the flag. Verified by running all four modes — no argument, empty argument, dry run, confirm — against a real row, plus the double-run refusal.
+
+**It refuses to settle the open question, and says so on every run.** Emptying `User` does not reach `ipAddress`/`userAgent` on that person's `AuditLog` and `AgreementAcceptance` rows. Whether those are retained as security records or erased with the person is undecided (§6). The default is *not* a recommendation — it is the absence of a decision, and the script prints the affected row count and the words *this erasure is partial* whenever it applies. **An incomplete erasure must not be reportable as a complete one by someone who did not know it was incomplete.**
+
+**Two invariants, because both claims decay silently.** One keeps it off every HTTP surface. The other parses `schema.prisma` and fails if any `String` field on `User` is classified by neither the redacted list nor the retained list — a future `phoneNumber String` would otherwise be quietly kept by a routine that believes it is complete, and nothing about the code would look wrong.
+
+**What falsification established, including one thing it corrected.** Removing the invitation-clearing write fails the *no row still carries the address* case; removing `deletedAt` fails the double-redaction refusal; adding an unclassified column fails the schema invariant; importing the library from a controller fails the HTTP invariant — each with the other cases still passing, so the failures are specific rather than a broken suite.
+
+The correction is worth recording: a test named *"locks the account out, and does so on `deletedAt`"* **passed** with `deletedAt` removed. `AuthService.login` refuses on `deletedAt` and on `status !== "ACTIVE"` independently, and the redaction sets both, so either alone still rejects. The test was real; its *name and comment claimed an isolation it did not achieve*, and only the falsification distinguished the two. Renamed to what it demonstrates. **A test can be correct and still lie about what it proves, and the falsification pass is what catches that rather than any amount of reading.**
+
+**Not decided here:** the `AuditLog`/`AgreementAcceptance` request-metadata question above; whether erasure should also revoke refresh tokens (moot in practice — the guard re-reads per request and refuses on `deletedAt`); and anything Stripe holds, which `stripeAccountId` only points at and our erasure cannot reach.
+
+---
+
+## ADR-054 — Venues close, they are not deleted; and the behaviour that was already right gets its first test
+
+**Status:** Accepted (Sprint 14)
+
+**Numbering note:** ADR-052 is in flight in open PR #105, and ADR-053 is reserved for the tips-ownership decision assigned separately. This takes 054 rather than risk two documents claiming one number.
+
+**Context.** `DELETE /restaurants/{id}` has always been a soft delete: it sets `deleted_at` and `status = INACTIVE` and writes nothing else. Around it, eleven read sites filter `deleted_at IS NULL` and eight deliberately do not.
+
+Three things were wrong about that, and only one of them was in the code.
+
+**The name lied.** The word "delete" promises removal, and the system performs a deactivation that keeps every financial row. For a restaurant that is not a defect to apologise for — it is the correct behaviour, described by the wrong word.
+
+**Nothing was tested.** Not one assertion anywhere in the suite covered any of the nineteen read sites. The behaviour was correct by reading and unproven by execution, which is a weaker basis than an access-affecting flag deserves — and this project has been wrong before about exactly that gap.
+
+**The screen never mentioned Stripe.** `close()` touches no Stripe API, and it should not: under Direct charges with `dashboard: "full"` (ADR-014) the connected account belongs to the venue's owner, who is merchant of record with their own Dashboard login. Closing on our side ends our routing of payments; the account stays open and can still take money. **That is right, and a person who closed their venue could reasonably believe the opposite.** The broken promise was never in the Stripe call — it was in the absence of a sentence.
+
+**Decision: rename the action to "close a venue", keep every route's behaviour exactly as it is, and cover it with tests.**
+
+- **Renamed where the name is read by a person or an engineer:** `RestaurantService.close`, `RestaurantController.close`, the seeded permission's description, `API_Contract.md`, and the screen copy.
+- **Not renamed:** the HTTP method (`DELETE`) and the permission identifier (`restaurant.delete`). Both are identifiers rather than words a customer reads, and renaming the permission would be an RBAC data migration whose reconciliation gate (ADR-048) would refuse the next deploy over a revocation nobody intended. **Cosmetics are not worth a blocked deploy**; the description carries the meaning instead.
+- **The authorization/reporting split stands unchanged** — the same distinction ADR-051 drew. Operational reads filter; reporting reads must not, because a payment taken before closing still happened and the ten-year floor requires it to remain in the books of its own period.
+
+**Webhooks arriving after closure are processed normally, and that is now a decision rather than an accident.** It was already the behaviour — the webhook path never reads `Restaurant` through a gate at all — but nothing recorded it and nothing tested it. Refusing them would strand money: Stripe would hold a settled charge our books never recorded, and `PaymentReconciliationService` compares exactly those two. The capture in flight when the owner clicked close, and a chargeback six months later, both belong in the Ledger.
+
+**The sub-case gets a searchable log line and deliberately no alert.** A `payment_intent.succeeded` with no matching `Payment` row means a charge created outside this platform — most plausibly by the owner in their own Stripe Dashboard. It carries a `marker` field so it can be searched for rather than noticed. **No alert, because there is nobody on call to receive one, and a channel with no recipient is worse than none — it looks like coverage.**
+
+**Reopen is not built here, and the copy is written for its arrival.** Seasonal closure is ordinary in Lithuanian hospitality; a venue that closes in November and cannot return in April loses its history and leaves. Nothing today clears `deleted_at`. The screen says "closed", never "permanently closed", so the wording does not have to be rewritten the week reopen ships.
+
+**What the tests establish, each falsified.** Removing `deleted_at IS NULL` from the venue list fails the disappearance case; adding that filter to the payment list fails the retention case; refusing post-closure webhooks fails the Ledger case. Each failed alone, with the other cases still green, so the failures are specific rather than a broken suite.
+
+The reporting half is not decoration. **A suite that only proved a closed venue disappears would pass against an implementation that erased its financial history** — the outcome the retention floor forbids, and the one a well-meaning "make delete actually delete" change would produce.
+
+**Not decided here:** reopen (its own change); whether a closed venue should still absorb Stripe `account.updated` events; and the exact wording alignment between the screen and Terms of Service §4/§11, which cannot be completed while the Terms text lives outside this repository.
+
+---
+
 ## Superseded / Retired
 - **CTO Operating Manual** — superseded by ADR-011; content to be merged into `CLAUDE_RULES.md`, then removed from the repository.

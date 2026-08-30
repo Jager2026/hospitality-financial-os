@@ -1,6 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  REDACTED_USER_STRING_FIELDS,
+  RETAINED_USER_STRING_FIELDS,
+} from "../user-redaction/redact-user";
 
 /**
  * Repository-level invariants — deliberately not about the backend.
@@ -299,6 +303,76 @@ describe("repository invariants", () => {
       `Write audit rows with writeAuditLog() from common/audit/audit-metadata.ts, whose ` +
         `AuditMetadata type is what keeps personal data out of the metadata column. Calling ` +
         `prisma.auditLog.create directly bypasses it. Offending files:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  // ADR-052. The erasure mechanism must stay unreachable over HTTP: a route that empties a user is
+  // the most dangerous thing this codebase could expose, and a subject-rights request at this scale
+  // is a manual, verified act. "It is not a Nest provider" is a property of today's code, not a
+  // rule, until something checks it — and the edit that would break it (injecting a helper into a
+  // service that a controller already uses) looks entirely ordinary in review.
+  it("keeps the user-redaction mechanism out of every HTTP surface (ADR-052)", () => {
+    const backendSrc = join(REPO_ROOT, "apps", "backend", "src");
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(controller|module)\.ts$/.test(entry.name)) continue;
+        if (readFileSync(full, "utf8").includes("user-redaction")) {
+          offenders.push(relative(REPO_ROOT, full));
+        }
+      }
+    };
+    walk(backendSrc);
+
+    expect(
+      offenders,
+      `user-redaction must never be reachable from a controller or wired into a module. It is a ` +
+        `script-only mechanism (apps/backend/scripts/redact-user.ts). Offending files:\n` +
+        offenders.join("\n"),
+    ).toEqual([]);
+  });
+
+  // ADR-052. The redaction lists are a claim about every String field on User, and nothing
+  // re-checks that claim when a column is added. A new `phoneNumber String` would be silently
+  // retained by an erasure routine that believes it is complete — the failure would be invisible
+  // exactly because the code still compiles and every existing test still passes.
+  it("classifies every String field on User as redacted or retained (ADR-052)", () => {
+    const schema = readFileSync(
+      join(REPO_ROOT, "apps", "backend", "prisma", "schema.prisma"),
+      "utf8",
+    );
+    const model = /^model User \{$([\s\S]*?)^\}$/m.exec(schema);
+    expect(model, "could not locate the User model in schema.prisma").not.toBeNull();
+
+    const stringFields = (model![1].split("\n") as string[])
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("//") && !line.startsWith("@@"))
+      .map((line) => /^(\w+)\s+String(\?)?(\s|$)/.exec(line))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map((m) => m[1]);
+
+    // Non-vacuity: if the parse silently matched nothing, every assertion below would pass.
+    expect(stringFields).toContain("email");
+    expect(stringFields.length).toBeGreaterThanOrEqual(4);
+
+    const classified = new Set<string>([
+      ...REDACTED_USER_STRING_FIELDS,
+      ...RETAINED_USER_STRING_FIELDS,
+    ]);
+    const unclassified = stringFields.filter((f) => !classified.has(f));
+
+    expect(
+      unclassified,
+      `New String field(s) on User are classified by neither list in ` +
+        `src/user-redaction/redact-user.ts. Decide for each whether an erasure request must clear ` +
+        `it, and add it to REDACTED_USER_STRING_FIELDS or RETAINED_USER_STRING_FIELDS with the ` +
+        `reason. Unclassified:\n${unclassified.join("\n")}`,
     ).toEqual([]);
   });
 });

@@ -289,6 +289,24 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 
 ---
 
+## Close A Venue
+
+**Not built yet.** The wording is settled here first, deliberately: this is a destructive-looking action, and the copy next to a destructive button is the copy most likely to be written in a hurry by whoever builds the screen.
+
+**The action is "close", never "delete" (ADR-054).** Restaurants close; they are not deleted, and the accounting for the years they traded is still needed. The backend has always behaved this way — `DELETE /restaurants/{id}` sets `deleted_at` and `status = INACTIVE` and nothing else — so this is the screen catching up with the system, not a change to it.
+
+**Never "permanently".** Reopen is planned as its own change (seasonal closure is ordinary in Lithuanian hospitality — a venue that closes in November and cannot come back in April loses its history and leaves). Copy that forecloses reopen would have to be rewritten the week it ships.
+
+**Three things the screen must say, and the third is the one that matters:**
+
+1. **What stops.** The venue stops trading through the platform: it leaves the owner's list, stops taking payments, and nobody can be invited to it.
+2. **What does not.** Payments, transactions and reports are untouched. Closing never changes what a venue earned.
+3. **What happens to Stripe — stated plainly, because a person could otherwise believe we switched off their ability to take money.** The connected account belongs to the owner: they are merchant of record and hold their own Stripe Dashboard login (ADR-014). Closing here ends *our* routing of payments through it. **The account stays open, and only they can close it, by contacting Stripe directly.**
+
+Point 3 is written as fact with no legal characterisation, and **it says the same thing as the Terms of Service.** Two texts describing one behaviour in different words will drift, and the one a person is most likely to act on is the screen. Whoever edits either must edit both.
+
+---
+
 ## Settings
 
 Restaurant Information · Business Details · Tip Configuration · Payment Configuration · Users · Permissions · **Tax Information** *(blocked — see below)*
