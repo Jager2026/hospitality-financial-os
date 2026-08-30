@@ -1,6 +1,6 @@
 ---
 title: PERSONAL_DATA_MAP
-version: 1.1.0
+version: 1.2.0
 status: Active — research, no decisions
 classification: Critical
 owner: Founder
@@ -54,7 +54,7 @@ Every statement below was read out of `schema.prisma` and the service code, not 
 | `userId` | nullable, **`ON DELETE SET NULL`** — see §3, this is the sharpest conflict in the map |
 | `ipAddress` | personal data under GDPR in its own right, not merely metadata |
 | `userAgent` | device and browser fingerprint surface |
-| `metadata` (`Json?`) | **unbounded.** Whatever any interceptor chooses to put there. Verified in production: it currently holds `{"waiterMembershipId": "…"}` on a Payment row |
+| `metadata` (`Json?`) | the column is still `Json?`, but the **write path is now closed** by the `AuditMetadata` type — see §3. Verified in production: it holds `{"waiterMembershipId": "…"}` on a Payment row |
 | `entityId` | often a Membership or User id |
 
 ## `Restaurant` — a business, except when it is a person
@@ -125,7 +125,15 @@ Erasure by *field emptying* — keeping the `User` row, clearing `email`/`displa
 
 ## The one that is neither, yet
 
-**`AuditLog.metadata` is unbounded `Json`.** Nothing constrains what future code writes there. Today it holds a Membership id. It is the single field in this schema where personal data can accumulate without anyone deciding that it should — no migration, no review, just an interceptor passing a larger object.
+**`AuditLog.metadata` was unbounded `Json` — now closed at the write path.** The column still accepts anything; Prisma cannot express otherwise. What changed is that every write goes through `writeAuditLog()`, whose `metadata` argument is a **closed TypeScript type** listing four machine identifiers and nothing else.
+
+Adding a personal field is therefore a **compile error at the call site**, not something a reviewer has to notice. Falsified: putting `email` in a metadata literal fails typecheck with *"'email' does not exist in type 'AuditMetadata'"*.
+
+**A type alone would have been advice**, since `prisma.auditLog.create` accepts any object handed to it directly — so `repo-invariants.spec.ts` fails if that call appears anywhere outside the helper. Falsified in that direction too. There were four writers before this, not one, which is why the answer is a shared typed writer rather than "only the interceptor may write".
+
+**Deliberately not a runtime scan for personal-looking key names.** That needs a list of words that look personal, the list needs maintaining, and someone eventually edits it to make a build green — the rubber-stamp degradation `CLAUDE.md` names. A closed type needs no list.
+
+The residual: widening `AuditMetadata` is still possible, and should be. It is now a deliberate edit to a file whose only purpose is that decision, rather than an object quietly growing at a call site.
 
 ---
 

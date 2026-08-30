@@ -9,6 +9,7 @@ import type { AuthedRequest } from "../http/authed-request";
 import { MUTATING_METHODS } from "../http/mutating-methods";
 import { PrismaService } from "../../prisma/prisma.service";
 import { UnhandledErrorAlerter } from "../alerting/unhandled-error-alerter";
+import { writeAuditLog } from "../audit/audit-metadata";
 
 interface ErrorBody {
   success: false;
@@ -109,16 +110,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       AUDIT_ENTITY_RESOLVED_FLAG
     ] as string | undefined;
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId: request.user?.id ?? null,
-        entity: resolvedEntity ?? request.route?.path ?? request.path,
-        entityId: request.user?.id ?? randomUUID(),
-        action: `${request.method.toLowerCase()}_failed`,
-        metadata: { statusCode, code },
-        ipAddress: request.ip,
-        userAgent: request.headers["user-agent"] ?? null,
-      },
+    await writeAuditLog(this.prisma, {
+      userId: request.user?.id ?? null,
+      entity: resolvedEntity ?? request.route?.path ?? request.path,
+      entityId: request.user?.id ?? randomUUID(),
+      action: `${request.method.toLowerCase()}_failed`,
+      metadata: { statusCode, code },
+      ipAddress: request.ip ?? null,
+      userAgent: request.headers["user-agent"] ?? null,
     });
   }
 

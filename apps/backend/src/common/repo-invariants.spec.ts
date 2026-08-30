@@ -268,4 +268,37 @@ describe("repository invariants", () => {
         `above is passing for the wrong reason:\n${missingAttribution.join("\n")}`,
     ).toEqual([]);
   });
+
+  // The other half of the typed audit metadata. Without this, `AuditMetadata` is advice rather
+  // than a constraint: Prisma's `Json?` column accepts any object handed to it directly, so one
+  // `prisma.auditLog.create({ data: { metadata: req.body } })` would reopen the whole question.
+  //
+  // PERSONAL_DATA_MAP.md §3 named `metadata` as the single field where personal data can
+  // accumulate with nobody deciding that it should. A closed type answers that only while every
+  // write goes through it.
+  it("writes AuditLog rows through the typed helper alone", () => {
+    const SRC = join(REPO_ROOT, "apps", "backend", "src");
+    const HELPER = join(SRC, "common", "audit", "audit-metadata.ts");
+
+    function walk(dir: string): string[] {
+      return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return walk(full);
+        if (!entry.name.endsWith(".ts") || entry.name.endsWith(".spec.ts")) return [];
+        return [full];
+      });
+    }
+
+    const offenders = walk(SRC)
+      .filter((file) => file !== HELPER)
+      .filter((file) => /auditLog\s*\.\s*create/.test(readFileSync(file, "utf8")))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(
+      offenders,
+      `Write audit rows with writeAuditLog() from common/audit/audit-metadata.ts, whose ` +
+        `AuditMetadata type is what keeps personal data out of the metadata column. Calling ` +
+        `prisma.auditLog.create directly bypasses it. Offending files:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
 });

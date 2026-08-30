@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { writeAuditLog } from "../common/audit/audit-metadata";
 import type { User } from "@prisma/client";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
@@ -137,16 +138,14 @@ export class AuthService {
       return await this.tokenService.verifyRefreshToken(refreshToken);
     } catch (err) {
       if (err instanceof RefreshTokenReuseDetectedError) {
-        await this.prisma.auditLog.create({
-          data: {
-            userId: err.userId,
-            entity: "Authentication",
-            entityId: err.userId,
-            action: "refresh_token_reuse_detected",
-            metadata: { familyId: err.familyId },
-            ipAddress: context.ipAddress ?? null,
-            userAgent: context.userAgent ?? null,
-          },
+        await writeAuditLog(this.prisma, {
+          userId: err.userId,
+          entity: "Authentication",
+          entityId: err.userId,
+          action: "refresh_token_reuse_detected",
+          metadata: { familyId: err.familyId },
+          ipAddress: context.ipAddress ?? null,
+          userAgent: context.userAgent ?? null,
         });
       }
       throw err;
