@@ -336,4 +336,127 @@ describe("MembershipService (real database)", () => {
       ].sort(),
     );
   });
+
+  // Written BEFORE deciding anything, while surveying the thirteen copies of the reachability
+  // predicate for consolidation. The test above it covers an org-wide caller in the wrong
+  // Organization reaching a RESTAURANT-SCOPED target, and passes. This is the case it cannot
+  // reach: a target that is itself ORG-WIDE.
+  //
+  // getReachableOrThrow compares `m.restaurantId === membership.restaurantId` first. When both
+  // sides are an org-wide Membership that comparison is `null === null` — true — and `||`
+  // short-circuits before the organizationId comparison in the second clause ever runs. The
+  // organizations are never compared at all.
+  //
+  // Every fixture Role and permission list here is read from the seeded rows rather than typed as
+  // a literal (CLAUDE.md: a literal cannot be wrong when written and cannot stay right after).
+  it("findOne: an org-wide Membership in a DIFFERENT Organization cannot reach an ORG-WIDE Membership either — the case where both sides are null", async () => {
+    const ownerRole = await prisma.role.findUniqueOrThrow({
+      where: { name: "Owner" },
+      include: { rolePermissions: { include: { permission: true } } },
+    });
+    const ownerPermissions = ownerRole.rolePermissions.map((rp) => rp.permission.name);
+
+    const targetOrg = await createOrgWithTwoRestaurants();
+    const targetUser = await createUser();
+    const targetMembership = await prisma.membership.create({
+      data: {
+        userId: targetUser.id,
+        organizationId: targetOrg.organization.id,
+        restaurantId: null, // ORG-WIDE — this is the half the existing test does not cover
+        roleId: ownerRole.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const outsiderOrg = await createOrgWithTwoRestaurants();
+    const outsiderUser = await createUser();
+    const outsiderMembership = await prisma.membership.create({
+      data: {
+        userId: outsiderUser.id,
+        organizationId: outsiderOrg.organization.id,
+        restaurantId: null, // also org-wide, in a completely unrelated Organization
+        roleId: ownerRole.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const outsider: AuthenticatedUser = {
+      id: outsiderUser.id,
+      email: outsiderUser.email,
+      locale: "en",
+      memberships: [
+        {
+          id: outsiderMembership.id,
+          organizationId: outsiderOrg.organization.id,
+          restaurantId: null,
+          role: { id: ownerRole.id, name: ownerRole.name, permissions: ownerPermissions },
+        },
+      ],
+    };
+
+    await expect(service.findOne(targetMembership.id, outsider)).rejects.toMatchObject({
+      code: "MEMBERSHIP_NOT_FOUND",
+    });
+  });
+
+  // The read above is the smaller half. `update` runs the same reachability check and then
+  // `assertPermission`, whose first clause is the identical `m.restaurantId === membership.restaurantId`
+  // comparison — so if reachability leaks, the write path leaks with it, and an outsider does not
+  // merely read another Organization's org-wide Membership but re-roles it.
+  it("update: the same outsider cannot re-role an ORG-WIDE Membership in another Organization", async () => {
+    const ownerRole = await prisma.role.findUniqueOrThrow({
+      where: { name: "Owner" },
+      include: { rolePermissions: { include: { permission: true } } },
+    });
+    const ownerPermissions = ownerRole.rolePermissions.map((rp) => rp.permission.name);
+
+    const targetOrg = await createOrgWithTwoRestaurants();
+    const targetUser = await createUser();
+    const targetMembership = await prisma.membership.create({
+      data: {
+        userId: targetUser.id,
+        organizationId: targetOrg.organization.id,
+        restaurantId: null,
+        roleId: ownerRole.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const outsiderOrg = await createOrgWithTwoRestaurants();
+    const outsiderUser = await createUser();
+    const outsiderMembership = await prisma.membership.create({
+      data: {
+        userId: outsiderUser.id,
+        organizationId: outsiderOrg.organization.id,
+        restaurantId: null,
+        roleId: ownerRole.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const outsider: AuthenticatedUser = {
+      id: outsiderUser.id,
+      email: outsiderUser.email,
+      locale: "en",
+      memberships: [
+        {
+          id: outsiderMembership.id,
+          organizationId: outsiderOrg.organization.id,
+          restaurantId: null,
+          role: { id: ownerRole.id, name: ownerRole.name, permissions: ownerPermissions },
+        },
+      ],
+    };
+
+    await expect(
+      service.update(targetMembership.id, { roleId: waiterRoleId }, outsider),
+    ).rejects.toMatchObject({ code: "MEMBERSHIP_NOT_FOUND" });
+
+    // Asserted on the data, not only on the thrown code: a rejection that still wrote would be
+    // the worst possible outcome to report as a pass.
+    const after = await prisma.membership.findUniqueOrThrow({
+      where: { id: targetMembership.id },
+    });
+    expect(after.roleId).toBe(ownerRole.id);
+  });
 });

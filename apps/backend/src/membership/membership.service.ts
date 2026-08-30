@@ -125,9 +125,27 @@ export class MembershipService {
     if (!membership) {
       throw new AppException("MEMBERSHIP_NOT_FOUND", "Membership not found.", 404);
     }
+    // The `membership.restaurantId !== null` guard on the first clause is the whole fix, and the
+    // bug it closes was a live cross-Organization leak.
+    //
+    // The target here is a Membership, whose `restaurantId` is legitimately nullable — unlike
+    // every restaurant-scoped check in this codebase, where the right-hand side is a Restaurant id
+    // and can never be null. When the target was org-wide, `m.restaurantId === membership.restaurantId`
+    // was `null === null` for ANY caller holding an org-wide Membership anywhere, `||`
+    // short-circuited, and the `organizationId` comparison in the second clause never ran. **The
+    // organizations were never compared at all.**
+    //
+    // This is the exact shape CLAUDE.md's Architecture Review paragraph names, arriving through
+    // the one door that paragraph does not describe: it warns against `restaurantId === null` as
+    // proof of reach, and here the null was on the *target* side rather than the caller's.
+    // `wallet.service.ts` faces the same nullable target and got it right by refusing org-wide
+    // wallets outright — the two looked like the same call and differed on exactly this.
+    //
+    // Proven before it was fixed: an org-wide Owner of an unrelated Organization read this
+    // Membership in full, and `update` re-roled it (`membership.service.spec.ts`).
     const reachable = user.memberships.some(
       (m) =>
-        m.restaurantId === membership.restaurantId ||
+        (membership.restaurantId !== null && m.restaurantId === membership.restaurantId) ||
         (m.restaurantId === null && m.organizationId === membership.organizationId),
     );
     if (!reachable) {
@@ -143,9 +161,12 @@ export class MembershipService {
     membership: Membership,
     permission: string,
   ): void {
+    // Same nullable-target guard as getReachableOrThrow above, and it must be fixed in both:
+    // reachability alone decides the 404, but this decides the 403, and a caller who got past the
+    // first check on `null === null` would otherwise get past this one the same way.
     const hasPermission = user.memberships.some(
       (m) =>
-        (m.restaurantId === membership.restaurantId ||
+        ((membership.restaurantId !== null && m.restaurantId === membership.restaurantId) ||
           (m.restaurantId === null && m.organizationId === membership.organizationId)) &&
         m.role.permissions.includes(permission),
     );
