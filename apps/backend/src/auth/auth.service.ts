@@ -77,7 +77,7 @@ export class AuthService {
     // would write down that the user accepted something they were never shown.
     if (dto.acceptedTermsVersion !== CURRENT_PLATFORM_TERMS_VERSION) {
       throw new AppException(
-        "VALIDATION_ERROR",
+        "TERMS_VERSION_MISMATCH",
         "The terms have changed since this page was opened. Please reload and read them again.",
         409,
       );

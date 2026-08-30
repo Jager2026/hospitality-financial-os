@@ -239,6 +239,22 @@ Only then is MVP complete.
 
 ---
 
+# Blocking Gate Before The First Pilot Restaurant
+
+**Not a task and not an intention. A condition that must be false before any real restaurant is shown the registration screen.**
+
+`CURRENT_PLATFORM_TERMS_VERSION` (`apps/backend/src/common/agreements/agreement-versions.ts`) must no longer be `UNPUBLISHED-no-terms-document-exists-yet`, and the Terms of Service and Privacy Policy it names must actually exist and be reachable from the links on that screen.
+
+**The reason is not compliance paperwork.** Registration now writes an `agreement_acceptance` row saying *this person accepted revision X at time T* (ADR-049). While the version is a placeholder, every such row is a **false record** — it asserts agreement to a document nobody can produce. A missing record is visibly missing; a false one looks exactly like a real one, and looks more convincing the longer it sits in the table.
+
+**A false record is worse than no record.** That is why this is a gate rather than a to-do.
+
+Checking it requires no tooling: the constant either is the placeholder or it is not. The placeholder was written to be unmistakable in the data itself for the same reason — a date string would have produced rows that look published.
+
+Two obligations feed the same gate, both found in the Sprint 14 Stripe research and both genuinely unmet: **our own terms of service**, and **our own privacy policy referencing Stripe's role**. The second is an information duty under GDPR Art. 13, not a consent — see ADR-049 for why that distinction decides the shape of the screen.
+
+---
+
 # Deferred, Not Yet Scheduled
 
 Dependency-audit findings that require a major-version bump are never mixed into a routine audit or another sprint's own task list — each earns its own focused task with its own live verification (typecheck, tests, both builds, and a real running-app check where the surface is user-facing), the same discipline `@nestjs/core` 10→11 got once assigned to Sprint 11 above. Listed here until a Sprint claims them, so the decision isn't only recoverable from chat history:

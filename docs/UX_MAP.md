@@ -103,9 +103,17 @@ Register  →  Log In  →  Create Your Restaurant  →  Connect Payments (Strip
 
 "Your Name" is required, not optional (ADR-033) — it is what colleagues see when selecting who served a table, so an account without one is unusable to everyone but its owner.
 
+**The agreement block (ADR-049), added in Sprint 14.** The screen collects one thing beyond the fields, and the shape of it follows from the lawful basis rather than from taste:
+
+- **Terms of Service — an unticked checkbox.** Never pre-ticked, and never "by continuing you agree". The record this writes claims *this person accepted revision X at time T*, and that is only honest if they did something about the terms rather than about creating an account.
+- **Privacy Policy — a link and a one-line notice, and deliberately no checkbox.** Our basis for processing is the **contract** with the person, not consent (ADR-049). A checkbox there would tell them they hold a withdrawal right they do not hold. The notice says so in plain words, so the absence reads as deliberate rather than forgotten.
+- **Both links are separate from the checkbox label**, not inside it — a link inside a label toggles the checkbox when clicked, which is the standard way people fail to read the thing they are agreeing to.
+- The version accepted is **fetched from the API**, not compiled into the screen, and submitted back. If it cannot be fetched, registration is refused with an explanation: no version means no honest record.
+
 **Rejections that need real wording, not a generic error:**
-- The password appears in a known public breach corpus (ADR-032). This is the one rejection users find insulting if worded badly: it is not a complexity rule and must not read like one. Say that this exact password is known to have leaked elsewhere and must be changed — not that it is "weak."
-- The email is already registered.
+- The password appears in a known public breach corpus (ADR-032). This is the one rejection users find insulting if worded badly: it is not a complexity rule and must not read like one. Say that this exact password is known to have leaked elsewhere and must be changed — not that it is "weak." Sprint 14 adds a third line for the reason people actually misread it: they think we are telling them *their account* was breached. It says the finding is about the password itself, seen in lists collected from other services. The mechanism (a k-anonymity lookup against HaveIBeenPwned) is never named on screen — it is an implementation detail, and naming it invites the same misreading in a new form.
+- The email is already registered. **Worded vaguely on purpose**, and this is the one place the screen deliberately says less than it knows: confirming that an address has an account turns the form into an account-enumeration tool. The API already answers this case and a stale terms version with two *different* codes so the screen can tell them apart without either message being specific about the email.
+- The terms changed while the page was open (409). Tell the person to reload and read them again — never resubmit silently under the new version.
 
 **What does NOT happen here:** no Restaurant is created, no Organization exists yet, and the person has zero Memberships. That is a valid state (`DATABASE.md`, User Rules), and the next screen is what resolves it.
 
