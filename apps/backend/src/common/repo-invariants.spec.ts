@@ -203,4 +203,69 @@ describe("repository invariants", () => {
         `line under the route. Not stated:\n${missing.join("\n")}`,
     ).toEqual([]);
   });
+
+  // The boundary PERSONAL_DATA_MAP.md found, kept where it is.
+  //
+  // Money is attributed to a `Membership`, never to a `User` — `Payment.waiterMembershipId`,
+  // `LedgerLine.membershipId`, `Wallet.membershipId`, `Adjustment.membershipId`. A Membership id
+  // carries no name, no email, no contact detail: it is already a pseudonym. That is why a person's
+  // identifying fields can be emptied without touching a single monetary figure, and why the
+  // apparent conflict between erasure and the Ledger is not a real one.
+  //
+  // Nothing stated that as a rule; the schema simply happened to be built this way from the start.
+  // One migration attaching `userId` to any of these models would make the conflict real, silently,
+  // and the person who wrote it would have no reason to think they had done anything unusual.
+  //
+  // What is forbidden is narrow, deliberately: attributing a monetary AMOUNT to a person. Recording
+  // an ACTOR is fine and already happens — `Refund.requestedBy`, `Refund.approvedBy` and
+  // `Adjustment.createdBy` all reference a User, because "who asked for this" is not "whose money
+  // this is". Those three are why the check names four models rather than forbidding `userId`
+  // everywhere in the financial half of the schema.
+  it("keeps money attributed to a Membership, never to a User (the pseudonym boundary)", () => {
+    const schema = readFileSync(
+      join(REPO_ROOT, "apps", "backend", "prisma", "schema.prisma"),
+      "utf8",
+    );
+    const ATTRIBUTION_MODELS = ["Payment", "LedgerLine", "Wallet", "Adjustment"];
+
+    const offenders = ATTRIBUTION_MODELS.filter((model) => {
+      const start = schema.indexOf(`model ${model} {`);
+      if (start === -1) return false; // a renamed model is a different failure, not this one
+      const body = schema.slice(start, schema.indexOf("\n}", start));
+      // A field literally named `userId` — the shape someone reaches for when attributing money
+      // to a person directly.
+      //
+      // The limit is stated rather than papered over: this does NOT catch a User relation given
+      // some other name. The first draft tried, by forbidding any mention of `User` in the model
+      // body, and immediately flagged `Adjustment.createdByUser` — an actor field the paragraph
+      // above explicitly allows. A check that contradicts its own stated rule is worse than a
+      // narrower one, so this catches the realistic mistake and says what it misses.
+      return /\buserId\b/.test(body);
+    });
+
+    expect(
+      offenders,
+      `Money is attributed to a Membership, never to a User — see PERSONAL_DATA_MAP.md §2. A ` +
+        `Membership id is already a pseudonym, which is what lets a person's identifying fields be ` +
+        `emptied without touching any monetary figure. Linking one of these models to a User makes ` +
+        `erasure and the Ledger genuinely conflict. Recording an ACTOR (who requested a refund, who ` +
+        `created an adjustment) is a different thing and stays allowed. Offending models:\n` +
+        offenders.join("\n"),
+    ).toEqual([]);
+
+    // The other half of the pair: the boundary is only meaningful while these models actually
+    // attribute to a Membership. If one stopped, the check above would pass vacuously.
+    const missingAttribution = ATTRIBUTION_MODELS.filter((model) => {
+      const start = schema.indexOf(`model ${model} {`);
+      if (start === -1) return true;
+      const body = schema.slice(start, schema.indexOf("\n}", start));
+      return !/membershipId/i.test(body) && !/waiterMembershipId/i.test(body);
+    });
+
+    expect(
+      missingAttribution,
+      `These models are expected to attribute to a Membership; if that changed, the boundary check ` +
+        `above is passing for the wrong reason:\n${missingAttribution.join("\n")}`,
+    ).toEqual([]);
+  });
 });

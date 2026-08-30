@@ -1,6 +1,6 @@
 ---
 title: PERSONAL_DATA_MAP
-version: 1.0.0
+version: 1.1.0
 status: Active — research, no decisions
 classification: Critical
 owner: Founder
@@ -87,7 +87,13 @@ This is the row where "company data" and "personal data" are not separable by lo
 
 Every financial reference — `Payment.waiterMembershipId`, `LedgerLine.membershipId`, `Wallet.membershipId` — points at a **Membership**, never at a **User**. A Membership id carries no name, no email, no contact detail. It is already a pseudonym.
 
-So the structural answer is: **the person can be emptied while the financial subject survives**, provided the Membership row itself is kept. The Ledger does not need to know who anyone is; it needs a stable, unique attribution key, and it already has one that is not an identifier.
+**So the structural answer is not "we could build this."** The boundary is already drawn, by the schema, and has been from the beginning: **financial references never go to `User`.** The person can be emptied while the financial subject survives, provided the Membership row itself is kept. The Ledger does not need to know who anyone is; it needs a stable, unique attribution key, and it already has one that is not an identifier.
+
+**It is now defended by a check** (`repo-invariants.spec.ts`). A field named `userId` appearing on `Payment`, `LedgerLine`, `Wallet` or `Adjustment` fails the suite — and a second assertion fails if those models ever stop attributing to a Membership, so the first cannot pass vacuously.
+
+Nothing stated this as a rule before. The schema simply happened to be built this way, which means **one migration would have made the conflict real without anyone noticing they had done something unusual** — the person adding `userId` to a ledger row would have had no reason to think twice.
+
+The check names its own limit rather than overstating: it catches a field called `userId`, not a User relation given some other name. Its first draft tried to catch both by forbidding any mention of `User` in the model body, and immediately flagged `Adjustment.createdByUser` — an **actor** field, which this section explicitly allows. Recording *who requested a refund* is not the same as recording *whose money this is*, and a check that contradicts its own stated rule is worse than a narrower one.
 
 **Three places break that separation by joining through to `User`**, and they are the only ones — found by searching for the join, not by recalling it:
 
@@ -174,7 +180,7 @@ All five alert messages in the codebase were read:
 `pino` logs the request as `method, url, query, params, headers, remoteAddress, remotePort` — confirmed against a real production log line, not from configuration.
 
 - **`ipAddress` does reach the logs**, via `remoteAddress` and the `x-forwarded-for` header.
-- **Request bodies are not logged.** Passwords and email addresses therefore do not reach logs through bodies. The `req.body.password` / `req.body.refreshToken` / `req.body.card` entries in the redact list are inert — correct to keep, but they are not what is protecting those values.
+- **Request bodies are not logged.** Passwords and email addresses therefore do not reach logs through bodies. The redact list previously also named `req.body.password`, `req.body.refreshToken` and `req.body.card` — **inert entries, since removed.** Not because inertness is harmless, but because the list would have been *dangerously incomplete* had it ever become live: it named three secrets and none of the personal data that actually travels in request bodies (`email`, `phone`, `displayName`, `address`). Whoever enabled body logging would have found a redaction list already present and concluded the question was settled. If bodies are ever logged, redaction gets designed then, against §1 of this document.
 - `authorization` and `cookie` are redacted.
 - There is no log drain (ADR-045), so log retention is whatever Railway's is — not something this project currently controls or has recorded.
 

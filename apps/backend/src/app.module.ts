@@ -43,13 +43,24 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
         level: process.env.NODE_ENV === "production" ? "info" : "debug",
         transport: process.env.NODE_ENV === "production" ? undefined : { target: "pino-pretty" },
         // CLAUDE.md, Logging Philosophy: "Never log: Passwords. Secrets. Tokens. Card Numbers."
-        redact: [
-          "req.headers.authorization",
-          "req.headers.cookie",
-          "req.body.password",
-          "req.body.refreshToken",
-          "req.body.card",
-        ],
+        //
+        // Headers only, deliberately. This list previously also carried `req.body.password`,
+        // `req.body.refreshToken` and `req.body.card` — **inert entries**, because pino-http does
+        // not serialise request bodies and never has. Verified against a real production log line
+        // (PERSONAL_DATA_MAP.md §5): the logged `req` is method, url, query, params, headers,
+        // remoteAddress, remotePort. No body.
+        //
+        // They were removed rather than kept as pre-positioned protection, and the reason is the
+        // opposite of the obvious one. **The list was not merely inert; it would have been
+        // dangerously incomplete the moment it became live.** It named three secrets and none of
+        // the personal data that actually travels in request bodies today — `email`, `phone`,
+        // `displayName`, `address`. Whoever enabled body logging would have found a redaction list
+        // already present and had every reason to believe the question was settled.
+        //
+        // So: if bodies are ever logged, redaction must be designed then, against
+        // PERSONAL_DATA_MAP.md's inventory rather than against this list. An empty place is an
+        // honest one; a half-filled list that looks finished is not.
+        redact: ["req.headers.authorization", "req.headers.cookie"],
       },
     }),
     // ADR-010: baseline, generic rate limiting from Sprint 1 — per-endpoint tuning is Sprint 11.
