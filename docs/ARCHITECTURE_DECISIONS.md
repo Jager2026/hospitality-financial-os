@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.35.0
+version: 1.36.0
 status: Active — forty-five ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -283,6 +283,16 @@ Fixed: every refresh token now also carries a `familyId`, generated once at logi
 The detection moment itself is now distinguishable from an ordinary already-revoked-family rejection (`RefreshTokenReuseDetectedError`, not a generic 401), specifically so it can be written to `AuditLog` as its own action — `refresh_token_reuse_detected` — per `CLAUDE_RULES.md`'s Logging Philosophy ("Always log: ... Security Events"). Confirmed live: the row lands with the correct `user_id`, `familyId` in `metadata`, and the requesting IP/user-agent; a subsequent rejection of the same family's other token does not produce a second row, since it isn't a new detection.
 
 **Consequences:** No schema migration was needed for Sprint 2 (still no RefreshToken table — family tracking is a second Redis key, not a new Postgres entity). Revocation and family-revocation state both live only in Redis — consistent with `SYSTEM_ARCHITECTURE.md`'s Caching Strategy, which already treats Redis as appropriate for short-lived, non-financial state and explicitly wrong for anything that must survive as a source of truth (Wallet, Restaurant balance). Accepted risk, unchanged from the original decision: a Redis flush would silently un-revoke every outstanding refresh token and family flag (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage.
+
+### Addendum — the deferral's bound is a default nobody chose
+
+Found during ADR-045's audit of optional environment variables, recorded here rather than fixed because the Founder's judgement is that it is not worth changing today. It is worth *knowing*.
+
+The reason it is safe to defer refresh-token revocation surviving a Redis outage (`IMPLEMENTATION_PLAN.md`, Deferred) is stated as a bound: *"the blast radius is bounded by the token's own TTL — at most 7 days, after which every affected token expires by signature regardless."* That bound is `JWT_REFRESH_TTL_SECONDS`.
+
+**That variable is not set in production.** Verified by listing the backend service's variable names on the live service: it is absent, so production runs on `env.validation.ts`'s code default of `604_800`. The number is correct and the argument holds — but it holds by inheritance rather than by decision. Nobody weighed seven days against the revocation gap; seven days is simply what the schema says when nobody says anything. `JWT_ACCESS_TTL_SECONDS` (900) is in the same position, with far less riding on it.
+
+This is a milder form of the class ADR-045 names — a value's optionality being a claim about consequences that nothing re-checks. Here nothing is silently disabled and no behaviour is wrong. **What is unsound is the argument, not the system:** a security deferral resting on a number that was never chosen will keep resting on it if the default ever changes, and the deferral's own justification would quietly stop being true. Setting the variable explicitly in production would cost one line and convert an inherited value into a decision — the reason to do it is the argument's integrity, not any behaviour change.
 
 ---
 
