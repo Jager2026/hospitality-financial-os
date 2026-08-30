@@ -1336,5 +1336,49 @@ It is left open deliberately rather than patched here: the invitation-acceptance
 
 ---
 
+## ADR-050 — A guard's activation condition is itself configuration, and ADR-045's fix does not cross a process boundary
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** `apps/frontend/scripts/check-public-env.mjs` exists because production shipped without `NEXT_PUBLIC_API_URL`: the bundle fell back to `http://localhost:3001` and **the deployed login page had never worked in a browser** while every test and deploy stayed green. The guard refuses to build a frontend whose API URL is missing or loopback.
+
+**It had never run in CI.** Its activation was `NODE_ENV === "production" || RAILWAY_ENVIRONMENT === "production"`, and `ci.yml` sets neither. On every pull request the guard printed *"non-production build — localhost defaults are fine here"* and exited 0 **without reading `NEXT_PUBLIC_API_URL` at all.** Established by executing it in CI's exact environment in both directions, not by reading the condition — with no variables it exits 0, with `NODE_ENV=production` and no URL it exits 1.
+
+That log line is the part worth dwelling on: **a gate reporting "nothing to check here" is indistinguishable, in a green run, from a gate that checked and passed.**
+
+**This is ADR-045's class, and ADR-045's fix does not reach it. That is the finding.**
+
+ADR-045 recorded *a conditional guard is only as reliable as the thing it is conditional on*, and closed it for the NestJS app by making `NODE_ENV` **required, with no default**, so the gate cannot go missing without the boot failing loudly.
+
+**That protection is scoped to one process.** `validateEnv` runs inside the API and nowhere else. In a build script, `NODE_ENV` is just another unset variable — and an unset variable reads as "not production", which is precisely the answer that switches the guard off. **The same variable is trustworthy in one process and not in another, and what makes the difference is whether anything validates it there.** The frontend build script inherited the *statement* of ADR-045's fix without any of its protection.
+
+**Decision: the activation condition is removed rather than corrected. The guard runs on every build and decides on the VALUE.**
+
+Setting `NODE_ENV=production` on CI's build step was the obvious repair and is rejected. It makes today's condition true in today's CI while leaving the guard switched by a variable nothing validates in that process — the same defect, one environment further along, and invisible again the next time something builds without it. A value is observable; an environment label is a claim about intent.
+
+- **The one legitimate loopback build says so explicitly.** The Playwright harness points its bundle at `127.0.0.1`, deliberately, and sets `ALLOW_LOOPBACK_API_URL=1` in `apps/e2e/scripts/build-apps.mjs` — the only place in the repository that sets it. Same shape as ADR-048's `--allow-revocations`: the dangerous half is a visible line in a reviewed file and its **absence is the decision**. Deliberately not an allowlist of environments where the check may be skipped, which is the list someone edits to make a build green.
+- **Checked as an exact `"1"`, not for truthiness.** `ALLOW_LOOPBACK_API_URL=` left in a shell is a present value, and would otherwise read as permission it never granted. Fifth time that distinction has decided a behaviour here.
+- **CI sets the real production URL**, not a placeholder. It is public, it is what Railway builds with, and it makes CI's bundle equivalent to production's in the respect this guard is about.
+- **The guard is now tested** (`check-public-env.spec.ts`), as a real subprocess, in discriminating pairs — including a case asserting that no value of `NODE_ENV`, absent included, disables it. Falsified: restoring the old activation fails four of the five tests. The one that still passes is the one expecting acceptance, which is the correct asymmetry — a guard that checks nothing accepts everything.
+
+**The audit this prompted, and its result.** Every environment-conditional guard in the codebase was enumerated:
+
+| guard | gated on | verdict |
+|---|---|---|
+| `env.validation.ts` production rules | `NODE_ENV`, read from the **validated** parse | safe — the gate cannot go missing without a boot failure |
+| `StripeService` boot probe (ADR-038) | `NODE_ENV`, via `ConfigService.getOrThrow` | safe, same reason |
+| `check-public-env.mjs` | `NODE_ENV`/`RAILWAY_ENVIRONMENT`, raw `process.env`, unvalidated | **the defect above** |
+
+The discriminating property is not which variable is read. It is **whether the process reading it validates it.**
+
+**What was checked and found NOT to be true, recorded so it is not re-investigated.** The concern that the ADR-038 boot probe could be silenced by logging configuration does not hold in this codebase:
+
+- **`LOG_LEVEL` does not exist here** — not in the source, not in `.env`, not in `.env.example`, not in CI or Railway config. Verified with a positive control (the same search shape finds `NODE_ENV` in five files) so the empty result is the search working, not the search failing.
+- The pino level is `info` in production and `debug` otherwise, so nothing below `error` is at risk of suppression by it.
+- **Proven by execution, not by reading:** booting the real app with `NODE_ENV=production` and a well-formed but invalid Stripe key emits the probe's rejection at `"level":50` — pino's `error` — alongside levels 30 and 40 in the same run.
+- Every protective failure path in the backend logs at `error` or `warn`, both above production's threshold. The only `logger.debug` in non-test code is `webhooks.service.ts`'s "unhandled Stripe event type", which is deliberate noise suppression for events we do not handle, not a protection.
+
+---
+
 ## Superseded / Retired
 - **CTO Operating Manual** — superseded by ADR-011; content to be merged into `CLAUDE_RULES.md`, then removed from the repository.
