@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type APIRequestContext, expect } from "@playwright/test";
 import { BACKEND_PORT } from "../playwright.config";
+import { PLATFORM_TERMS_PLACEHOLDER } from "../../backend/src/common/agreements/agreement-versions";
 
 export const API_BASE = `http://localhost:${BACKEND_PORT}`;
 
@@ -47,6 +48,11 @@ export async function registerUser(
       email: user.email,
       password: user.password,
       displayName: user.displayName,
+      // ADR-049: registration now records which revision of the terms was accepted, so the
+      // harness must state one. The placeholder is deliberately the real constant rather than a
+      // literal — a fixture naming a version the server does not know would fail for a reason
+      // that has nothing to do with the test.
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
     },
   });
 

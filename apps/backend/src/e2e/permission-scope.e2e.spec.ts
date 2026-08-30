@@ -13,6 +13,7 @@ import type {
   CreatePaymentIntentParams,
 } from "../stripe/stripe.service";
 import { StripeService } from "../stripe/stripe.service";
+import { PLATFORM_TERMS_PLACEHOLDER } from "../common/agreements/agreement-versions";
 
 /**
  * Does a permission held in ONE Organization leak into a Restaurant in ANOTHER?
@@ -76,9 +77,13 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
 
   async function registerAndLogin(label: string): Promise<Actor> {
     const email = `scope-${label}-${randomUUID()}@example.com`;
-    await request(app.getHttpServer())
-      .post("/api/v1/auth/register")
-      .send({ email, password: OWNER_PASSWORD, displayName: label, locale: "en" });
+    await request(app.getHttpServer()).post("/api/v1/auth/register").send({
+      email,
+      password: OWNER_PASSWORD,
+      displayName: label,
+      locale: "en",
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
+    });
     const login = await request(app.getHttpServer())
       .post("/api/v1/auth/login")
       .send({ email, password: OWNER_PASSWORD });

@@ -18,6 +18,12 @@ export type ErrorCode =
   | "IDEMPOTENCY_KEY_CONFLICT"
   | "PERMISSION_DENIED"
   | "PASSWORD_BREACHED"
+  // ADR-049. Its own code rather than a second VALIDATION_ERROR, because registration now has two
+  // different 409s and the screen has to tell them apart: an email already in use must stay vague
+  // (enumeration), while a stale terms version needs the opposite — "reload and read them again".
+  // One code for both would force the UI to guess from the message text, which is the one part of
+  // the envelope this contract says may be translated.
+  | "TERMS_VERSION_MISMATCH"
   | "VALIDATION_ERROR"
   | "NOT_FOUND"
   | "UNKNOWN_ERROR";

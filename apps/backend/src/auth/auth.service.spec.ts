@@ -5,6 +5,10 @@ import { hashPassword } from "./password.util";
 import { RefreshTokenReuseDetectedError } from "./token.service";
 import type { PrismaService } from "../prisma/prisma.service";
 import type { TokenService } from "./token.service";
+import {
+  CURRENT_PLATFORM_TERMS_VERSION,
+  PLATFORM_TERMS_PLACEHOLDER,
+} from "../common/agreements/agreement-versions";
 
 // Isolates exactly the behavior the Founder asked for: reuse detection must produce its own
 // AuditLog row (CLAUDE_RULES.md, Logging Philosophy — "Always log: ... Security Events"), not
@@ -225,9 +229,20 @@ describe("AuthService — register", () => {
       });
     });
     const findMany = vi.fn().mockResolvedValue([]);
+    // ADR-049: the User and its acceptance are written in ONE transaction, so the fake has to be
+    // one too — `$transaction` hands the callback a client whose `create` calls are the ones
+    // asserted on below. A fake that exposed `user.create` at the top level only would pass while
+    // the real code wrote outside any transaction.
+    let acceptanceData: Record<string, unknown> | undefined;
+    const createAcceptance = vi.fn().mockImplementation(({ data }) => {
+      acceptanceData = data;
+      return Promise.resolve({ id: "acceptance-id", ...data });
+    });
+    const tx = { user: { create }, agreementAcceptance: { create: createAcceptance } };
     const fakePrisma = {
       user: { findUnique, create },
       membership: { findMany },
+      $transaction: vi.fn().mockImplementation((fn: (client: typeof tx) => unknown) => fn(tx)),
     } as unknown as PrismaService;
     const issueTokenPair = vi.fn().mockResolvedValue({ accessToken: "a", refreshToken: "r" });
     const fakeTokenService = { issueTokenPair } as unknown as TokenService;
@@ -238,6 +253,7 @@ describe("AuthService — register", () => {
       password: "SuperSecret123",
       displayName: "New Owner",
       locale: "en",
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
     });
 
     expect(createdData?.passwordHash).toBeDefined();
@@ -253,6 +269,45 @@ describe("AuthService — register", () => {
     // with no special-casing (see toAuthResult's own doc comment).
     expect(result.memberships).toEqual([]);
     expect(issueTokenPair).toHaveBeenCalledWith("33333333-3333-3333-3333-333333333333");
+
+    // ADR-049: the acceptance is written for the User just created, as platform terms, with the
+    // server's own version — not merely "some acceptance row was written".
+    expect(acceptanceData).toMatchObject({
+      agreement: "PLATFORM_TERMS",
+      version: CURRENT_PLATFORM_TERMS_VERSION,
+      userId: "33333333-3333-3333-3333-333333333333",
+    });
+  });
+
+  // Discriminating: an implementation that simply stored whatever version the client sent would
+  // pass every other test in this block. The record would then say the user agreed to a revision
+  // nobody ever showed them, which is worse than having no record at all.
+  it("refuses a registration citing a terms version other than the server's, and creates nothing", async () => {
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const create = vi.fn();
+    const $transaction = vi.fn();
+    const fakePrisma = { user: { findUnique, create }, $transaction } as unknown as PrismaService;
+    const fakeTokenService = { issueTokenPair: vi.fn() } as unknown as TokenService;
+
+    const authService = new AuthService(fakePrisma, fakeTokenService);
+
+    let caught: unknown;
+    try {
+      await authService.register({
+        email: "stale-tab@example.com",
+        password: "SuperSecret123",
+        displayName: "Stale Tab",
+        locale: "en",
+        acceptedTermsVersion: "some-older-version",
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(AppException);
+    expect((caught as AppException).getStatus()).toBe(409);
+    expect($transaction).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("rejects registering an email that's already taken, without creating a second user", async () => {
@@ -270,6 +325,7 @@ describe("AuthService — register", () => {
         password: "whatever123",
         displayName: "Taken User",
         locale: "en",
+        acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
       });
     } catch (err) {
       caught = err;
@@ -305,6 +361,7 @@ describe("AuthService — register", () => {
         password: "password",
         displayName: "New Owner",
         locale: "en",
+        acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
       });
     } catch (err) {
       caught = err;

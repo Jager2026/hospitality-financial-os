@@ -43,8 +43,8 @@ datasource db {
 /// Organization, Restaurant, User, and Membership. Filled with the smallest reasonable set;
 /// flagged to the Founder in the Sprint 0 audit rather than decided silently.
 enum EntityStatus {
-  ACTIVE   @map("active")
-  INACTIVE @map("inactive")
+  ACTIVE    @map("active")
+  INACTIVE  @map("inactive")
   SUSPENDED @map("suspended")
 
   @@map("entity_status")
@@ -78,10 +78,10 @@ enum PaymentStatus {
 /// ASSUMPTION: DATABASE.md does not enumerate Transaction.status. Reflects the states a
 /// Transaction can reach once Refund/Chargeback entities exist against it (ADR-008).
 enum TransactionStatus {
-  COMPLETED           @map("completed")
-  PARTIALLY_REFUNDED  @map("partially_refunded")
-  REFUNDED            @map("refunded")
-  DISPUTED            @map("disputed")
+  COMPLETED          @map("completed")
+  PARTIALLY_REFUNDED @map("partially_refunded")
+  REFUNDED           @map("refunded")
+  DISPUTED           @map("disputed")
 
   @@map("transaction_status")
 }
@@ -164,52 +164,53 @@ enum IdempotencyKeyStatus {
 // ============================================================================
 
 model Organization {
-  id        String    @id @default(uuid()) @db.Uuid
+  id        String       @id @default(uuid()) @db.Uuid
   name      String
   status    EntityStatus @default(ACTIVE)
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
-  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  deletedAt DateTime?    @map("deleted_at")
 
-  restaurants  Restaurant[]
-  memberships  Membership[]
+  restaurants           Restaurant[]
+  memberships           Membership[]
   membershipInvitations MembershipInvitation[]
 
   @@map("organization")
 }
 
 model Restaurant {
-  id                     String    @id @default(uuid()) @db.Uuid
-  organizationId         String    @map("organization_id") @db.Uuid
-  name                   String
-  legalName              String    @map("legal_name")
-  companyNumber          String    @map("company_number")
-  vatNumber              String    @map("vat_number")
-  email                  String
-  phone                  String
-  country                String    @db.Char(2)
-  currency               String    @db.Char(3)
-  defaultCustomerLocale  String    @map("default_customer_locale") // ADR-013
-  timezone               String
-  address                String
-  logoUrl                String?   @map("logo_url")
-  status                 EntityStatus @default(ACTIVE)
+  id                    String       @id @default(uuid()) @db.Uuid
+  organizationId        String       @map("organization_id") @db.Uuid
+  name                  String
+  legalName             String       @map("legal_name")
+  companyNumber         String       @map("company_number")
+  vatNumber             String       @map("vat_number")
+  email                 String
+  phone                 String
+  country               String       @db.Char(2)
+  currency              String       @db.Char(3)
+  defaultCustomerLocale String       @map("default_customer_locale") // ADR-013
+  timezone              String
+  address               String
+  logoUrl               String?      @map("logo_url")
+  status                EntityStatus @default(ACTIVE)
 
   // Stripe Connect (ADR-009, ADR-014 — Accounts v2, dashboard: "full" — revised in place from the
   // original v1/Express design; see both ADRs' "Revision" sections for the empirical evidence)
-  stripeAccountId        String?          @unique @map("stripe_account_id")
-  onboardingStatus       OnboardingStatus @default(NOT_STARTED) @map("onboarding_status")
+  agreementAcceptances AgreementAcceptance[]
+  stripeAccountId      String?               @unique @map("stripe_account_id")
+  onboardingStatus     OnboardingStatus      @default(NOT_STARTED) @map("onboarding_status")
   // Mirror Stripe's own v2 capability-status strings directly (e.g. "active" / "pending" /
   // "restricted" / "disabled") rather than collapsing to a boolean — confirmed via a real
   // GET /v2/core/accounts/{id} response, not assumed. Deliberately String, not a Prisma enum:
   // this vocabulary belongs to Stripe and can grow without a migration on our side.
-  cardPaymentsStatus     String?          @map("card_payments_status")
+  cardPaymentsStatus   String?               @map("card_payments_status")
   // configuration.merchant.capabilities.stripe_balance.payouts.status — nested under
   // stripe_balance in v2, not a flat "payouts" capability the way v1's payouts_enabled implied.
-  payoutsStatus          String?          @map("payouts_status")
+  payoutsStatus        String?               @map("payouts_status")
   // Stripe's real requirements.entries[] shape (array of requirement objects — description,
   // impact, minimum_deadline, requested_reasons), stored as-is. Not a flat array of strings.
-  requirementsDue        Json?            @map("requirements_due")
+  requirementsDue      Json?                 @map("requirements_due")
 
   // Sprint 6, ADR-022: percentage presets shown to the customer at Tip Selection (UX_MAP.md) —
   // display configuration only, never a validation rule on Payment.tip_amount.
@@ -222,12 +223,12 @@ model Restaurant {
   organization Organization @relation(fields: [organizationId], references: [id])
   currencyRef  Currency     @relation(fields: [currency], references: [code])
 
-  memberships  Membership[]
+  memberships           Membership[]
   membershipInvitations MembershipInvitation[]
-  payments     Payment[]
-  transactions Transaction[]
-  ledgerLines  LedgerLine[]
-  adjustments  Adjustment[]
+  payments              Payment[]
+  transactions          Transaction[]
+  ledgerLines           LedgerLine[]
+  adjustments           Adjustment[]
 
   @@index([organizationId])
   @@index([currency])
@@ -235,54 +236,55 @@ model Restaurant {
 }
 
 model User {
-  id                String    @id @default(uuid()) @db.Uuid
-  email             String    @unique
+  id               String       @id @default(uuid()) @db.Uuid
+  email            String       @unique
   // Sprint 13 (Deployment follow-up), ADR-032: the staff-selection picker ("who actually served
   // this table") needs a human name to show, not an email address — User had no name field of any
   // kind before this. Required, no default: zero real Users existed in production at the moment
   // this migration was written (confirmed directly against the database, not assumed), so there
   // was nothing to backfill and no reason to make this nullable "just in case."
-  displayName       String    @map("display_name")
-  passwordHash      String    @map("password_hash")
-  emailVerified     Boolean   @default(false) @map("email_verified")
-  twoFactorEnabled  Boolean   @default(false) @map("two_factor_enabled")
-  locale            String    @default("en") // ADR-013: "en" | "lt" for MVP
-  lastLogin         DateTime? @map("last_login")
-  status            EntityStatus @default(ACTIVE)
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
-  deletedAt         DateTime? @map("deleted_at")
+  displayName      String       @map("display_name")
+  passwordHash     String       @map("password_hash")
+  emailVerified    Boolean      @default(false) @map("email_verified")
+  twoFactorEnabled Boolean      @default(false) @map("two_factor_enabled")
+  locale           String       @default("en") // ADR-013: "en" | "lt" for MVP
+  lastLogin        DateTime?    @map("last_login")
+  status           EntityStatus @default(ACTIVE)
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+  deletedAt        DateTime?    @map("deleted_at")
 
-  memberships       Membership[]
-  invitationsSent   MembershipInvitation[] @relation("MembershipInvitationInvitedBy")
-  auditLogs         AuditLog[]
-  refundsRequested  Refund[]     @relation("RefundRequestedBy")
-  refundsApproved   Refund[]     @relation("RefundApprovedBy")
-  adjustmentsCreated Adjustment[] @relation("AdjustmentCreatedBy")
+  memberships          Membership[]
+  invitationsSent      MembershipInvitation[] @relation("MembershipInvitationInvitedBy")
+  auditLogs            AuditLog[]
+  agreementAcceptances AgreementAcceptance[]
+  refundsRequested     Refund[]               @relation("RefundRequestedBy")
+  refundsApproved      Refund[]               @relation("RefundApprovedBy")
+  adjustmentsCreated   Adjustment[]           @relation("AdjustmentCreatedBy")
 
   @@map("user")
 }
 
 model Membership {
-  id             String    @id @default(uuid()) @db.Uuid
-  userId         String    @map("user_id") @db.Uuid
-  organizationId String    @map("organization_id") @db.Uuid
-  restaurantId   String?   @map("restaurant_id") @db.Uuid // nullable = org-wide role (ADR-005)
-  roleId         String    @map("role_id") @db.Uuid
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  restaurantId   String?      @map("restaurant_id") @db.Uuid // nullable = org-wide role (ADR-005)
+  roleId         String       @map("role_id") @db.Uuid
   status         EntityStatus @default(ACTIVE)
-  hireDate       DateTime? @map("hire_date")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
-  deletedAt      DateTime? @map("deleted_at")
+  hireDate       DateTime?    @map("hire_date")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  deletedAt      DateTime?    @map("deleted_at")
 
-  user         User        @relation(fields: [userId], references: [id])
-  organization Organization @relation(fields: [organizationId], references: [id])
-  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id])
-  role         Role        @relation(fields: [roleId], references: [id])
-  wallet       Wallet?
-  ledgerLines  LedgerLine[]
-  adjustments  Adjustment[]
-  paymentsAsWaiter Payment[] @relation("PaymentWaiterMembership")
+  user             User         @relation(fields: [userId], references: [id])
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  restaurant       Restaurant?  @relation(fields: [restaurantId], references: [id])
+  role             Role         @relation(fields: [roleId], references: [id])
+  wallet           Wallet?
+  ledgerLines      LedgerLine[]
+  adjustments      Adjustment[]
+  paymentsAsWaiter Payment[]    @relation("PaymentWaiterMembership")
 
   @@index([userId])
   @@index([organizationId])
@@ -304,11 +306,11 @@ model MembershipInvitation {
   // ADR-019's Redis-tracked refresh-token state. Verified the same shape as a password: look up
   // candidate rows by email (a known, non-secret field), then hash-compare the presented token
   // against each candidate's tokenHash — never a lookup keyed on the secret itself.
-  tokenHash  String    @map("token_hash")
-  expiresAt  DateTime  @map("expires_at")
-  acceptedAt DateTime? @map("accepted_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
+  tokenHash      String    @map("token_hash")
+  expiresAt      DateTime  @map("expires_at")
+  acceptedAt     DateTime? @map("accepted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   organization  Organization @relation(fields: [organizationId], references: [id])
   restaurant    Restaurant?  @relation(fields: [restaurantId], references: [id])
@@ -324,22 +326,22 @@ model MembershipInvitation {
 /// in full since no entity-specific list overrides it. Rows are seeded data (IMPLEMENTATION_PLAN
 /// Sprint 2), never hardcoded by name in permission checks (DOMAIN_GLOSSARY).
 model Role {
-  id          String   @id @default(uuid()) @db.Uuid
-  name        String   @unique
-  description String?
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @unique
+  description  String?
   /// ADR-044: this Role may only ever be granted by us, never offered to a Restaurant.
   /// "Administrator" is seeded as platform-level and holds every Permission; before this column
   /// existed, POST /memberships validated only that a roleId EXISTED, so any Owner could grant it.
   /// A constraint on the DATA rather than on the UI: filtering a dropdown while the endpoint still
   /// accepts anything is the exact shape ADR-031 records as "a documented input that is silently
   /// ignored" — the interface looks correct and the API is not.
-  platformOnly Boolean @default(false) @map("platform_only")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  platformOnly Boolean  @default(false) @map("platform_only")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  memberships     Membership[]
+  memberships           Membership[]
   membershipInvitations MembershipInvitation[]
-  rolePermissions RolePermission[]
+  rolePermissions       RolePermission[]
 
   @@map("role")
 }
@@ -392,14 +394,14 @@ model Currency {
 }
 
 model Wallet {
-  id               String   @id @default(uuid()) @db.Uuid
-  membershipId     String   @unique @map("membership_id") @db.Uuid
-  availableBalance BigInt   @default(0) @map("available_balance") // minor units (ADR-001)
-  pendingBalance   BigInt   @default(0) @map("pending_balance")   // minor units (ADR-001)
-  currency         String   @db.Char(3)
+  id               String       @id @default(uuid()) @db.Uuid
+  membershipId     String       @unique @map("membership_id") @db.Uuid
+  availableBalance BigInt       @default(0) @map("available_balance") // minor units (ADR-001)
+  pendingBalance   BigInt       @default(0) @map("pending_balance") // minor units (ADR-001)
+  currency         String       @db.Char(3)
   status           EntityStatus @default(ACTIVE)
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
 
   membership  Membership @relation(fields: [membershipId], references: [id])
   currencyRef Currency   @relation(fields: [currency], references: [code])
@@ -413,35 +415,35 @@ model Wallet {
 }
 
 model Payment {
-  id                 String   @id @default(uuid()) @db.Uuid
-  restaurantId       String   @map("restaurant_id") @db.Uuid
-  processor          String
-  processorPaymentId String   @map("processor_payment_id")
-  amount             BigInt   // minor units (ADR-001) — full card charge, bill + tip combined
+  id                        String        @id @default(uuid()) @db.Uuid
+  restaurantId              String        @map("restaurant_id") @db.Uuid
+  processor                 String
+  processorPaymentId        String        @map("processor_payment_id")
+  amount                    BigInt // minor units (ADR-001) — full card charge, bill + tip combined
   // Sprint 6, ADR-022: caller-submitted tip portion of `amount` (tipAmount <= amount, validated at
   // request time). `amount` itself never changes meaning — the bill/tip split lives here, not by
   // splitting `amount` into two fields.
-  tipAmount          BigInt   @default(0) @map("tip_amount")
+  tipAmount                 BigInt        @default(0) @map("tip_amount")
   // Sprint 6, ADR-022, revised Sprint 13 (ADR-032): the staff member picked via the terminal's own
   // "who served this table" selection at POST /payments time — NOT derived from the authenticated
   // caller (req.user) since ADR-032; the caller and the tip recipient are now two independently
   // tracked facts (AuditLogInterceptor records both). Reachable to the same Restaurant, no role
   // restriction. Required when tipAmount > 0 (enforced in PaymentService, fail-fast); null when
   // tipAmount is 0 — no recipient to select.
-  waiterMembershipId String?  @map("waiter_membership_id") @db.Uuid
-  currency           String   @db.Char(3)
-  status             PaymentStatus @default(PENDING)
-  paymentMethod      String   @map("payment_method")
-  idempotencyKey     String   @unique @map("idempotency_key")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  waiterMembershipId        String?       @map("waiter_membership_id") @db.Uuid
+  currency                  String        @db.Char(3)
+  status                    PaymentStatus @default(PENDING)
+  paymentMethod             String        @map("payment_method")
+  idempotencyKey            String        @unique @map("idempotency_key")
+  createdAt                 DateTime      @default(now()) @map("created_at")
+  updatedAt                 DateTime      @updatedAt @map("updated_at")
   // Sprint 13 (Deployment follow-up), ADR-032: PaymentReconciliationService's own "fired once"
   // marker — same reasoning as OutboxPollerService's own attempts === MAX_ATTEMPTS_BEFORE_ALERT
   // exact-match check (ADR-031): without this, a genuinely stuck Payment would re-alert every
   // reconciliation cycle (5 min) for as long as it stays stuck, training whoever receives it to
   // ignore the channel. Set once, on the first alert; never read as a status, only as "already
   // notified."
-  reconciliationAlertSentAt DateTime? @map("reconciliation_alert_sent_at")
+  reconciliationAlertSentAt DateTime?     @map("reconciliation_alert_sent_at")
   // ADR-018 (Accepted), resolving the Sprint 0 audit's open question: "Immutable once created"
   // (DATABASE.md) describes the payment's identity and economic facts — amount, tipAmount,
   // waiterMembershipId, restaurant_id, processor, processor_payment_id, currency, payment_method,
@@ -463,22 +465,22 @@ model Payment {
 }
 
 model Transaction {
-  id           String   @id @default(uuid()) @db.Uuid
-  paymentId    String   @unique @map("payment_id") @db.Uuid
-  restaurantId String   @map("restaurant_id") @db.Uuid
-  grossAmount  BigInt   @map("gross_amount") // minor units (ADR-001)
-  currency     String   @db.Char(3)
+  id           String            @id @default(uuid()) @db.Uuid
+  paymentId    String            @unique @map("payment_id") @db.Uuid
+  restaurantId String            @map("restaurant_id") @db.Uuid
+  grossAmount  BigInt            @map("gross_amount") // minor units (ADR-001)
+  currency     String            @db.Char(3)
   status       TransactionStatus @default(COMPLETED)
-  createdAt    DateTime @default(now()) @map("created_at")
+  createdAt    DateTime          @default(now()) @map("created_at")
   // No updated_at: never edited (ADR-002) — corrections are new JournalEntry rows.
 
-  payment      Payment       @relation(fields: [paymentId], references: [id])
-  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id])
-  currencyRef  Currency      @relation(fields: [currency], references: [code])
+  payment        Payment        @relation(fields: [paymentId], references: [id])
+  restaurant     Restaurant     @relation(fields: [restaurantId], references: [id])
+  currencyRef    Currency       @relation(fields: [currency], references: [code])
   journalEntries JournalEntry[]
-  tip          Tip?
-  refunds      Refund[]
-  chargebacks  Chargeback[]
+  tip            Tip?
+  refunds        Refund[]
+  chargebacks    Chargeback[]
 
   @@index([restaurantId])
   @@index([restaurantId, createdAt]) // dashboard queries — Index Strategy
@@ -487,20 +489,20 @@ model Transaction {
 }
 
 model JournalEntry {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String           @id @default(uuid()) @db.Uuid
   entryType     JournalEntryType @map("entry_type")
-  transactionId String?  @map("transaction_id") @db.Uuid
+  transactionId String?          @map("transaction_id") @db.Uuid
   // ADR-017 (Accepted): nullable FKs on JournalEntry itself, mirroring transactionId — not a
   // single FK owned by Refund/Chargeback/Adjustment. Required because a Chargeback can produce
   // more than one compensating JournalEntry over its lifetime (provisional loss, then a reversal
   // if the dispute is later won — ADR-016): that is one-to-many from Chargeback's side, which a
   // unique journal_entry_id on Chargeback cannot express. Refund and Adjustment get the same
   // shape for consistency, even though today's flows only ever produce one JournalEntry each.
-  refundId      String?  @map("refund_id") @db.Uuid
-  chargebackId  String?  @map("chargeback_id") @db.Uuid
-  adjustmentId  String?  @map("adjustment_id") @db.Uuid
+  refundId      String?          @map("refund_id") @db.Uuid
+  chargebackId  String?          @map("chargeback_id") @db.Uuid
+  adjustmentId  String?          @map("adjustment_id") @db.Uuid
   description   String?
-  createdAt     DateTime @default(now()) @map("created_at")
+  createdAt     DateTime         @default(now()) @map("created_at")
   // No updated_at: "Never edited or deleted" (ADR-002).
 
   // INVARIANT, enforced by a plain single-row Postgres CHECK constraint (not expressible in
@@ -523,15 +525,15 @@ model JournalEntry {
 }
 
 model LedgerLine {
-  id             String   @id @default(uuid()) @db.Uuid
-  journalEntryId String   @map("journal_entry_id") @db.Uuid
+  id             String          @id @default(uuid()) @db.Uuid
+  journalEntryId String          @map("journal_entry_id") @db.Uuid
   account        LedgerAccount
   direction      LedgerDirection
-  amount         BigInt   // minor units (ADR-001)
-  currency       String   @db.Char(3)
-  restaurantId   String?  @map("restaurant_id") @db.Uuid
-  membershipId   String?  @map("membership_id") @db.Uuid
-  createdAt      DateTime @default(now()) @map("created_at")
+  amount         BigInt // minor units (ADR-001)
+  currency       String          @db.Char(3)
+  restaurantId   String?         @map("restaurant_id") @db.Uuid
+  membershipId   String?         @map("membership_id") @db.Uuid
+  createdAt      DateTime        @default(now()) @map("created_at")
   // No updated_at: "Never edited or deleted" (ADR-002).
 
   journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id])
@@ -540,19 +542,19 @@ model LedgerLine {
   currencyRef  Currency     @relation(fields: [currency], references: [code])
 
   @@index([journalEntryId]) // Index Strategy
-  @@index([membershipId])   // Index Strategy
-  @@index([restaurantId])   // Index Strategy
+  @@index([membershipId]) // Index Strategy
+  @@index([restaurantId]) // Index Strategy
   @@index([currency])
   @@map("ledger_line")
 }
 
 model Tip {
-  id            String   @id @default(uuid()) @db.Uuid
-  transactionId String   @unique @map("transaction_id") @db.Uuid // Transaction → zero-or-one Tip
-  grossTip      BigInt   @map("gross_tip") // minor units (ADR-001)
-  currency      String   @db.Char(3)
+  id            String    @id @default(uuid()) @db.Uuid
+  transactionId String    @unique @map("transaction_id") @db.Uuid // Transaction → zero-or-one Tip
+  grossTip      BigInt    @map("gross_tip") // minor units (ADR-001)
+  currency      String    @db.Char(3)
   status        TipStatus @default(PENDING)
-  createdAt     DateTime @default(now()) @map("created_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
   // No updated_at: distribution lives in LedgerLine, not here (ADR-007) — this row doesn't
   // change shape after creation, only `status` transitions via new compensating Ledger activity.
 
@@ -564,17 +566,17 @@ model Tip {
 }
 
 model Refund {
-  id                 String   @id @default(uuid()) @db.Uuid
-  transactionId      String   @map("transaction_id") @db.Uuid // many Refunds per Transaction allowed
-  processorRefundId  String   @map("processor_refund_id")
-  amount             BigInt   // minor units (ADR-001)
-  currency           String   @db.Char(3)
-  reason             String
-  tipRefunded        Boolean  @map("tip_refunded")
-  requestedBy        String?  @map("requested_by") @db.Uuid
-  approvedBy         String?  @map("approved_by") @db.Uuid
-  status             RefundStatus @default(PENDING)
-  createdAt          DateTime @default(now()) @map("created_at")
+  id                String       @id @default(uuid()) @db.Uuid
+  transactionId     String       @map("transaction_id") @db.Uuid // many Refunds per Transaction allowed
+  processorRefundId String       @map("processor_refund_id")
+  amount            BigInt // minor units (ADR-001)
+  currency          String       @db.Char(3)
+  reason            String
+  tipRefunded       Boolean      @map("tip_refunded")
+  requestedBy       String?      @map("requested_by") @db.Uuid
+  approvedBy        String?      @map("approved_by") @db.Uuid
+  status            RefundStatus @default(PENDING)
+  createdAt         DateTime     @default(now()) @map("created_at")
   // No updated_at: compensating entries are immutable (ADR-008).
 
   transaction     Transaction    @relation(fields: [transactionId], references: [id])
@@ -591,16 +593,16 @@ model Refund {
 }
 
 model Chargeback {
-  id                 String   @id @default(uuid()) @db.Uuid
-  transactionId      String   @map("transaction_id") @db.Uuid
-  processorDisputeId String   @map("processor_dispute_id")
+  id                 String           @id @default(uuid()) @db.Uuid
+  transactionId      String           @map("transaction_id") @db.Uuid
+  processorDisputeId String           @map("processor_dispute_id")
   reason             String
-  amount             BigInt   // minor units (ADR-001)
-  currency           String   @db.Char(3)
+  amount             BigInt // minor units (ADR-001)
+  currency           String           @db.Char(3)
   status             ChargebackStatus @default(UNDER_REVIEW)
-  evidenceDueBy      DateTime? @map("evidence_due_by")
-  resolvedAt         DateTime? @map("resolved_at")
-  createdAt          DateTime @default(now()) @map("created_at")
+  evidenceDueBy      DateTime?        @map("evidence_due_by")
+  resolvedAt         DateTime?        @map("resolved_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
   // No updated_at: `status` and `resolvedAt` are set once at resolution via a new webhook event,
   // not an in-place edit of history — the compensating JournalEntry itself is what changes
   // (ADR-016), not this row's other fields.
@@ -618,14 +620,14 @@ model Chargeback {
 }
 
 model Adjustment {
-  id             String   @id @default(uuid()) @db.Uuid
-  restaurantId   String?  @map("restaurant_id") @db.Uuid
-  membershipId   String?  @map("membership_id") @db.Uuid
-  amount         BigInt   // minor units (ADR-001)
-  currency       String   @db.Char(3)
-  reason         String
-  createdBy      String   @map("created_by") @db.Uuid
-  createdAt      DateTime @default(now()) @map("created_at")
+  id           String   @id @default(uuid()) @db.Uuid
+  restaurantId String?  @map("restaurant_id") @db.Uuid
+  membershipId String?  @map("membership_id") @db.Uuid
+  amount       BigInt // minor units (ADR-001)
+  currency     String   @db.Char(3)
+  reason       String
+  createdBy    String   @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
   // No updated_at: "still never edits history" (DATABASE.md, Adjustment Purpose).
 
   restaurant     Restaurant?    @relation(fields: [restaurantId], references: [id])
@@ -660,13 +662,13 @@ model OutboxEvent {
 }
 
 model IdempotencyKey {
-  key               String   @id
-  endpointScope     String   @map("endpoint_scope")
-  requestFingerprint String  @map("request_fingerprint")
-  status            IdempotencyKeyStatus @default(IN_PROGRESS)
-  responseSnapshot  Json?    @map("response_snapshot")
-  createdAt         DateTime @default(now()) @map("created_at")
-  expiresAt         DateTime @map("expires_at")
+  key                String               @id
+  endpointScope      String               @map("endpoint_scope")
+  requestFingerprint String               @map("request_fingerprint")
+  status             IdempotencyKeyStatus @default(IN_PROGRESS)
+  responseSnapshot   Json?                @map("response_snapshot")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  expiresAt          DateTime             @map("expires_at")
 
   payment Payment?
 
@@ -692,4 +694,48 @@ model AuditLog {
   @@index([userId])
   @@index([entity, entityId]) // "who did what to this record" — AuditLog's stated purpose
   @@map("audit_log")
+}
+
+/// ADR-049. One record shape for every agreement anyone accepts, with two possible subjects.
+///
+/// The platform's own Terms are accepted by a **person** (a User, at registration or at invitation
+/// acceptance). The Stripe-linked acceptance is made by a **business** (a Restaurant, at the moment
+/// its connected account is created) — Stripe's own template works by having the account holder
+/// agree to the Connected Account Agreement *through* the platform's terms, and the account holder
+/// is the business, not whoever happened to sign up.
+///
+/// Two subjects, one shape. Exactly one of `userId` / `restaurantId` is set, and which one is
+/// determined by `agreement` — enforced by a database CHECK, the same single-row pattern ADR-017
+/// already uses to keep `journal_entry.entry_type` agreeing with its compensating FK. The
+/// alternative, a table per subject, is how one fact ends up stored two incompatible ways.
+model AgreementAcceptance {
+  id           String        @id @default(uuid()) @db.Uuid
+  agreement    AgreementType
+  /// Which published revision was accepted. Never a boolean: agreements change, and "they agreed"
+  /// without "to what" cannot answer the only question this table exists to answer.
+  version      String
+  userId       String?       @map("user_id") @db.Uuid
+  restaurantId String?       @map("restaurant_id") @db.Uuid
+  acceptedAt   DateTime      @default(now()) @map("accepted_at")
+  /// Personal data, recorded deliberately (PERSONAL_DATA_MAP.md §1): an acceptance that cannot say
+  /// from where is weak evidence. Nullable because a future non-HTTP acceptance path may have none.
+  ipAddress    String?       @map("ip_address")
+  userAgent    String?       @map("user_agent")
+
+  user       User?       @relation(fields: [userId], references: [id])
+  restaurant Restaurant? @relation(fields: [restaurantId], references: [id])
+
+  @@index([userId])
+  @@index([restaurantId])
+  @@index([agreement, version])
+  @@map("agreement_acceptance")
+}
+
+enum AgreementType {
+  /// Our own Terms of Service. Subject: User.
+  PLATFORM_TERMS           @map("platform_terms")
+  /// The Stripe Connected Account Agreement, accepted through our terms. Subject: Restaurant.
+  STRIPE_CONNECTED_ACCOUNT @map("stripe_connected_account")
+
+  @@map("agreement_type")
 }

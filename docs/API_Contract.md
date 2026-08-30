@@ -87,6 +87,8 @@ Error:
 ## Register
 POST /auth/register — body: `email`, `password`, `displayName` (ADR-033, Sprint 13 — required; the name shown wherever this person needs to be identified by a human, e.g. the terminal's own staff-selection picker, Payment.md `MEMBERSHIPS`), `locale` (optional). Creates a User only. No Membership is created at registration: `Membership.organization_id` is required, and an Organization doesn't exist until this person creates their first Restaurant (see RESTAURANTS, `POST /restaurants`; DATABASE.md's Organization entity). A freshly registered User has zero Memberships, which DATABASE.md explicitly allows ("mid-invitation" is the same valid state). Previously said "+ Owner Membership" here, contradicting this document's own ORGANIZATIONS and RESTAURANTS sections — fixed to match the two places that already agreed. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) — checked only here and at Accept Invitation, never at Login.
 
+`acceptedTermsVersion` (ADR-049, Sprint 14) — **required**. The revision of the platform terms the person was shown, taken from `GET /agreements/current` (below) rather than from a constant in the client. Compared against the server's own value: a mismatch is rejected with **409 `TERMS_VERSION_MISMATCH`** and nothing is created, never silently corrected — correcting it would record that someone accepted a document they were never shown. The User and its `agreement_acceptance` row are written in one transaction, with the request's IP and user-agent, so a User cannot exist without a record of what they agreed to. Note that registration therefore has **two distinct 409s**: this one, and the deliberately vague `VALIDATION_ERROR` for an email already in use — different codes precisely so a client can word them differently without either becoming an enumeration oracle.
+
 ## Login
 POST /auth/login — returns Access Token, Refresh Token, User, Memberships.
 
@@ -98,6 +100,19 @@ POST /auth/logout
 
 ## Current User
 GET /auth/me
+
+---
+
+# AGREEMENTS
+
+Added in Sprint 14 (ADR-049).
+
+## Current Agreement Versions
+GET /agreements/current — **public, no `Authorization` header**: a person must be able to read the terms before they have an account, and both values are constants carrying no personal data. Response: `platformTerms: { version }` and `stripeConnectedAccount: { version }`.
+
+Both agreements are returned by one route rather than one route each — the Stripe-linked acceptance is collected at restaurant creation by a different screen, and a second endpoint would be a second place to keep in step for no gain.
+
+The route exists so the version a client submits is the version the server served, not a constant compiled into a build that may predate the revision. It states which revision is current, not what it says: the text is served elsewhere, and today **both values are the placeholder `UNPUBLISHED-no-terms-document-exists-yet`** because neither document has been written. See ADR-049's pre-pilot gate.
 
 ---
 
@@ -426,9 +441,11 @@ GET /memberships?status=active
 
 # Error Codes
 
-AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · WITHDRAWAL_NOT_AVAILABLE · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · PASSWORD_BREACHED · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
+AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · WITHDRAWAL_NOT_AVAILABLE · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · PASSWORD_BREACHED · TERMS_VERSION_MISMATCH · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
 
 `PASSWORD_BREACHED` (ADR-032, Sprint 13): the submitted password appears in a known public breach corpus (HaveIBeenPwned k-anonymity check) — returned only from `POST /auth/register` and `POST /memberships/invitations/accept`'s new-user path, never from Login.
+
+`TERMS_VERSION_MISMATCH` (ADR-049, Sprint 14): the submitted agreement version is not the one this server currently serves — returned from `POST /auth/register` with **409**. Its own code rather than a second `VALIDATION_ERROR` because registration's other 409 (an email already in use) must stay deliberately vague, while this one must say plainly that the terms changed and should be read again. A client cannot tell the two apart from the message, which is the one part of this envelope that may be translated.
 
 Codes never change. Messages may be translated. (`VALIDATION_ERROR`/`NOT_FOUND` were already live in `ErrorCode` and in active use — e.g. every Zod validation failure — but missing from this list; added here to close that gap, found while adding `PAYMENT_NOT_FOUND` for Sprint 5. `NOT_FOUND` is the generic fallback; prefer a dedicated `_NOT_FOUND` code per resource where one exists. `WITHDRAWAL_NOT_AVAILABLE` added for Sprint 7's Future Withdrawals Placeholder, ADR-024 — paired with HTTP 501, not 404 or 400.)
 

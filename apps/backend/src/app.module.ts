@@ -14,6 +14,7 @@ import { RoleModule } from "./role/role.module";
 import { HealthModule } from "./health/health.module";
 import { LedgerModule } from "./ledger/ledger.module";
 import { OutboxModule } from "./outbox/outbox.module";
+import { AgreementsModule } from "./agreements/agreements.module";
 import { AuthModule } from "./auth/auth.module";
 import { ProfileModule } from "./profile/profile.module";
 import { OrganizationModule } from "./organization/organization.module";
@@ -86,6 +87,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     LedgerModule,
     OutboxModule,
     AuthModule,
+    AgreementsModule,
     RoleModule,
     ProfileModule,
     StripeModule,

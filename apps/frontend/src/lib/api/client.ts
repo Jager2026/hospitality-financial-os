@@ -17,12 +17,21 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
 export async function apiPost<T>(path: string, body: unknown): Promise<ApiResult<T>> {
+  return await send<T>(path, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** Reads a public resource. No credentials — the two callers so far (the terms version a person
+ * must be able to see before they have an account) precede any session. */
+export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
+  return await send<T>(path, { method: "GET" });
+}
+
+async function send<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
   let response: Response;
   try {
     response = await fetch(`${BASE_URL}/api/v1${path}`, {
-      method: "POST",
+      ...init,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
     });
   } catch {
     // The network itself failed — no response to read a code from. Distinguished from an API

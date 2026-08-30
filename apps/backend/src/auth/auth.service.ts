@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { writeAuditLog } from "../common/audit/audit-metadata";
+import { CURRENT_PLATFORM_TERMS_VERSION } from "../common/agreements/agreement-versions";
 import type { User } from "@prisma/client";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
@@ -52,7 +53,7 @@ export class AuthService {
     private readonly tokenService: TokenService,
   ) {}
 
-  async register(dto: RegisterDto): Promise<AuthResult> {
+  async register(dto: RegisterDto, context?: RequestContext): Promise<AuthResult> {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) {
       // Deliberately vague — confirming an email exists is an enumeration leak (CLAUDE.md,
@@ -70,9 +71,35 @@ export class AuthService {
       );
     }
 
+    // ADR-049. Checked against the server's own value, never trusted from the request: a client
+    // could otherwise record agreement to any string, and a stale tab would record agreement to a
+    // revision that has since changed. Rejected rather than silently corrected — correcting it
+    // would write down that the user accepted something they were never shown.
+    if (dto.acceptedTermsVersion !== CURRENT_PLATFORM_TERMS_VERSION) {
+      throw new AppException(
+        "TERMS_VERSION_MISMATCH",
+        "The terms have changed since this page was opened. Please reload and read them again.",
+        409,
+      );
+    }
+
     const passwordHash = await hashPassword(dto.password);
-    const user = await this.prisma.user.create({
-      data: { email: dto.email, displayName: dto.displayName, passwordHash, locale: dto.locale },
+    // One transaction: a User that exists without its acceptance would be a person using the
+    // platform with no record of having agreed to anything, which is the exact gap this closes.
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: { email: dto.email, displayName: dto.displayName, passwordHash, locale: dto.locale },
+      });
+      await tx.agreementAcceptance.create({
+        data: {
+          agreement: "PLATFORM_TERMS",
+          version: dto.acceptedTermsVersion,
+          userId: created.id,
+          ipAddress: context?.ipAddress ?? null,
+          userAgent: context?.userAgent ?? null,
+        },
+      });
+      return created;
     });
 
     const tokens = await this.tokenService.issueTokenPair(user.id);

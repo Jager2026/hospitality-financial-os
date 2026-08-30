@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent, type JSX } from "react";
 import { apiPost } from "../../lib/api/client";
@@ -102,6 +103,15 @@ export default function LoginPage(): JSX.Element {
             {submitting ? t("login.submitting") : t("login.submit")}
           </button>
         </form>
+
+        {/* Register exists as of Sprint 14 and nothing linked to it. A sign-up screen reachable
+            only by typing its URL is a screen no new owner finds. */}
+        <p className="text-small text-muted">
+          {t("login.noAccount")}{" "}
+          <Link href="/register" className="text-accent underline">
+            {t("login.createAccount")}
+          </Link>
+        </p>
       </div>
     </main>
   );

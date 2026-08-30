@@ -1287,5 +1287,54 @@ Two reasons for that shape rather than an emergency environment variable. **A st
 
 ---
 
+## ADR-049 — What a person agreed to, and why it is recorded as a contract rather than a consent
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** The Stripe research produced two obligations this project has not met: **we have no terms of service and no privacy policy of our own.** Both are prerequisites for accepting real restaurants, and neither can be met by a document alone — a published text nobody is recorded as having read proves nothing about any particular person.
+
+Until now `User` rows carried no such record at all. Someone registered, and the system held no answer to "which revision of what did this person agree to, and when."
+
+**Decision: one table, `agreement_acceptance`, with a versioned row per acceptance and two possible subjects.**
+
+**Two subjects, not one, and this is the substantive half of the design.** Platform terms are accepted by a **person** (`user_id`); Stripe's connected-account agreement is accepted by a **business** (`restaurant_id`). The same table serves both, and exactly one subject column is populated per row.
+
+The reason is a waiter. A waiter signs up as a person, works a shift, and never touches Stripe — collapsing both agreements onto `User` would record them as having accepted a business's obligations to a payment processor they have no relationship with. It would also be wrong in the other direction: the Stripe account holder is the legal entity, and a Restaurant can outlive the individual who created it.
+
+A `CHECK` constraint makes that a rule rather than a convention — platform terms require a user and forbid a restaurant, the Stripe agreement the reverse. A second `CHECK` refuses a blank version: `NOT NULL` is satisfied by `"   "`, and such a row would claim someone agreed to a revision it cannot name. That is the fourth appearance in this codebase of *the empty string is a present value, not an absent one* (`CLAUDE.md`, Workspace Hygiene).
+
+**The lawful basis is CONTRACT, not consent — recorded here as a basis, not as a decision about a screen.**
+
+This distinction is easy to lose, because both end up as something a person clicks. Under GDPR the difference is real and consequential: consent must be freely given and **withdrawable at any time**, and processing done under it must stop when it is withdrawn. Processing necessary to provide the service someone signed up for is performed on the basis of the **contract** with them (Art. 6(1)(b)), and there is no withdrawal right of that kind — there is termination, which is a different thing with different consequences.
+
+**Presenting contract-basis processing as a consent is therefore not a harmless surplus of politeness.** It tells the person they hold a right they do not hold, and the first time someone exercises it we either have to refuse them or dismantle the service. This is written down as an ADR precisely because the next person adding a consent somewhere in this product will meet this reasoning rather than re-deriving it — and the mistake it prevents looks, at the moment of making it, like being extra careful.
+
+**Consequence on screen, which follows from the basis rather than from taste:**
+
+- **The terms get an unticked checkbox.** Agreeing to them is the act that forms the contract, so it needs a positive act aimed at the terms specifically. "By continuing you agree" would also form a contract in law, but our record makes a narrower claim — *this person accepted revision X at time T* — and that claim is only honest if the person did something about the terms rather than about creating an account.
+- **The privacy policy gets a link and a notice, and no checkbox.** It is an information duty (Art. 13), not an agreement. A checkbox there would be a false consent recorded against a basis that is not consent, which is precisely the confusion above, implemented.
+
+**The version comes from the server, over `GET /agreements/current`, and is echoed back on submit.**
+
+The alternative — a constant compiled into the frontend — is a second copy of server-side truth, and this project has paid twice for exactly that (`test/global-setup.ts`'s permission matrix; the hand-typed Role literals in fixtures). Here the copy would be worse than usual: the client would be asserting *what a person was shown* from a build that may predate the revision.
+
+A submitted version that does not match the server's is **rejected with 409 `TERMS_VERSION_MISMATCH`, never silently corrected.** Correcting it would write down that someone accepted a document they were never shown — a fabricated record produced by a convenience. It carries its own error code rather than reusing `VALIDATION_ERROR` because registration now has two different 409s, and they need opposite wording: an email already in use must stay vague (enumeration), while a stale version needs "reload and read them again".
+
+The User and its acceptance are written in **one transaction**. A User existing without one would be a person using the platform with no record of having agreed to anything — the exact gap this closes.
+
+**The honest limit, recorded rather than glossed:** this endpoint states which revision is current, not what it says. The text is served elsewhere, so "the version you were shown" is only as accurate as that link.
+
+**The pre-pilot gate, which is a gate and not an intention.** `CURRENT_PLATFORM_TERMS_VERSION` is deliberately the string `UNPUBLISHED-no-terms-document-exists-yet`, chosen to be unmistakable *in the data* rather than to look plausible. A date would produce rows that appear to name a published revision, and nobody reading the table later could tell.
+
+**The registration screen must not be shown to a real restaurant while that constant is still the placeholder.** An acceptance pointing at a text that does not exist is not a missing record — it is a **false** one, asserting that someone agreed to a document nobody can produce. That is worse than recording nothing, because a missing record is visibly missing and a false one is not. Recorded in `IMPLEMENTATION_PLAN.md` as a blocking condition on the first pilot; checking it needs no tooling, since the constant either is the placeholder or it is not.
+
+**A gap this ADR does not close, named because it is the same gap on a different door.** There are exactly two paths in the backend that create a `User`: `AuthService.register`, which this ADR fixes, and `MembershipInvitationService.accept`, which does not — an invited person who has no account yet gets one created with **no acceptance record at all**, exactly the state registration was in before this change.
+
+It is left open deliberately rather than patched here: the invitation-acceptance **screen does not exist yet**, and adding a required field to that endpoint before there is a screen to collect it would break the only flow that currently uses it. It is also, uncomfortably, the path a **waiter** takes — the population whose separate treatment is half the reasoning above. Scheduled in `IMPLEMENTATION_PLAN.md` rather than left in a commit message; the pre-pilot gate covers it in the meantime, since no real person should reach either path while the version is a placeholder.
+
+**Not decided here:** the restaurant-creation screen that collects the Stripe-linked acceptance (the schema is built for it; the screen is separate work), what a withdrawal or erasure request does to these rows (`PERSONAL_DATA_MAP.md` §4 — there is no erasure path at all today), and the contents of either document.
+
+---
+
 ## Superseded / Retired
 - **CTO Operating Manual** — superseded by ADR-011; content to be merged into `CLAUDE_RULES.md`, then removed from the repository.
