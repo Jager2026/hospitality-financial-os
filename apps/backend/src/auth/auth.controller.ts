@@ -19,8 +19,13 @@ export class AuthController {
 
   @Post("register")
   @AuditEntity("Authentication")
-  register(@Body(new ZodValidationPipe(registerSchema)) dto: RegisterDto) {
-    return this.authService.register(dto);
+  register(@Body(new ZodValidationPipe(registerSchema)) dto: RegisterDto, @Req() req: Request) {
+    // ADR-049: the acceptance record carries where it came from, so the same context the refresh
+    // route already collects is passed here too.
+    return this.authService.register(dto, {
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
   }
 
   @Post("login")

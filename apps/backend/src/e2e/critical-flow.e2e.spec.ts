@@ -14,6 +14,7 @@ import type {
   CreatePaymentIntentParams,
 } from "../stripe/stripe.service";
 import { StripeService } from "../stripe/stripe.service";
+import { PLATFORM_TERMS_PLACEHOLDER } from "../common/agreements/agreement-versions";
 
 const WEBHOOK_SECRET = "whsec_e2e_test_secret";
 
@@ -142,6 +143,7 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
       password: ownerPassword,
       displayName: "Test Owner",
       locale: "en",
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
     });
     expect(registerRes.status).toBe(201);
     expect(registerRes.body.data.accessToken).toBeTruthy();

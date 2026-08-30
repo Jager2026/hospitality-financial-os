@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PLATFORM_TERMS_PLACEHOLDER } from "../../common/agreements/agreement-versions";
 import { registerSchema } from "./register.schema";
 
 describe("registerSchema", () => {
@@ -8,6 +9,7 @@ describe("registerSchema", () => {
       password: "sufficiently-long-password",
       displayName: "Owner Name",
       locale: "en",
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -51,10 +53,33 @@ describe("registerSchema", () => {
       email: "a@b.com",
       password: "password123",
       displayName: "Owner Name",
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.locale).toBe("en");
     }
+  });
+
+  // ADR-049. Both halves matter and they fail differently: an omitted field means the client never
+  // asked the person anything, and a blank one means it asked and recorded nothing — the empty
+  // string is a present value (CLAUDE.md, Workspace Hygiene), so `.min(1)` on a trimmed string is
+  // what separates them from a valid answer. The service checks the value against the server's
+  // own; this schema only guarantees there is a value to check.
+  it("rejects a missing or blank acceptedTermsVersion", () => {
+    const missing = registerSchema.safeParse({
+      email: "a@b.com",
+      password: "password123",
+      displayName: "Owner Name",
+    });
+    expect(missing.success).toBe(false);
+
+    const blank = registerSchema.safeParse({
+      email: "a@b.com",
+      password: "password123",
+      displayName: "Owner Name",
+      acceptedTermsVersion: "   ",
+    });
+    expect(blank.success).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { API_BASE, login, registerUser, type SeededUser } from "../fixtures/api";
 import { resetRateLimits } from "../fixtures/throttle";
+import { PLATFORM_TERMS_PLACEHOLDER } from "../../backend/src/common/agreements/agreement-versions";
 
 /**
  * The rate limit, tested on its own budget — which only became possible with ADR-042.
@@ -80,6 +81,7 @@ test("each auth route carries its own budget — exhausting login does not lock 
       email: `e2e-budget-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`,
       password: `e2e-budget-${Math.random().toString(36).slice(2)}-Aa1!`,
       displayName: "Budget Probe",
+      acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
     },
   });
   expect(response.status()).toBe(201);
