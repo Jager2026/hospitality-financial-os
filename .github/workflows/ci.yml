@@ -42,6 +42,17 @@ jobs:
       # production is a business decision, never silently assumed) — same "present so the app can
       # start" reasoning as the vars above, in case a future CI step ever boots the real app.
       CORS_ORIGIN: http://localhost:3000
+      # The frontend's build guard (`apps/frontend/scripts/check-public-env.mjs`) now runs on every
+      # build rather than only when it believes it is in production. It believed that by reading
+      # NODE_ENV, which this workflow never set — so on every pull request the guard exited 0
+      # without checking anything, and the guard written in response to a production outage had
+      # never run outside Railway.
+      #
+      # The real production URL rather than a placeholder, deliberately: it is public (it is the
+      # API's own address), it is what Railway builds with, and it makes CI's bundle equivalent to
+      # production's in the one respect this guard is about. A made-up non-loopback value would
+      # satisfy the guard while proving less.
+      NEXT_PUBLIC_API_URL: https://api.plaintabs.com
 
     services:
       postgres:

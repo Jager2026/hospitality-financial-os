@@ -16,6 +16,13 @@ const BACKEND_PORT = process.env.E2E_BACKEND_PORT ?? "3101";
 const env = {
   ...process.env,
   NEXT_PUBLIC_API_URL: `http://localhost:${BACKEND_PORT}`,
+  // The one build in this repository that legitimately targets a loopback backend, and the only
+  // place this variable is ever set. `check-public-env.mjs` now runs on EVERY build and refuses a
+  // loopback URL unless told, in writing, that it is deliberate — because its previous activation
+  // condition (`NODE_ENV === "production"`) was unset in CI, which silently switched the whole
+  // guard off on every pull request. Deleting this line makes the e2e build fail loudly, which is
+  // the correct direction for a mistake to fall.
+  ALLOW_LOOPBACK_API_URL: "1",
 };
 
 execSync("pnpm --filter backend run build", { cwd: "../..", env, stdio: "inherit" });
