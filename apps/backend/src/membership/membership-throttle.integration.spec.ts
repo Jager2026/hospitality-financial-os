@@ -12,6 +12,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { MembershipInvitationService } from "./membership-invitation.service";
 import { MembershipController } from "./membership.controller";
 import { MembershipService } from "./membership.service";
+import { syntheticCaller } from "../../test/fixtures/authenticated-user";
 
 // Same precedent as auth/auth-throttle.integration.spec.ts, requested explicitly (founder review
 // of this sprint's authorization-sensitive code): POST /memberships/invitations/accept is public
@@ -106,19 +107,15 @@ describe("MembershipController — invite throttle (integration)", () => {
     const fakeAuthGuard: CanActivate = {
       canActivate: (context: ExecutionContext) => {
         const req = context.switchToHttp().getRequest();
-        req.user = {
-          id: randomUUID(),
+        // Synthetic on purpose: this test is about the rate limiter, and the identity exists
+        // only to clear the permission gate. It previously wore the name "Owner" while holding
+        // one of that Role's ten Permissions — a claim the test never needed and could not honour.
+        req.user = syntheticCaller({
+          permissions: ["membership.invite"],
+          organizationId,
+          restaurantId: null,
           email: "inviter@example.com",
-          locale: "en",
-          memberships: [
-            {
-              id: randomUUID(),
-              organizationId,
-              restaurantId: null,
-              role: { id: randomUUID(), name: "Owner", permissions: ["membership.invite"] },
-            },
-          ],
-        };
+        });
         return true;
       },
     };

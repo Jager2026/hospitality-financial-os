@@ -9,6 +9,7 @@ import { IndividualTipAllocationStrategy } from "./individual-tip-allocation.str
 import { TipService } from "./tip.service";
 import type { RestaurantService } from "../restaurant/restaurant.service";
 import { WebhooksService } from "../webhooks/webhooks.service";
+import { callerWithSeededRole, seededRole } from "../../test/fixtures/authenticated-user";
 
 // Real database, driven through the REAL production write path (WebhooksService), not
 // hand-crafted LedgerLine fixtures — so this test reproduces the exact row shape the live bug
@@ -154,33 +155,30 @@ describe("TipService (real database)", () => {
     });
   }
 
-  function ownerUserReaching(organizationId: string): AuthenticatedUser {
-    return {
-      id: randomUUID(),
+  // Real seeded Owner. Every test using this asserts REACHABILITY — can this caller see a Tip at
+  // a Restaurant in its Organization — and TipService checks reach, not permissions, so the
+  // permission list was never load-bearing. It was, however, a lie: an Owner holding none of its
+  // ten Permissions. Harmless today, wrong the moment a permission check reaches this path.
+  async function ownerUserReaching(organizationId: string): Promise<AuthenticatedUser> {
+    return callerWithSeededRole(prisma, {
+      roleName: "Owner",
+      organizationId,
+      restaurantId: null, // org-wide — reaches every Restaurant in this Organization
       email: "owner@example.com",
-      locale: "en",
-      memberships: [
-        {
-          id: randomUUID(),
-          organizationId,
-          restaurantId: null, // org-wide — reaches every Restaurant in this Organization
-          role: { id: randomUUID(), name: "Owner", permissions: [] },
-        },
-      ],
-    };
+    });
   }
 
-  function waiterUserWithMemberships(
+  // The seeded Waiter genuinely holds no Permissions, so the literal this replaces was correct —
+  // but correct by coincidence rather than by construction, which is the whole distinction.
+  async function waiterUserWithMemberships(
     memberships: Array<{ id: string; organizationId: string; restaurantId: string | null }>,
-  ): AuthenticatedUser {
+  ): Promise<AuthenticatedUser> {
+    const waiter = await seededRole(prisma, "Waiter");
     return {
       id: randomUUID(),
       email: "waiter@example.com",
       locale: "en",
-      memberships: memberships.map((m) => ({
-        ...m,
-        role: { id: randomUUID(), name: "Waiter", permissions: [] },
-      })),
+      memberships: memberships.map((m) => ({ ...m, role: waiter })),
     };
   }
 
@@ -208,7 +206,10 @@ describe("TipService (real database)", () => {
       const tip = await prisma.tip.findUnique({ where: { transactionId: transaction?.id } });
       expect(tip).not.toBeNull(); // sanity: the fixture actually produced a Tip row
 
-      const results = await tipService.findForRestaurant(restaurant.id, ownerUserReaching(org.id));
+      const results = await tipService.findForRestaurant(
+        restaurant.id,
+        await ownerUserReaching(org.id),
+      );
 
       expect(results).toHaveLength(1); // NOT 2 — the general liability line must be excluded
       expect(results[0].tipId).toBe(tip?.id);
@@ -239,7 +240,7 @@ describe("TipService (real database)", () => {
         });
         const tip = await prisma.tip.findUnique({ where: { transactionId: transaction?.id } });
 
-        const caller = waiterUserWithMemberships([
+        const caller = await waiterUserWithMemberships([
           {
             id: waiterMembership.id,
             organizationId: org.id,
@@ -275,7 +276,7 @@ describe("TipService (real database)", () => {
       await webhooks.handleEvent(rawB, sigB);
 
       // Same person, two employers — same shape as ADR-006's own multi-Membership example.
-      const caller = waiterUserWithMemberships([
+      const caller = await waiterUserWithMemberships([
         { id: waiterA.id, organizationId: orgA.id, restaurantId: restaurantA.id },
         { id: waiterB.id, organizationId: orgB.id, restaurantId: restaurantB.id },
       ]);
@@ -291,7 +292,7 @@ describe("TipService (real database)", () => {
     });
 
     it("returns an empty array for a caller with zero Memberships, not an error", async () => {
-      const caller = waiterUserWithMemberships([]);
+      const caller = await waiterUserWithMemberships([]);
       const results = await tipService.findMine(caller);
       expect(results).toEqual([]);
     });
@@ -313,14 +314,14 @@ describe("TipService (real database)", () => {
       });
       const tip = await prisma.tip.findUniqueOrThrow({ where: { transactionId: transaction!.id } });
 
-      const found = await tipService.findOne(tip.id, ownerUserReaching(org.id));
+      const found = await tipService.findOne(tip.id, await ownerUserReaching(org.id));
       expect(found.id).toBe(tip.id);
     });
 
     it("throws NOT_FOUND for a Tip id that doesn't exist", async () => {
       const { org } = await seedOrgRestaurant();
       await expect(
-        tipService.findOne(randomUUID(), ownerUserReaching(org.id)),
+        tipService.findOne(randomUUID(), await ownerUserReaching(org.id)),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
@@ -347,7 +348,7 @@ describe("TipService (real database)", () => {
 
         const { org: strangerOrg } = await seedOrgRestaurant();
         await expect(
-          tipService.findOne(tip.id, ownerUserReaching(strangerOrg.id)),
+          tipService.findOne(tip.id, await ownerUserReaching(strangerOrg.id)),
         ).rejects.toMatchObject({ code: "NOT_FOUND" });
       },
     );

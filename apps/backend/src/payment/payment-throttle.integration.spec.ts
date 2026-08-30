@@ -10,6 +10,7 @@ import { PermissionsGuard } from "../auth/guards/permissions.guard";
 import { PrismaService } from "../prisma/prisma.service";
 import { PaymentController } from "./payment.controller";
 import { PaymentService } from "./payment.service";
+import { syntheticCaller } from "../../test/fixtures/authenticated-user";
 
 // Sprint 11 (ADR-028): same precedent as auth-throttle.integration.spec.ts. POST /payments creates
 // a real Stripe PaymentIntent per call and is the shape card-testing fraud targets — hence the new
@@ -34,19 +35,14 @@ describe("PaymentController — create throttle (integration)", () => {
     const fakeAuthGuard: CanActivate = {
       canActivate: (context: ExecutionContext) => {
         const req = context.switchToHttp().getRequest();
-        req.user = {
-          id: randomUUID(),
+        // Synthetic on purpose — see membership-throttle.integration.spec.ts. The identity is
+        // scaffolding for a rate-limit assertion, not a claim about the Owner Role.
+        req.user = syntheticCaller({
+          permissions: ["payments.manage"],
+          organizationId: randomUUID(),
+          restaurantId: null,
           email: "manager@example.com",
-          locale: "en",
-          memberships: [
-            {
-              id: randomUUID(),
-              organizationId: randomUUID(),
-              restaurantId: null,
-              role: { id: randomUUID(), name: "Owner", permissions: ["payments.manage"] },
-            },
-          ],
-        };
+        });
         return true;
       },
     };

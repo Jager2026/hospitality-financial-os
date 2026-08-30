@@ -9,6 +9,7 @@ import { StripeService } from "../stripe/stripe.service";
 import { IndividualTipAllocationStrategy } from "../tip/individual-tip-allocation.strategy";
 import { WebhooksService } from "../webhooks/webhooks.service";
 import { TransactionService } from "./transaction.service";
+import { seededRole, syntheticCaller } from "../../test/fixtures/authenticated-user";
 
 // Real database, driven through the REAL production write path (WebhooksService) — same
 // discipline as every other real-Ledger spec file this project has. ADR-025's own claim (all
@@ -37,11 +38,13 @@ function buildEvent(type: string, dataObject: Record<string, unknown>) {
 }
 
 describe("TransactionService (real database)", () => {
+  let ownerRole: Awaited<ReturnType<typeof seededRole>>;
   const prisma = new PrismaService();
   let transactionService: TransactionService;
   let webhooks: WebhooksService;
 
   beforeAll(async () => {
+    ownerRole = await seededRole(prisma, "Owner");
     await prisma.$connect();
     const stripe = new StripeService(
       {
@@ -165,11 +168,11 @@ describe("TransactionService (real database)", () => {
           id: randomUUID(),
           organizationId,
           restaurantId: null,
-          // ADR-043: an Owner with no permissions cannot exist — seed.ts grants Owner all ten.
-          // This fixture modelled an impossible user, and every list assertion built on it was
-          // therefore proving something about a system that does not exist. Corrected to match
-          // the real seed rather than relaxed to keep the test green.
-          role: { id: randomUUID(), name: "Owner", permissions: ["reports.view"] },
+          // The real seeded Owner. A previous correction here claimed to "match the real seed"
+          // while granting one of its ten Permissions — the comment asserted a property the code
+          // did not have, which is worse than the original error because it stopped the question
+          // being asked again. Read from the seed now, so it cannot be half-right.
+          role: ownerRole,
         },
       ],
     };
@@ -482,13 +485,14 @@ describe("TransactionService (real database)", () => {
       const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
 
       const withPermission = ownerUserReaching(org.id);
-      const withoutPermission: AuthenticatedUser = {
-        ...withPermission,
-        memberships: withPermission.memberships.map((m) => ({
-          ...m,
-          role: { ...m.role, permissions: [] },
-        })),
-      };
+      // Deliberately synthetic: the point is a caller with the SAME reach and no permission.
+      // Stripping permissions while keeping the name "Owner" would have described an Owner the
+      // seed cannot produce — the exact fixture shape ADR-043 was written about.
+      const withoutPermission = syntheticCaller({
+        permissions: [],
+        organizationId: withPermission.memberships[0].organizationId,
+        restaurantId: withPermission.memberships[0].restaurantId,
+      });
 
       const permitted = await transactionService.findAllForUser(withPermission, {
         page: 1,

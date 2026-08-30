@@ -6,6 +6,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { WalletController } from "./wallet.controller";
 import { WalletProjectionService } from "./wallet-projection.service";
 import { WalletService } from "./wallet.service";
+import { seededRole } from "../../test/fixtures/authenticated-user";
 
 // IMPLEMENTATION_PLAN.md Sprint 7: "Future Withdrawals Placeholder" — the two branches that live
 // in the controller itself (own-wallet-only, then the honest "not built yet" response), not
@@ -15,7 +16,12 @@ describe("WalletController.requestWithdrawal (real database)", () => {
   let controller: WalletController;
   let walletProjection: WalletProjectionService;
 
+  let waiterRole: Awaited<ReturnType<typeof seededRole>>;
+
   beforeAll(async () => {
+    // The seeded Waiter really does hold no Permissions, so the literal this replaces was
+    // correct — but correct by coincidence. Read from the seed, it cannot drift.
+    waiterRole = await seededRole(prisma, "Waiter");
     await prisma.$connect();
     controller = new WalletController(new WalletService(prisma));
     walletProjection = new WalletProjectionService(prisma);
@@ -158,7 +164,7 @@ describe("WalletController.requestWithdrawal (real database)", () => {
           id: membership.id,
           organizationId: membership.organizationId,
           restaurantId: membership.restaurantId,
-          role: { id: randomUUID(), name: "Waiter", permissions: [] },
+          role: waiterRole,
         },
       ],
     };

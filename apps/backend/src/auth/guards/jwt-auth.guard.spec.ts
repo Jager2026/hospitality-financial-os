@@ -85,7 +85,9 @@ describe("JwtAuthGuard", () => {
           restaurantId: null,
           role: {
             id: "role-1",
-            name: "Owner",
+            // Deliberately NOT a seeded Role name — see auth.service.spec.ts. The assertion below
+            // mirrors this stub; it proves the guard's mapping, not the Owner Role's powers.
+            name: "StubRole",
             rolePermissions: [{ permission: { name: "restaurant.edit" } }],
           },
         },
@@ -112,7 +114,7 @@ describe("JwtAuthGuard", () => {
           id: "m1",
           organizationId: "org-1",
           restaurantId: null,
-          role: { id: "role-1", name: "Owner", permissions: ["restaurant.edit"] },
+          role: { id: "role-1", name: "StubRole", permissions: ["restaurant.edit"] },
         },
       ],
     });

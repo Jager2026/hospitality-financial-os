@@ -4,13 +4,19 @@ import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "./wallet-projection.service";
 import { WalletService } from "./wallet.service";
+import { seededRole } from "../../test/fixtures/authenticated-user";
 
 describe("WalletService (real database)", () => {
   const prisma = new PrismaService();
   let walletService: WalletService;
   let walletProjection: WalletProjectionService;
 
+  let waiterRole: Awaited<ReturnType<typeof seededRole>>;
+
   beforeAll(async () => {
+    // The seeded Waiter really does hold no Permissions, so the literal this replaces was
+    // correct — but correct by coincidence. Read from the seed, it cannot drift.
+    waiterRole = await seededRole(prisma, "Waiter");
     await prisma.$connect();
     walletService = new WalletService(prisma);
     walletProjection = new WalletProjectionService(prisma);
@@ -134,7 +140,7 @@ describe("WalletService (real database)", () => {
           id: membership.id,
           organizationId: membership.organizationId,
           restaurantId: membership.restaurantId,
-          role: { id: randomUUID(), name: "Waiter", permissions: [] },
+          role: waiterRole,
         },
       ],
     };

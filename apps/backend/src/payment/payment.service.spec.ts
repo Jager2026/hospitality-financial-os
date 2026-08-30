@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { PrismaService } from "../prisma/prisma.service";
 import type { StripeService } from "../stripe/stripe.service";
 import { PaymentService } from "./payment.service";
+import { seededRole } from "../../test/fixtures/authenticated-user";
 
 // Real database, real PaymentService — only StripeService is faked (no real Stripe network call
 // from an automated test), same precedent as restaurant.service.spec.ts.
@@ -13,6 +14,8 @@ describe("PaymentService (real database)", () => {
   let service: PaymentService;
   let waiterRoleId: string;
   let managerRoleId: string;
+  let managerRole: Awaited<ReturnType<typeof seededRole>>;
+  let waiterRole: Awaited<ReturnType<typeof seededRole>>;
 
   const fakeStripe = {
     createPaymentIntent: vi.fn().mockImplementation(() =>
@@ -32,10 +35,12 @@ describe("PaymentService (real database)", () => {
     // file runs — see test/global-setup.ts for why (a real cross-file upsert race, not a
     // hypothetical). Looked up here, never written, so this file can't race another one seeding
     // the same rows.
-    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
+    // Seeded, with Permissions. The fixtures below asserted scope and reachability; describing
+    // the Manager as holding one or two of its seven Permissions was never what they proved.
+    managerRole = await seededRole(prisma, "Manager");
     managerRoleId = managerRole.id;
 
-    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
+    waiterRole = await seededRole(prisma, "Waiter");
     waiterRoleId = waiterRole.id;
 
     const fakeConfig = { getOrThrow: () => 100 } as unknown as ConfigService; // 1.00%, Founder decision
@@ -135,11 +140,7 @@ describe("PaymentService (real database)", () => {
       restaurant.id,
       managerRoleId,
     );
-    const authedUser = asAuthenticatedUser(user, membership, {
-      id: managerRoleId,
-      name: "Manager",
-      permissions: ["payments.manage"],
-    });
+    const authedUser = asAuthenticatedUser(user, membership, managerRole);
 
     const key = `pay-key-${randomUUID()}`;
     await seedIdempotencyKey(key, "/payments");
@@ -197,11 +198,7 @@ describe("PaymentService (real database)", () => {
       restaurant.id,
       waiterRoleId,
     );
-    const authedUser = asAuthenticatedUser(user, membership, {
-      id: waiterRoleId,
-      name: "Waiter",
-      permissions: [],
-    });
+    const authedUser = asAuthenticatedUser(user, membership, waiterRole);
 
     await expect(
       service.createPaymentIntent(
@@ -220,11 +217,7 @@ describe("PaymentService (real database)", () => {
       restaurant.id,
       managerRoleId,
     );
-    const authedUser = asAuthenticatedUser(user, membership, {
-      id: managerRoleId,
-      name: "Manager",
-      permissions: ["payments.manage"],
-    });
+    const authedUser = asAuthenticatedUser(user, membership, managerRole);
 
     await expect(
       service.createPaymentIntent(
@@ -242,13 +235,10 @@ describe("PaymentService (real database)", () => {
     const first = await createRestaurant(org.id);
     const second = await createRestaurant(org.id);
     const { user, membership } = await createUserWithMembership(org.id, first.id, managerRoleId);
-    const authedUser = asAuthenticatedUser(user, membership, {
-      id: managerRoleId,
-      name: "Manager",
-      // ADR-043: a real seeded Manager carries reports.view as well. The old fixture held only
-      // the write permission and the list still returned rows — the test was asserting the leak.
-      permissions: ["payments.manage", "reports.view"],
-    });
+    // ADR-043's correction, now taken from the seed instead of restated. The old fixture held
+    // only the write permission and the list still returned rows — the test was asserting the
+    // leak. Naming the Role and listing its Permissions by hand is what let that stand.
+    const authedUser = asAuthenticatedUser(user, membership, managerRole);
 
     const keyFirst = `scope-first-${randomUUID()}`;
     const keySecond = `scope-second-${randomUUID()}`;

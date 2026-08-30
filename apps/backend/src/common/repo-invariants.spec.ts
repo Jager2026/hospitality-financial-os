@@ -68,4 +68,55 @@ describe("repository invariants", () => {
       `Use isRestaurantReachable/hasPermissionAtRestaurant/findGrantingMembership from restaurant-reachability.util.ts instead of writing the predicate inline. Offending files:\n${offenders.join("\n")}`,
     ).toEqual([]);
   });
+
+  // The fixture rule, as a check rather than a habit.
+  //
+  // What is forbidden is narrower than "a literal", and the narrowness is the point. A synthetic
+  // caller holding one permission is legitimate — many tests exist precisely to show that one is
+  // not enough, and swapping in the real seven-permission Manager would destroy the discrimination
+  // they were written for. A fixture naming the Waiter and giving it an empty permission array is
+  // a literal and is *correct*, because the seeded Waiter really holds none.
+  //
+  // What is forbidden is a fixture NAMING a seeded Role and then describing permissions the seed
+  // does not give it. That is what actually happened: an "Owner" with two of its ten Permissions,
+  // and later one with none at all — fixtures proving things about a system that does not exist,
+  // believable precisely because of the name.
+  //
+  // No allowlist, by construction: a synthetic caller simply must not carry a real Role's name,
+  // and `syntheticCaller()` refuses one at runtime too.
+  it("keeps seeded Role names out of hand-written permission fixtures", () => {
+    const SRC = join(REPO_ROOT, "apps", "backend", "src");
+    const SEEDED = ["Owner", "Administrator", "Manager", "Waiter"];
+
+    function walk(dir: string): string[] {
+      return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return walk(full);
+        return entry.name.endsWith(".spec.ts") ? [full] : [];
+      });
+    }
+
+    // Collapsed to one line so a fixture split across lines is caught the same as an inline one;
+    // `[^}]*` keeps the match inside a single object literal rather than spanning unrelated code.
+    const named = SEEDED.join("|");
+    const patterns = [
+      new RegExp(`name:\\s*"(?:${named})"[^}]*permissions:\\s*\\[`),
+      new RegExp(`permissions:\\s*\\[[^}]*name:\\s*"(?:${named})"`),
+    ];
+
+    const offenders = walk(SRC)
+      .filter((file) => {
+        const collapsed = readFileSync(file, "utf8").replace(/\s+/g, " ");
+        return patterns.some((p) => p.test(collapsed));
+      })
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(
+      offenders,
+      `A fixture naming a seeded Role must take its permissions from the seed — use ` +
+        `callerWithSeededRole() from test/fixtures/authenticated-user.ts. If the test genuinely ` +
+        `needs a narrow permission set, use syntheticCaller(), which must not wear a real Role's ` +
+        `name. Offending files:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
 });
