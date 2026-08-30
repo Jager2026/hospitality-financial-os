@@ -3,6 +3,7 @@ import type { Membership } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
+import { isRestaurantReachable } from "../common/restaurant-reachability.util";
 
 @Injectable()
 export class MembershipService {
@@ -57,11 +58,7 @@ export class MembershipService {
     if (!restaurant) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
-    const reachable = user.memberships.some(
-      (m) =>
-        m.restaurantId === restaurant.id ||
-        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
-    );
+    const reachable = isRestaurantReachable(user, restaurant);
     if (!reachable) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }

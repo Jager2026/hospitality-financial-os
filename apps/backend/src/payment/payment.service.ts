@@ -8,6 +8,10 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import type { CreatePaymentDto } from "./dto/create-payment.schema";
 import { splitPlatformFee } from "./platform-fee.util";
+import {
+  findGrantingMembership,
+  isRestaurantReachable,
+} from "../common/restaurant-reachability.util";
 
 export interface CreatedPayment {
   id: string;
@@ -195,11 +199,7 @@ export class PaymentService {
     if (!restaurant) {
       throw new AppException("PAYMENT_NOT_FOUND", "Payment not found.", 404);
     }
-    const reachable = user.memberships.some(
-      (m) =>
-        m.restaurantId === restaurant.id ||
-        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
-    );
+    const reachable = isRestaurantReachable(user, restaurant);
     if (!reachable) {
       throw new AppException("PAYMENT_NOT_FOUND", "Payment not found.", 404);
     }
@@ -213,11 +213,7 @@ export class PaymentService {
     if (!restaurant) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
-    const reachable = user.memberships.some(
-      (m) =>
-        m.restaurantId === restaurant.id ||
-        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
-    );
+    const reachable = isRestaurantReachable(user, restaurant);
     if (!reachable) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
@@ -266,12 +262,7 @@ export class PaymentService {
     restaurant: Restaurant,
     permission: string,
   ): AuthenticatedUser["memberships"][number] {
-    const membership = user.memberships.find(
-      (m) =>
-        (m.restaurantId === restaurant.id ||
-          (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
-        m.role.permissions.includes(permission),
-    );
+    const membership = findGrantingMembership(user, restaurant, permission);
     if (!membership) {
       throw new AppException(
         "PERMISSION_DENIED",

@@ -3,6 +3,7 @@ import type { Tip } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
+import { isRestaurantReachable } from "../common/restaurant-reachability.util";
 
 export interface TipHistoryEntry {
   tipId: string;
@@ -125,11 +126,7 @@ export class TipService {
     if (!restaurant) {
       throw new AppException("NOT_FOUND", "Restaurant not found.", 404);
     }
-    const reachable = user.memberships.some(
-      (m) =>
-        m.restaurantId === restaurant.id ||
-        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
-    );
+    const reachable = isRestaurantReachable(user, restaurant);
     if (!reachable) {
       throw new AppException("NOT_FOUND", "Restaurant not found.", 404);
     }

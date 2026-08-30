@@ -8,6 +8,10 @@ import { StripeService } from "../stripe/stripe.service";
 import type { CreateRestaurantDto } from "./dto/create-restaurant.schema";
 import type { UpdateRestaurantDto } from "./dto/update-restaurant.schema";
 import { deriveOnboardingStatus } from "./onboarding-status.util";
+import {
+  hasPermissionAtRestaurant,
+  isRestaurantReachable,
+} from "../common/restaurant-reachability.util";
 
 @Injectable()
 export class RestaurantService {
@@ -188,11 +192,7 @@ export class RestaurantService {
     if (!restaurant) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
-    const reachable = user.memberships.some(
-      (m) =>
-        m.restaurantId === restaurant.id ||
-        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
-    );
+    const reachable = isRestaurantReachable(user, restaurant);
     if (!reachable) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
@@ -211,12 +211,7 @@ export class RestaurantService {
     restaurant: Restaurant,
     permission: string,
   ): void {
-    const hasPermission = user.memberships.some(
-      (m) =>
-        (m.restaurantId === restaurant.id ||
-          (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
-        m.role.permissions.includes(permission),
-    );
+    const hasPermission = hasPermissionAtRestaurant(user, restaurant, permission);
     if (!hasPermission) {
       throw new AppException(
         "PERMISSION_DENIED",

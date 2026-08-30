@@ -4,6 +4,10 @@ import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
 import type { UpdateTipSettingsDto } from "./dto/update-tip-settings.schema";
+import {
+  hasPermissionAtRestaurant,
+  isRestaurantReachable,
+} from "../common/restaurant-reachability.util";
 
 export interface TipSettings {
   presetTips: number[];
@@ -45,11 +49,7 @@ export class SettingsService {
     if (!restaurant) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
-    const reachable = user.memberships.some(
-      (m) =>
-        m.restaurantId === restaurant.id ||
-        (m.restaurantId === null && m.organizationId === restaurant.organizationId),
-    );
+    const reachable = isRestaurantReachable(user, restaurant);
     if (!reachable) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
@@ -61,12 +61,7 @@ export class SettingsService {
     restaurant: Restaurant,
     permission: string,
   ): void {
-    const hasPermission = user.memberships.some(
-      (m) =>
-        (m.restaurantId === restaurant.id ||
-          (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
-        m.role.permissions.includes(permission),
-    );
+    const hasPermission = hasPermissionAtRestaurant(user, restaurant, permission);
     if (!hasPermission) {
       throw new AppException(
         "PERMISSION_DENIED",

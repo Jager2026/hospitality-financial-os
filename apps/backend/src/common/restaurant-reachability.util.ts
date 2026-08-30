@@ -28,9 +28,14 @@ import type { PrismaService } from "../prisma/prisma.service";
  * independently-maintained copies of a predicate the project has twice got wrong is a risk
  * surface, not an aesthetic complaint.
  *
- * Consolidation is scheduled work, not a watch item (`IMPLEMENTATION_PLAN.md`, Deferred). This
- * comment is corrected ahead of it because an inaccurate comment about an access rule is worse
- * than none: it tells the next reader the duplication is bounded and old, when it is neither. */
+ * ── RESOLVED (ADR-047). Ten of the thirteen now call these helpers; three are excluded on purpose
+ * and the reasoning is recorded further down this file, next to the functions they must not use.
+ *
+ * The count is no longer maintained by hand, which is the part that matters — `repo-invariants.spec.ts`
+ * fails if this predicate is written inline anywhere in the backend outside this file. That check
+ * exists because the previous bound was a sentence, and a sentence cannot notice being outgrown:
+ * this one said "three" while the number climbed to thirteen, and stayed convincing the whole
+ * time. **An accurate comment about an access rule is worth less than a check that fails.** */
 export function isRestaurantReachable(
   user: AuthenticatedUser,
   restaurant: { id: string; organizationId: string },
@@ -90,13 +95,64 @@ export function hasPermissionAtRestaurant(
   restaurant: { id: string; organizationId: string },
   permission: string,
 ): boolean {
-  return user.memberships.some(
+  return findGrantingMembership(user, restaurant, permission) !== undefined;
+}
+
+/**
+ * The same check as `hasPermissionAtRestaurant`, returning the Membership that grants it rather
+ * than a boolean — `PaymentService.getGrantingMembershipOrThrow` needs the row, not the answer.
+ *
+ * Added so that call site could join the consolidation without its signature being bent to fit a
+ * shared helper. `.some(p)` and `.find(p) !== undefined` are the same test over the same
+ * predicate, so `hasPermissionAtRestaurant` is now defined in terms of this and there is exactly
+ * one implementation of the rule rather than two that happen to agree.
+ *
+ * Worth recording, since it was checked rather than assumed: payment's caller currently discards
+ * the returned Membership (`payment.service.ts:59`), so the `find`/`some` distinction is not
+ * observable today. The return type is preserved anyway — narrowing it would be a change to a
+ * money-path signature made for the convenience of a refactor, which is not a trade this refactor
+ * is entitled to make.
+ */
+export function findGrantingMembership(
+  user: AuthenticatedUser,
+  restaurant: { id: string; organizationId: string },
+  permission: string,
+): AuthenticatedUser["memberships"][number] | undefined {
+  return user.memberships.find(
     (m) =>
       (m.restaurantId === restaurant.id ||
         (m.restaurantId === null && m.organizationId === restaurant.organizationId)) &&
       m.role.permissions.includes(permission),
   );
 }
+
+/**
+ * ── WHAT THESE HELPERS ARE NOT FOR, and why the exclusion is a safety property rather than tidiness.
+ *
+ * Every function above takes a **Restaurant**. Its `id` is non-null by definition, which is the
+ * only reason `m.restaurantId === restaurant.id` is a safe first comparison.
+ *
+ * Three call sites in this codebase look identical and are not: they reach a **Membership** or a
+ * **Wallet**, whose `restaurantId` is legitimately nullable —
+ * `MembershipService.getReachableOrThrow`, `MembershipService.assertPermission`, and
+ * `WalletService.assertReachable`. They are deliberately excluded from these helpers and must
+ * stay excluded.
+ *
+ * **The reason is no longer a judgement call; it was proved.** When the target is org-wide, the
+ * first comparison becomes `null === null` — true for any caller holding an org-wide Membership in
+ * ANY Organization — and `||` short-circuits before the `organizationId` comparison ever runs.
+ * `MembershipService` shipped exactly that and leaked across Organizations: an unrelated org-wide
+ * Owner could read another Organization's org-wide Membership in full, and re-role it (fixed and
+ * covered by `membership.service.spec.ts`; found while surveying these very call sites).
+ * `WalletService` faces the same nullable target and is correct, because it refuses org-wide
+ * Wallets outright with an explicit `restaurantId !== null` guard before testing anything else.
+ *
+ * So the two nullable-target sites, which read like the same call, differ on precisely the check
+ * that decides — and one of them was wrong. **Folding them into a shared helper would have
+ * propagated whichever version was chosen, and the broken one is the one that reads like the
+ * others.** Three honest copies of a rule are safer than eleven honest ones plus two pretending to
+ * be the same call.
+ */
 
 /** The combined "reachable + carries the given permission" check, thrown as a wrapper this time —
  * unlike the call sites Sprint 9 left untouched (each had its own slightly different not-found
