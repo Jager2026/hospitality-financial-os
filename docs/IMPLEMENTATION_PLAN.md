@@ -253,6 +253,8 @@ Checking it requires no tooling: the constant either is the placeholder or it is
 
 Two obligations feed the same gate, both found in the Sprint 14 Stripe research and both genuinely unmet: **our own terms of service**, and **our own privacy policy referencing Stripe's role**. The second is an information duty under GDPR Art. 13, not a consent — see ADR-049 for why that distinction decides the shape of the screen.
 
+**Two code paths must be closed before the gate can lift, not one.** `POST /auth/register` records an acceptance as of ADR-049. `POST /memberships/invitations/accept` — the other path in the backend that creates a `User` — still does not, so an invited person becomes a User with no record of agreeing to anything. It is open because that screen does not exist yet and a required field with no screen to fill it would break the endpoint's only current caller. It is also the path a **waiter** takes, which is the population whose separate treatment is half of ADR-049's reasoning, so it is the more consequential of the two rather than the leftover.
+
 ---
 
 # Deferred, Not Yet Scheduled

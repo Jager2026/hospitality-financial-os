@@ -1328,6 +1328,10 @@ The User and its acceptance are written in **one transaction**. A User existing 
 
 **The registration screen must not be shown to a real restaurant while that constant is still the placeholder.** An acceptance pointing at a text that does not exist is not a missing record — it is a **false** one, asserting that someone agreed to a document nobody can produce. That is worse than recording nothing, because a missing record is visibly missing and a false one is not. Recorded in `IMPLEMENTATION_PLAN.md` as a blocking condition on the first pilot; checking it needs no tooling, since the constant either is the placeholder or it is not.
 
+**A gap this ADR does not close, named because it is the same gap on a different door.** There are exactly two paths in the backend that create a `User`: `AuthService.register`, which this ADR fixes, and `MembershipInvitationService.accept`, which does not — an invited person who has no account yet gets one created with **no acceptance record at all**, exactly the state registration was in before this change.
+
+It is left open deliberately rather than patched here: the invitation-acceptance **screen does not exist yet**, and adding a required field to that endpoint before there is a screen to collect it would break the only flow that currently uses it. It is also, uncomfortably, the path a **waiter** takes — the population whose separate treatment is half the reasoning above. Scheduled in `IMPLEMENTATION_PLAN.md` rather than left in a commit message; the pre-pilot gate covers it in the meantime, since no real person should reach either path while the version is a placeholder.
+
 **Not decided here:** the restaurant-creation screen that collects the Stripe-linked acceptance (the schema is built for it; the screen is separate work), what a withdrawal or erasure request does to these rows (`PERSONAL_DATA_MAP.md` §4 — there is no erasure path at all today), and the contents of either document.
 
 ---
