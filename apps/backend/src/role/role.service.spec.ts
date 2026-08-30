@@ -6,6 +6,7 @@ import { MembershipService } from "../membership/membership.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { RoleService } from "./role.service";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import { callerWithSeededRole } from "../../test/fixtures/authenticated-user";
 
 /**
  * ADR-044 — a Role a Restaurant may not grant is excluded on **every** side, not only the one a
@@ -138,19 +139,17 @@ describe("the enforcing doors — a filtered list over an open endpoint would be
       },
     });
 
-    const promoter: AuthenticatedUser = {
-      id: user.id,
+    // The real seeded Manager. This test is about what that ROLE may grant — it must not be able
+    // to promote anyone to Administrator, and must still manage an assignable Role. A hand-written
+    // single-permission Manager understated the Role by six Permissions while asserting its limits.
+    const promoter: AuthenticatedUser = await callerWithSeededRole(prisma, {
+      roleName: "Manager",
+      organizationId: organization.id,
+      restaurantId: restaurant.id,
+      userId: user.id,
       email: user.email,
-      locale: "en",
-      memberships: [
-        {
-          id: membership.id,
-          organizationId: organization.id,
-          restaurantId: restaurant.id,
-          role: { id: manager.id, name: "Manager", permissions: ["membership.manage"] },
-        },
-      ],
-    };
+      membershipId: membership.id,
+    });
 
     await expect(
       memberships.update(membership.id, { roleId: administrator.id }, promoter),

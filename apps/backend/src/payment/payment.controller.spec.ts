@@ -17,6 +17,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { PaymentController } from "./payment.controller";
 import { PaymentService } from "./payment.service";
+import { seededRole } from "../../test/fixtures/authenticated-user";
 
 // Founder review (post-Sprint-5 coverage audit): StripeService.createPaymentIntent had 0% direct
 // coverage — every existing test faked StripeService itself, so its own body (BigInt->Number
@@ -149,7 +150,9 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
   // below, not from this Membership row's real RolePermission grants — JwtAuthGuard is fully
   // overridden in this test file, so the two are independent by design.
   async function ownerUserFor(restaurant: { organizationId: string }): Promise<AuthenticatedUser> {
-    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
+    // Seeded Manager, WITH its Permissions — the fixture below needs them, and a plain Role row
+    // has none. Previously the spec hand-wrote the two it cared about.
+    const managerRole = await seededRole(prisma, "Manager");
     const user = await prisma.user.create({
       data: {
         email: `owner-${randomUUID()}@example.com`,
@@ -180,11 +183,8 @@ describe("PaymentController (real controller, real PaymentService, real StripeSe
           // one permission — matching neither real Role. A hand-built AuthenticatedUser that
           // drifts from seed.ts proves things about a system that does not exist; the same drift
           // was already recorded once in seed.ts own comment. Corrected to the real Manager.
-          role: {
-            id: managerRole.id,
-            name: "Manager",
-            permissions: ["payments.manage", "reports.view"],
-          },
+          // The real seeded Manager, which holds both of these and five more.
+          role: managerRole,
         },
       ],
     };

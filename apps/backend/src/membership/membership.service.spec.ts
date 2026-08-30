@@ -3,11 +3,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { PrismaService } from "../prisma/prisma.service";
 import { MembershipService } from "./membership.service";
+import { seededRole } from "../../test/fixtures/authenticated-user";
 
 describe("MembershipService (real database)", () => {
   const prisma = new PrismaService();
   const service = new MembershipService(prisma);
   let waiterRoleId: string;
+  let waiterRole: Awaited<ReturnType<typeof seededRole>>;
+  let managerRole: Awaited<ReturnType<typeof seededRole>>;
   let managerRoleId: string;
 
   beforeAll(async () => {
@@ -17,10 +20,14 @@ describe("MembershipService (real database)", () => {
     // file runs — see test/global-setup.ts for why (a real cross-file upsert race, not a
     // hypothetical). Looked up here, never written, so this file can't race another one seeding
     // the same rows.
-    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
+    // Read from the seed rather than described by hand: the Manager tests are about SCOPE (which
+    // Restaurant a Manager reaches), and understating the Role by six Permissions was never
+    // needed to prove that. The Waiter tests are about the ABSENCE of membership.manage, which the
+    // seeded Waiter provides honestly — it holds none.
+    waiterRole = await seededRole(prisma, "Waiter");
     waiterRoleId = waiterRole.id;
+    managerRole = await seededRole(prisma, "Manager");
 
-    const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Manager" } });
     managerRoleId = managerRole.id;
   });
 
@@ -103,7 +110,7 @@ describe("MembershipService (real database)", () => {
           id: managerMembership.id,
           organizationId: organization.id,
           restaurantId: first.id,
-          role: { id: managerRoleId, name: "Manager", permissions: ["membership.manage"] },
+          role: managerRole,
         },
       ],
     };
@@ -149,7 +156,7 @@ describe("MembershipService (real database)", () => {
           id: managerMembership.id,
           organizationId: organization.id,
           restaurantId: first.id,
-          role: { id: managerRoleId, name: "Manager", permissions: ["membership.manage"] },
+          role: managerRole,
         },
       ],
     };
@@ -204,7 +211,7 @@ describe("MembershipService (real database)", () => {
           id: outsiderMembership.id,
           organizationId: outsiderOrg.organization.id,
           restaurantId: null,
-          role: { id: managerRoleId, name: "Manager", permissions: ["membership.manage"] },
+          role: managerRole,
         },
       ],
     };
@@ -268,7 +275,7 @@ describe("MembershipService (real database)", () => {
           id: weakMembership.id,
           organizationId: organization.id,
           restaurantId: null,
-          role: { id: waiterRoleId, name: "Waiter", permissions: [] }, // no membership.manage
+          role: waiterRole, // the seeded Waiter genuinely holds no membership.manage
         },
       ],
     };
@@ -296,13 +303,12 @@ describe("MembershipService (real database)", () => {
     // of quietly inherited.
     const { organization, first } = await createOrgWithTwoRestaurants();
     const user = await createUser();
-    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
     const membership = await prisma.membership.create({
       data: {
         userId: user.id,
         organizationId: organization.id,
         restaurantId: first.id,
-        roleId: waiterRole.id,
+        roleId: waiterRoleId,
       },
     });
 
@@ -315,7 +321,7 @@ describe("MembershipService (real database)", () => {
           id: membership.id,
           organizationId: organization.id,
           restaurantId: first.id,
-          role: { id: membership.roleId, name: "Waiter", permissions: [] },
+          role: waiterRole,
         },
       ],
     });

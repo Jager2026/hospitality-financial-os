@@ -7,6 +7,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import type { CreateRestaurantDto } from "./dto/create-restaurant.schema";
 import { RestaurantService } from "./restaurant.service";
+import { seededRole } from "../../test/fixtures/authenticated-user";
 
 // Real database, real RestaurantService, real Prisma transaction — only StripeService is faked
 // (no real Stripe network call from an automated test). Seeds exactly the Role/Permission rows
@@ -17,6 +18,7 @@ describe("RestaurantService (real database)", () => {
   let service: RestaurantService;
   let ownerRoleId: string;
   let waiterRoleId: string;
+  let waiterRole: Awaited<ReturnType<typeof seededRole>>;
 
   const fakeStripe = {
     createConnectAccount: vi
@@ -40,7 +42,9 @@ describe("RestaurantService (real database)", () => {
     const ownerRole = await prisma.role.findUniqueOrThrow({ where: { name: "Owner" } });
     ownerRoleId = ownerRole.id;
 
-    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { name: "Waiter" } });
+    // The seeded Waiter really does hold no Permissions, so the literal this replaces was
+    // correct — but correct by coincidence. Read from the seed, it cannot drift.
+    waiterRole = await seededRole(prisma, "Waiter");
     waiterRoleId = waiterRole.id;
 
     const moduleRef = await Test.createTestingModule({
@@ -153,7 +157,7 @@ describe("RestaurantService (real database)", () => {
           id: "irrelevant",
           organizationId: restaurant.organizationId,
           restaurantId: null,
-          role: { id: waiterRoleId, name: "Waiter", permissions: [] },
+          role: waiterRole,
         },
       ],
     };
@@ -205,7 +209,7 @@ describe("RestaurantService (real database)", () => {
           id: "irrelevant",
           organizationId: first.organizationId,
           restaurantId: first.id,
-          role: { id: waiterRoleId, name: "Waiter", permissions: [] },
+          role: waiterRole,
         },
       ],
     };

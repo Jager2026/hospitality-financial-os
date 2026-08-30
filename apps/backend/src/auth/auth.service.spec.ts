@@ -86,7 +86,10 @@ describe("AuthService — login", () => {
       restaurantId: null,
       role: {
         id: "77777777-7777-7777-7777-777777777777",
-        name: "Owner",
+        // Deliberately NOT a seeded Role name. This test asserts the MAPPING from a stubbed
+        // database row to AuthenticatedUser, not what any real Role may do — naming it "Owner"
+        // claimed the latter while proving only the former.
+        name: "StubRole",
         rolePermissions: [{ permission: { name: "reports.view" } }],
       },
     };
@@ -118,7 +121,7 @@ describe("AuthService — login", () => {
           id: membershipRow.id,
           organizationId: membershipRow.organizationId,
           restaurantId: null,
-          role: { id: membershipRow.role.id, name: "Owner", permissions: ["reports.view"] },
+          role: { id: membershipRow.role.id, name: "StubRole", permissions: ["reports.view"] },
         },
       ],
     });
