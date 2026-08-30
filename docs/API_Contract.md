@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.16.0
+version: 2.17.0
 status: Active
 classification: Internal
 owner: Founder
@@ -11,6 +11,16 @@ supersedes: API_Contract v1.0 — see ARCHITECTURE_DECISIONS.md for the reasonin
 # API SPECIFICATION
 
 > "An API is not code. It is a promise."
+
+---
+
+# How a route is written here
+
+Each route line may be followed by a single **`Requires:`** line naming the Permission that route's `@RequirePermission` demands. **The convention is exhaustive, and that is the point:** every route the backend guards carries the line, so its absence means "this route needs authentication and no specific Permission" rather than "nobody wrote it down."
+
+Before Sprint 14 the format had no place for this at all. The consequence was not a missing detail but an unanswerable question: of thirteen guarded routes, three happened to mention their Permission in prose and ten did not, and a frontend developer reading the contract could not tell that `GET /payments` needs `reports.view` or that every `/export` variant needs `data.export` rather than its sibling's `reports.view`. That distinction is deliberate (ADR-027) and was invisible here.
+
+`repo-invariants.spec.ts` fails if a route carrying `@RequirePermission` does not state that Permission in this document — the convention is a check, not a habit.
 
 ---
 
@@ -113,6 +123,7 @@ POST /restaurants — creates a new Organization automatically if the user has n
 
 ## Add Restaurant to Existing Organization
 POST /organizations/{id}/restaurants — explicit path for adding a location to an existing chain. Distinguishes "I'm opening a new, independent restaurant" from "I'm adding a location to mine."
+Requires: `restaurant.create`
 
 ## Get Restaurants
 GET /restaurants — scoped to every Restaurant the current user's Memberships grant access to. **Takes no query parameters.** This line previously claimed a `?organization_id=` filter to narrow to one chain; `RestaurantController`'s handler declares no `@Query` at all and `findAllForUser` accepts only the caller. The filter was never built — found during the Sprint 14 casing sweep, and worth separating from that sweep: a wrong field *name* fails loudly on the first request, while a documented parameter that does not exist is silently ignored by the server and looks to the caller like a filter that matched everything.
@@ -137,6 +148,7 @@ New resource (ADR-044, Sprint 14).
 
 ## Assignable Roles
 GET /roles — **requires `membership.invite`.** Every Role a Restaurant may actually grant, as `id`, `name`, `description`. The data source for the Invite Employee screen (`UX_MAP.md`).
+Requires: `membership.invite`
 
 Built because `POST /memberships` has required a `roleId` since Sprint 4 and **nothing returned one** — a required input with nothing addressable behind it, the same shape ADR-039 named for a staff member’s Wallet.
 
@@ -154,6 +166,7 @@ Renamed from Employees (ADR-005). Represents one person's role at one restaurant
 
 ## Invite Membership
 POST /memberships — body: `email`, `restaurantId` (nullable — omit for an organization-wide role), `roleId` (must be an assignable Role: a `platformOnly` one is refused with `Role not found`, ADR-044; see `GET /roles` for the list). Creates a `MembershipInvitation` (ADR-020), never a `Membership` directly — true even when `email` already belongs to an existing User: every invitation is explicitly accepted, uniformly, rather than a Membership appearing because someone else typed an email into a form. Response includes the raw invitation token exactly once — no email-delivery provider exists yet (undocumented, so not something this endpoint invents); the caller is responsible for relaying it until one is introduced with its own ADR.
+Requires: `membership.invite`
 
 ## Accept Invitation
 POST /memberships/invitations/accept — public, no `Authorization` header (the invitee may not have an account yet). Body: `email`, `token`, `password` and `displayName` (ADR-033, Sprint 13) — both required only if no `User` currently exists for `email` (ignored otherwise, since an existing User already has one). Looks up pending, non-expired `MembershipInvitation` rows by `email` and hash-verifies `token` against each candidate's `token_hash`, the same shape as a login password check (ADR-020) — never a lookup keyed on the token itself. On success: creates `User` (only if none exists for `email`) and `Membership` together, atomically, and sets `accepted_at`. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) whenever a new `User` is actually being created here.
@@ -183,6 +196,7 @@ GET /restaurants/{id}/staff — new, ADR-033, Sprint 13. Every `ACTIVE`, non-del
 
 ## Create Payment
 POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `restaurantId`, `amount` (minor units, ADR-001, the full amount charged to the card — bill and tip combined), `tipAmount` (minor units, optional, defaults to 0, must not exceed `amount` — ADR-022), `waiterMembershipId` (ADR-033, Sprint 13 — the terminal's own "who actually served this table" selection; see `GET /restaurants/{id}/staff` above for the picker's data source). `currency` and `paymentMethod` are deliberately not client fields — `currency` always mirrors the Restaurant's own fixed Stripe-account currency (DATABASE.md, Restaurant Rules), and `paymentMethod` is server-set (`"card"`, the only method this MVP scope supports) rather than trusted from the client before Stripe has confirmed anything. Creates a Stripe PaymentIntent as a direct charge on the Restaurant's own connected account (ADR-014's Sprint 5 addendum) and a `PENDING` Payment row. `waiterMembershipId` is **required whenever `tip_amount > 0`** (rejected with `VALIDATION_ERROR` before Stripe is ever called if omitted) and validated as a real, `ACTIVE` Membership reachable at the Restaurant, no Role restriction — no longer captured automatically from the caller (ADR-022's original mechanism, revised); `null` when there's no tip, since there's nobody to attribute. `application_fee_amount` sent to Stripe is computed from `amount - tip_amount`, never the full `amount` — the platform fee excludes tips (ADR-021). Response: `id`, `restaurantId`, `amount`, `tipAmount`, `waiterMembershipId`, `currency`, `status`, `clientSecret` — the frontend confirms via Stripe.js using `clientSecret` (ADR-015); this endpoint never confirms the payment itself, and never writes a Ledger entry — that happens later, asynchronously, driven by the `payment_intent.succeeded` webhook (see Incoming Webhooks below).
+Requires: `payments.manage`
 
 ## Payment Details
 GET /payments/{id}
@@ -192,6 +206,7 @@ GET /payments/{id}/status
 
 ## Payment History
 GET /payments — pagination, sorting, filtering. **Requires `reports.view`** (ADR-043). It previously required no permission and scoped by reachability alone, so a Waiter saw the restaurant's full payment history — amounts and tips. A Payment is the restaurant's takings, not the waiter's: their own money is the Wallet and `GET /tips/me`, reached by ownership rather than by a claim on someone else's finances. Found by auditing for the shape of the transactions leak rather than by a test reaching it.
+Requires: `reports.view`
 
 ---
 
@@ -253,6 +268,7 @@ POST /wallets/{id}/withdrawals — future (IMPLEMENTATION_PLAN.md Sprint 7: "Fut
 
 ## Transaction List
 GET /transactions — **requires `reports.view`** (ADR-043; it previously required no permission at all, which was an omission — the Dashboard, Analytics and this data’s own CSV export all require one, and different formats of one question must not have different thresholds). Scoped to the Restaurants reached by a Membership that CARRIES that permission, not by any Membership at all. Reachability-scoped the same way `GET /payments` already is (ADR-005): every Restaurant the caller's Memberships reach. Filters: `restaurantId`, `status` (`COMPLETED`/`PARTIALLY_REFUNDED`/`REFUNDED`/`DISPUTED`), `membership` (a Waiter's own Transactions, via `Payment.waiter_membership_id` — `GET /transactions?membership=123`, already named in Filtering below). Paginated (`page`/`limit`, same shape as every other list endpoint). Sort fixed at `created_at desc` for MVP, matching Payment History's own precedent.
+Requires: `reports.view`
 
 ## Transaction Details
 GET /transactions/{id} — includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
@@ -266,6 +282,7 @@ Response: `{ id, restaurantId, paymentId, grossAmount, currency, status, created
 
 ## Export
 GET /transactions/export — CSV for MVP (Excel, PDF: future). Same filters as Transaction List, no pagination — every matching row. Columns: `id, restaurantId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, refundedAmount` — `processingFee` omitted from the export entirely (same reasoning as Transaction Details: `null` has no honest CSV representation that isn't confusable with a real `0`).
+Requires: `data.export`
 
 ---
 
@@ -273,6 +290,7 @@ GET /transactions/export — CSV for MVP (Excel, PDF: future). Same filters as T
 
 ## Dashboard
 GET /dashboard?restaurantId={id} — `restaurantId` required (Sprint 9, ADR-026): a Dashboard is always exactly one Restaurant's view (an org-wide Owner lands on the Restaurants list instead, `UX_MAP.md`), and a restaurant-scoped Manager can hold Memberships at more than one Restaurant, so a bare call would be ambiguous about which one is meant. Requires `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — the Waiter Portal's own navigation has no Dashboard item at all), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant carries the permission (same shape as every other fine-grained permission check in this document).
+Requires: `reports.view`
 
 Every money figure is a live `SUM(CREDIT) - SUM(DEBIT)` aggregation over `LedgerLine`, scoped to the Restaurant and to "today" as a calendar day in the Restaurant's own `timezone` (ADR-026) — never a read of `Payment`/`Transaction` fields directly, and never UTC "today." The window is `LedgerLine.createdAt`-scoped, not `Transaction.createdAt`-scoped: a refund posted today against a payment from a prior day correctly reduces TODAY's totals, not the original sale's day (ADR-026, Decision 3) — each day's own already-posted Ledger activity stays fixed once that day has passed.
 
@@ -298,6 +316,7 @@ GET /analytics/revenue?restaurantId={id}&from={date}&to={date}
 Response: `{ restaurantId, from, to, total, totalNote, series }`. `total` is `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)` across the whole range — the identical bill-only definition as Dashboard's `todayRevenue` (ADR-026 Decision 1), not `netRestaurantRevenue`. `totalNote` is always `"Before platform fee deduction"`, same fixed caption as Dashboard's `todayRevenueNote`. `series` is one `{ date, amount }` point per calendar day in the range, oldest first.
 
 GET /analytics/revenue/export — same query, CSV. Columns: `date, amount`. No pagination — every day in the range.
+Requires: `data.export`
 
 ### Tips
 GET /analytics/tips?restaurantId={id}&from={date}&to={date}
@@ -305,6 +324,7 @@ GET /analytics/tips?restaurantId={id}&from={date}&to={date}
 Response: `{ restaurantId, from, to, total, series }`. `total` is `net(TIP_PAYABLE)` across the range, unfiltered by `membershipId` — same definition as Dashboard's `todayTips`. `series` is one `{ date, amount }` point per day.
 
 GET /analytics/tips/export — same query, CSV. Columns: `date, amount`.
+Requires: `data.export`
 
 ### Staff
 GET /analytics/staff?restaurantId={id}&from={date}&to={date}&page={n}&limit={n} — renamed from `/analytics/employees`. The full ranked list for the range, paginated (`page`/`limit`, default `1`/`20`, max `limit` 100) — unlike Dashboard's Top Staff, not capped to a fixed N.
@@ -312,6 +332,7 @@ GET /analytics/staff?restaurantId={id}&from={date}&to={date}&page={n}&limit={n} 
 Response: `{ restaurantId, from, to, data, meta }`. `data` is `{ membershipId, email, tips }[]`, ranked by net `TIP_PAYABLE` descending (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of credits alone — same ADR-023 bug class Dashboard's own Top Staff already avoids). `meta` is `{ page, limit, total, pages }`, `total`/`pages` reflecting the full unpaginated ranked list.
 
 GET /analytics/staff/export — same query (restaurantId/from/to only — export ignores pagination), CSV. Columns: `membershipId, email, tips`. Every ranked Membership, one row each.
+Requires: `data.export`
 
 ### Performance
 GET /analytics/performance?restaurantId={id}&from={date}&to={date} — trend/period-over-period comparison (`UX_MAP.md`'s "Growth" and "Time Analysis" made concrete as one thing, ADR-027 Decision 2 — not a fourth thing duplicating Staff).
@@ -319,6 +340,7 @@ GET /analytics/performance?restaurantId={id}&from={date}&to={date} — trend/per
 Response: `{ restaurantId, currentPeriod, previousPeriod, changeBasisPoints }`. `currentPeriod`/`previousPeriod` are each `{ from, to, revenue, tips, transactionCount }`. `previousPeriod` is the immediately preceding period of the SAME length as `currentPeriod`, ending the day before `from` begins (e.g. a 31-day current period compares against the 31 days immediately before it, not a fixed "previous calendar month"). `changeBasisPoints` is `{ revenue, tips, transactionCount }`, each a basis-points string (ADR-021's vocabulary) or `null` — never a fabricated `"0"` — when the corresponding `previousPeriod` figure is exactly zero.
 
 GET /analytics/performance/export — same query, CSV. Columns: `metric, currentPeriod, previousPeriod, changeBasisPoints`. Three rows: `revenue`, `tips`, `transactionCount`.
+Requires: `data.export`
 
 ### Reports
 GET /analytics/reports?restaurantId={id}&from={date}&to={date}&type={type} — a small, fixed set of named reports, not a report-builder (ADR-027 Decision 3, the same "flexibility on demand of the first real case" precedent as `TipAllocationStrategy`/ADR-007 and `PlatformFeePolicy`/ADR-021). `type` defaults to, and today only accepts, `"period-summary"` — a second report type is a second enum value and a second branch, not a redesign.
@@ -326,6 +348,7 @@ GET /analytics/reports?restaurantId={id}&from={date}&to={date}&type={type} — a
 `period-summary` response: `{ restaurantId, from, to, type, revenue, revenueNote, tips, averageTipBasisPoints, transactionCount, topStaff }` — Revenue, Tips, Average Tip, transaction count, and Top Staff for the range, in one round trip. `revenue`/`revenueNote`/`tips`/`averageTipBasisPoints` reuse Dashboard's own definitions and ratio-of-sums formula (ADR-026 Decision 4) verbatim, computed over the whole range instead of just today. `topStaff` is up to 5 Memberships, same rank-and-cap shape as Dashboard's own Top Staff.
 
 GET /analytics/reports/export — same query, CSV. Columns: `restaurantId, from, to, type, revenue, tips, averageTipBasisPoints, transactionCount` — flat scalar fields only; `topStaff` is not a CSV column (nested lists get their own export, same precedent as Transaction export omitting `refunds`/`chargebacks` — use `/analytics/staff/export` instead).
+Requires: `data.export`
 
 ---
 

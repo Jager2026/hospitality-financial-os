@@ -119,4 +119,88 @@ describe("repository invariants", () => {
         `name. Offending files:\n${offenders.join("\n")}`,
     ).toEqual([]);
   });
+
+  // Every route the backend guards must say so in the contract the frontend codes against.
+  //
+  // Before this existed, three of thirteen guarded routes mentioned their Permission and ten did
+  // not — and the format had no place for it, so a reader could not distinguish "needs none" from
+  // "nobody wrote it down". That mattered most exactly where the answer is least guessable: each
+  // `/export` variant requires `data.export` rather than its sibling's `reports.view` (ADR-027).
+  //
+  // The parser below associates a permission with the route decorator ABOVE it, which is the order
+  // the code actually uses. An earlier version of this scan read it the other way round and
+  // reported eight phantom mismatches — a reminder that a checker fails by *finding* something,
+  // which is what an audit is looking for. It is falsified in both directions before being trusted.
+  it("states every guarded route's required permission in API_Contract.md", () => {
+    const SRC = join(REPO_ROOT, "apps", "backend", "src");
+    const contract = readFileSync(join(REPO_ROOT, "docs", "API_Contract.md"), "utf8").split("\n");
+
+    function controllers(dir: string): string[] {
+      return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return controllers(full);
+        return entry.name.endsWith(".controller.ts") ? [full] : [];
+      });
+    }
+
+    const guarded: Array<{ method: string; path: string; permission: string }> = [];
+    for (const file of controllers(SRC)) {
+      const text = readFileSync(file, "utf8");
+      const prefix = text.match(/@Controller\("([^"]*)"\)/)?.[1] ?? "";
+      const lines = text.split("\n");
+      lines.forEach((line, i) => {
+        const verb = line.match(/@(Get|Post|Patch|Put|Delete)\(\s*(?:"([^"]*)")?\s*\)/);
+        if (!verb) return;
+        let permission: string | null = null;
+        for (let j = i + 1; j < lines.length; j += 1) {
+          if (/@(Get|Post|Patch|Put|Delete)\(/.test(lines[j])) break;
+          const required = lines[j].match(/@RequirePermission\("([^"]+)"\)/);
+          if (required) {
+            permission = required[1];
+            break;
+          }
+          if (/^\s{2}[a-zA-Z]\w*[(<]/.test(lines[j])) break; // handler signature
+        }
+        if (!permission) return;
+        const path = `/${[prefix, verb[2] ?? ""].filter(Boolean).join("/")}`.replace(
+          /:(\w+)/g,
+          "{$1}",
+        );
+        guarded.push({ method: verb[1].toUpperCase(), path, permission });
+      });
+    }
+
+    // A route is "stated" when its Permission appears in the block that documents it. Two
+    // normalisations, both learned by getting this wrong first.
+    //
+    // Parameter NAMES differ between the contract and the code — the contract writes
+    // `/organizations/{id}/restaurants` where the controller declares `:organizationId`. A naming
+    // inconsistency worth its own fix, not a different route, so both sides collapse to `{}`.
+    //
+    // And the anchor must end at a route boundary: a prefix match let `GET /transactions` anchor on
+    // `GET /transactions/{id}/refunds`, sixty lines from the route actually being checked.
+    // Query strings are dropped too: the contract documents `GET /dashboard?restaurantId={id}`,
+    // the controller declares the path alone, and they are the same route.
+    const shape = (route: string) => route.split("?")[0].replace(/\{[^}]*\}/g, "{}");
+    const missing = guarded
+      .filter(({ method, path, permission }) => {
+        const wanted = `${method} ${shape(path)}`;
+        const start = contract.findIndex((line) => {
+          const m = line.trim().match(/^([A-Z]+) (\/\S*)/);
+          return m ? `${m[1]} ${shape(m[2])}` === wanted : false;
+        });
+        if (start === -1) return true;
+        return !contract
+          .slice(start, start + 6)
+          .join("\n")
+          .includes(permission);
+      })
+      .map(({ method, path, permission }) => `${method} ${path} — needs "${permission}"`);
+
+    expect(
+      missing,
+      `API_Contract.md must state the Permission every guarded route requires, as a \`Requires:\` ` +
+        `line under the route. Not stated:\n${missing.join("\n")}`,
+    ).toEqual([]);
+  });
 });
