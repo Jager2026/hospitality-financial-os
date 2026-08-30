@@ -48,7 +48,10 @@ export class TransactionController {
     return this.transactionService.findAllForUser(user, query);
   }
 
+  // ADR-043 gave the list and the export `reports.view`; this route had none. PR #108 measured a
+  // zero-permission Waiter reading another restaurant's full transaction breakdown through it.
   @Get(":id")
+  @RequirePermission("reports.view")
   findOne(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.transactionService.findOne(id, user);
   }

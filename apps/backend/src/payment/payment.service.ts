@@ -10,6 +10,7 @@ import type { CreatePaymentDto } from "./dto/create-payment.schema";
 import { splitPlatformFee } from "./platform-fee.util";
 import {
   findGrantingMembership,
+  hasPermissionAtRestaurant,
   isRestaurantReachable,
 } from "../common/restaurant-reachability.util";
 
@@ -127,7 +128,7 @@ export class PaymentService {
     if (!payment) {
       throw new AppException("PAYMENT_NOT_FOUND", "Payment not found.", 404);
     }
-    await this.assertReachable(payment, user);
+    await this.assertPermittedAtRestaurant(payment, user);
     return payment;
   }
 
@@ -190,7 +191,28 @@ export class PaymentService {
     };
   }
 
-  private async assertReachable(payment: Payment, user: AuthenticatedUser): Promise<void> {
+  /**
+   * Scope check for a single Payment read by id (`GET /payments/{id}`, `.../status`).
+   *
+   * **Reachability alone used to be the whole rule here, and it leaked.** Measured, not inferred
+   * (PR #108): a caller whose only relationship to this Restaurant was a zero-permission Waiter
+   * Membership received the full payment body — amount, tip, currency, processor id, idempotency
+   * key. `isRestaurantReachable` is satisfied by *any* Membership, and these routes carried no
+   * `@RequirePermission` above them, so nothing narrowed it.
+   *
+   * The fix is `hasPermissionAtRestaurant`, which is not a new rule: it is
+   * `findGrantingMembership` — the same predicate `permittedScope` filters the LIST routes with —
+   * asked about one known row instead of used to build a query. ADR-043 closed this shape for the
+   * lists; the by-id reads were simply never part of that change. Asking the same question two
+   * ways would eventually answer it two ways.
+   *
+   * A Waiter reading their own money is not what this refuses. That is the Wallet and
+   * `GET /tips/me`, reached by ownership; a Payment is the restaurant's takings (ADR-043).
+   */
+  private async assertPermittedAtRestaurant(
+    payment: Payment,
+    user: AuthenticatedUser,
+  ): Promise<void> {
     const restaurant = await this.prisma.restaurant.findUnique({
       where: { id: payment.restaurantId },
     });
@@ -199,8 +221,10 @@ export class PaymentService {
     if (!restaurant) {
       throw new AppException("PAYMENT_NOT_FOUND", "Payment not found.", 404);
     }
-    const reachable = isRestaurantReachable(user, restaurant);
-    if (!reachable) {
+    if (!hasPermissionAtRestaurant(user, restaurant, PAYMENT_READ_PERMISSION)) {
+      // 404, not 403: the caller may hold no permission here at all, and confirming that a payment
+      // exists at a restaurant they cannot read is itself the disclosure. Matches what the list
+      // routes already do by simply not returning the row.
       throw new AppException("PAYMENT_NOT_FOUND", "Payment not found.", 404);
     }
   }

@@ -365,39 +365,38 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
   // of that change and have never been covered by any test.
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
-  // `it.fails` — these three assert the CORRECT behaviour and are marked as currently failing.
+  // These three were `it.fails` for exactly one PR, and the mechanism worked as designed.
   //
-  // Measured, not inferred: all three return **200** with a full body to a caller whose only
-  // relationship to Restaurant B is a zero-permission Waiter Membership. `GET /payments/:id`
-  // returns amount, tip, currency, processor id and idempotency key; `GET /transactions/:id`
-  // returns gross, net revenue, net tip, net platform fee, tax, refunds and chargebacks.
+  // PR #108 measured the leak: all three returned **200** with a full body to a caller whose only
+  // relationship to Restaurant B was a zero-permission Waiter Membership. `GET /payments/:id`
+  // gave amount, tip, currency, processor id and idempotency key; `GET /transactions/:id` gave
+  // gross, net revenue, net tip, net platform fee, tax, refunds and chargebacks. They were
+  // recorded as `it.fails` — asserting the CORRECT behaviour, marked as currently failing — so
+  // that CI stayed green while the finding sat in THREAT_MODEL awaiting a decision, and so that
+  // closing the leak would make them fail with "expected to fail but passed".
   //
-  // THREAT_MODEL.md carries this as an open finding. The fix is deliberately NOT in this change —
-  // the measurement and the remedy are separate pieces of work, and a vulnerability recorded
-  // before it is fixed is one nobody can quietly decide was never real.
+  // That is what happened. The marker destroyed itself on success and forced this edit, which is
+  // the whole argument for `it.fails` over `it.skip`: a skipped test is invisible and rots, while
+  // this one had a deadline it enforced on its own.
   //
-  // `it.fails` rather than `it.skip`, deliberately: a skipped test is invisible and rots, while
-  // this one **fails the moment the leak is closed** ("expected to fail but passed"), forcing
-  // whoever fixes it to come here and turn it into an ordinary `it`. It is a marker that destroys
-  // itself on success.
-  it.fails(
-    "a payment at a restaurant reached only as a zero-permission Waiter is not readable by id",
-    async () => {
-      const res = await request(app.getHttpServer())
-        .get(`/api/v1/payments/${paymentAtB}`)
-        .set("Authorization", `Bearer ${dualRole.accessToken}`);
-      expect(res.status, `leaked a payment: ${JSON.stringify(res.body)}`).not.toBe(200);
-    },
-  );
+  // They are ordinary tests now. `hasPermissionAtRestaurant` — the same predicate `permittedScope`
+  // filters the list routes with — is what closes it, so the by-id read and the list answer one
+  // question one way.
+  it("a payment at a restaurant reached only as a zero-permission Waiter is not readable by id", async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/payments/${paymentAtB}`)
+      .set("Authorization", `Bearer ${dualRole.accessToken}`);
+    expect(res.status, `leaked a payment: ${JSON.stringify(res.body)}`).not.toBe(200);
+  });
 
-  it.fails("nor is its status", async () => {
+  it("nor is its status", async () => {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/payments/${paymentAtB}/status`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
     expect(res.status, `leaked a payment status: ${JSON.stringify(res.body)}`).not.toBe(200);
   });
 
-  it.fails("nor the transaction behind it", async () => {
+  it("nor the transaction behind it", async () => {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/transactions/${transactionAtB}`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);

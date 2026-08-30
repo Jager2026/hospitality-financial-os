@@ -284,6 +284,29 @@ And nothing ran the seed. `preDeployCommand` ran migrations only, so **ADR-044's
 
 ---
 
+## 26. Three by-id routes returned another restaurant's financial data to a caller holding no permission there
+**Threat:** `GET /payments/{id}`, `GET /payments/{id}/status` and `GET /transactions/{id}` carried no `@RequirePermission` at all and were scoped inside their services by **reachability alone** — a rule any Membership satisfies. A person holding a zero-permission Waiter Membership at a restaurant could read that restaurant's individual financial rows.
+
+**This was measured before it was fixed, and recorded as open before either** (PR #108). The subject was the dual-role caller this document already describes — Owner of one Organization, zero-permission Waiter at a restaurant in another. Against real rows, through real HTTP: `GET /payments/{id}` returned amount, tip, currency, processor id and idempotency key; `GET /payments/{id}/status` returned the status; `GET /transactions/{id}` returned gross, net revenue, net tip, net platform fee, tax, refunds and chargebacks. All **200**.
+
+**Closed by (PR #109):** `hasPermissionAtRestaurant` at each of the three, plus `@RequirePermission("reports.view")` on the routes themselves — so they are now structurally identical to the list routes they are the by-id form of.
+
+**The check is not a new rule, and that was the requirement.** `hasPermissionAtRestaurant` is defined in terms of `findGrantingMembership`, the same predicate `permittedScope` filters the LIST routes with — one implementation, asked about a single known row instead of used to build a query. ADR-043 closed this exact shape for the lists; the by-id reads were simply never part of that change, and asking one question two ways would eventually have answered it two ways again.
+
+**Refused with 404, not 403.** Confirming that a payment exists at a restaurant the caller may not read is itself the disclosure — the same answer the list already gives by omitting the row.
+
+**Why the other two remedies were rejected.** *Fold the by-id reads into `permittedScope`'s query path* would also have worked and is larger; it was declined because the single-row form already exists, is already used by the dashboard and analytics, and adding a second way to express one rule is what this entry is about. *Leave reachability as the rule and document it* was rejected by the Founder on the substance: three routes handing a stranger's financial picture to any Membership cannot be what was intended, and it is the opposite of what ADR-043 decided for the same data in list form.
+
+**Mechanism, verified by falsification rather than by reading:** reverting both checks to `isRestaurantReachable` makes exactly those three tests fail, with the positive control — the same reads at the caller's own restaurant — still passing. The three had been recorded as `it.fails` in PR #108; closing the leak made them fail with *"expected to fail but passed"*, which is what forced them to be converted here. The marker enforced its own deadline.
+
+**A related audit, reported and not fixed.** Every route was enumerated with a parser validated against a known-answer pair first — the first attempt read decorators in the wrong order and produced a page of phantom findings, the same bug `repo-invariants.spec.ts` already records. **36 of 57 routes carry no `@RequirePermission`**, and most are correctly so: public auth and agreements routes, `/health`, currency reference data, invitation acceptance, self-scoped profile and `tips/me`, the ownership-scoped wallet routes, and the Stripe webhook. Three are worth their own look and are **not** part of this fix:
+
+- `POST /restaurants/{id}/onboarding-link` — reachability only, and it is an **action**: it mints a Stripe onboarding link for the venue's connected account.
+- `GET /restaurants/{id}` — reachability only; returns `companyNumber`, `vatNumber`, `stripeAccountId` and payout status.
+- `GET /tips/{id}` — reachability only; one waiter may read another's tip at the same restaurant.
+
+---
+
 # Accepted Risk (Not Closed — Deliberately Left Open)
 
 ## Redis flush silently un-revokes outstanding refresh tokens and token families
@@ -325,37 +348,6 @@ Not "the rule exists" and not "a sweep found the comparison everywhere". Two thi
 1. **Every reach check derives from one implementation**, or — where it genuinely cannot, as in (b) — **each exception is individually proven by a test that constructs the null-on-both-sides case**. Two of the three now have one (`membership.service.spec.ts`); `WalletService`'s existing test covers the org-wide Wallet case; `membership.controller.ts`'s invite scope was given one in PR #89 after being verified only by reading.
 2. **A new access check of this shape is not accepted on a reading.** `CLAUDE.md`'s Architecture Review paragraph already requires the `organizationId` comparison; it should be read as requiring that the comparison is *reached*, which is the lesson this entry now carries.
 
-## Three by-id routes return another restaurant's financial data to a caller with no permission there — MEASURED, not inferred (Sprint 14)
-
-**Recorded before it is fixed, deliberately.** A vulnerability written down only alongside its remedy is one nobody can later check was ever real, and the measurement and the remedy are separate pieces of work.
-
-**What was measured.** The subject is the same dual-role caller this file already describes: Owner of Organization A, and a **zero-permission Waiter** at Restaurant B in an unrelated Organization. Against a real Payment and Transaction belonging to Restaurant B, through real HTTP:
-
-| route | result |
-|---|---|
-| `GET /payments/{id}` | **200** — amount, tip, currency, processor id, idempotency key |
-| `GET /payments/{id}/status` | **200** |
-| `GET /transactions/{id}` | **200** — gross, net revenue, net tip, net platform fee, tax, refunds, chargebacks |
-
-**Why they are open when the list routes are closed.** `GET /payments` and `GET /transactions` scope through `permittedScope(user, permission)`, which filters to Memberships **carrying** the permission — ADR-043 closed exactly this shape after finding a Waiter reading a restaurant's full payment history. **The by-id routes were not part of that change.** They carry no `@RequirePermission` at all, so there is no coarse check to narrow; reachability is the entire rule, and reachability is satisfied by any Membership.
-
-**`POST /payments` is NOT affected, and this was measured too** — it refuses with 403/404, and the test now asserts the status rather than merely "not 201", because a refusal for an unrelated reason (an un-onboarded Stripe account, a currency mismatch) would otherwise read as proof of scoping that does not exist.
-
-**This is the fourth instance of one class**, and the class is not "someone forgot a check". In all four the check was present and did not do what was expected of it: `null === null` short-circuiting past the `organizationId` comparison; a sweep reporting zero findings over a live leak; ADR-051's disabled Membership still carrying every permission; and now a rule that scopes by reachability where the reader assumes it scopes by permission.
-
-### Remedies, none chosen here
-
-1. **Give the three routes `@RequirePermission("reports.view")` and a `hasPermissionAtRestaurant` check at the resource** — matching what the list routes already do. Smallest change, and it makes the by-id and list answers to the same question agree. Needs a decision on whether a Waiter should reach *their own* payment by id, which today they can and which `GET /tips/me` may be the better route for.
-2. **Fold the by-id reads into the same `permittedScope` path as the lists**, so one implementation answers both and they cannot drift. Larger, and it is the ADR-047 pattern applied to a second shape.
-3. **Leave reachability as the rule and make that explicit** — documenting that any Membership at a restaurant may read that restaurant's individual financial rows. Defensible only if it is genuinely intended; it is the opposite of what ADR-043 decided for the same data in list form, so choosing it means reopening that decision rather than ignoring it.
-
-Option 3 is included because the honest set includes the possibility that the current behaviour is wanted. **It should not be chosen by default, which is what happens when nobody chooses.**
-
-### How this stays visible until it is answered
-
-`permission-scope.e2e.spec.ts` carries all three as `it.fails` — tests that assert the **correct** behaviour and are marked as currently failing. CI stays green, and the moment the leak is closed they fail with *"expected to fail but passed"*, forcing whoever fixed it to come back and convert them to ordinary tests. A marker that destroys itself on success, rather than a skip that rots.
-
-Falsified: closing the leak in both services flips exactly those three and nothing else, with the positive control still passing. The first attempt at that falsification was *unclean* — the symbol was never imported, so the routes threw and returned 500, and the markers flipped for a crash rather than for a denial. Rerun with the import present. Recorded because it is the same trap the `POST /payments` assertion above exists to catch, met while checking for it.
 
 ## Restoring from a volume snapshot has never been tried, and cannot be tried safely against production
 Closed Threat #22 above closed the "no backups, never restored" threat **for PITR specifically**, by an actual rehearsal. Volume snapshots are now configured too — and it would be easy, and wrong, to read #22 as covering them by analogy. **It does not.** They are a different mechanism with a different restore path, and that path has never been executed on this project.

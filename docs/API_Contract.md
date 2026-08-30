@@ -222,10 +222,12 @@ POST /payments — **requires** `Idempotency-Key` header (ADR-004). Body: `resta
 Requires: `payments.manage`
 
 ## Payment Details
-GET /payments/{id}
+GET /payments/{id} — **requires `reports.view`**, and the permission is re-checked at the Restaurant this Payment belongs to, not merely held somewhere (PR #109). ADR-043 gave the LIST that threshold and this route was left with none: a zero-permission Waiter reached any payment at a restaurant they worked at, amount and tip included. Measured, not inferred.
+
+**A waiter reading their own money is not what this refuses** — that is the Wallet and `GET /tips/me`, reached by ownership. A Payment is the restaurant's takings.
 
 ## Payment Status
-GET /payments/{id}/status
+GET /payments/{id}/status — **requires `reports.view`**, same rule and same reason as `GET /payments/{id}` above. Returning only a status string is not a weaker disclosure than returning the row: it still confirms that a specific payment exists at a restaurant the caller may not read.
 
 ## Payment History
 GET /payments — pagination, sorting, filtering. **Requires `reports.view`** (ADR-043). It previously required no permission and scoped by reachability alone, so a Waiter saw the restaurant's full payment history — amounts and tips. A Payment is the restaurant's takings, not the waiter's: their own money is the Wallet and `GET /tips/me`, reached by ownership rather than by a claim on someone else's finances. Found by auditing for the shape of the transactions leak rather than by a test reaching it.
@@ -294,7 +296,7 @@ GET /transactions — **requires `reports.view`** (ADR-043; it previously requir
 Requires: `reports.view`
 
 ## Transaction Details
-GET /transactions/{id} — includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
+GET /transactions/{id} — **requires `reports.view`**, re-checked at the Transaction's own Restaurant (PR #109); the list and the export already carried it and this route did not. Includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
 
 Response: `{ id, restaurantId, paymentId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, processingFee, refundedAmount, refunds, chargebacks }`.
 
