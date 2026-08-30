@@ -362,6 +362,8 @@ The entry below is a different kind of open item from every one above it — not
 
 **What's genuinely missing:** whether a waiter receiving tips through this platform is, for GPM purposes, an employee of the restaurant, self-employed, or something else is undecided — and that classification determines the applicable rate, the legal basis for any tax treatment, and who (if anyone) is the tax agent. This blocks two distinct things, not one: actually computing an estimated tax figure, and merely *displaying* one next to the existing gross/net tip amounts (`MASTERPLAN.md`, "Pilot-Ready Product," ADR-029 Decision 2). Becomes answerable only when the Founder has a written answer from a Lithuanian tax/payroll consultant — not a development task, and not something this codebase's own code can close by itself.
 
+**What this does NOT block, added because it was assumed to and the assumption stood unchallenged for a day: data retention periods.** Those are decided by accounting law and do not wait on this classification. The two were being treated as one open question when only one was open, and the effect was to hold up something answerable — the privacy policy's retention section — behind something that is not. Retention is now determined (`PERSONAL_DATA_MAP.md` §6). **The scope of an open item is part of the item**: an entry that does not say where it stops will be read as stopping wherever the reader fears, and a blocked-on-legal-advice entry is the kind most likely to be read expansively.
+
 ---
 
 # Final Principle
