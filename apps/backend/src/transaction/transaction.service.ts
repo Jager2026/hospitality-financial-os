@@ -4,7 +4,7 @@ import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
 import { permittedScope } from "../common/restaurant-reachability.util";
 import { PrismaService } from "../prisma/prisma.service";
-import { isRestaurantReachable } from "../common/restaurant-reachability.util";
+import { hasPermissionAtRestaurant } from "../common/restaurant-reachability.util";
 import type {
   TransactionExportQueryDto,
   TransactionListQueryDto,
@@ -80,7 +80,7 @@ export class TransactionService {
     if (!transaction) {
       throw new AppException("NOT_FOUND", "Transaction not found.", 404);
     }
-    await this.assertReachable(transaction.restaurantId, user);
+    await this.assertPermittedAtRestaurant(transaction.restaurantId, user);
 
     const breakdown = await this.computeBreakdown(transaction.id);
 
@@ -259,11 +259,23 @@ export class TransactionService {
     };
   }
 
-  // Same reachability rule as everywhere else (ADR-005): an org-wide Membership reaches every
-  // Restaurant in its own Organization; a restaurant-scoped one reaches only the exact
-  // Restaurant it names — never "any org-wide Membership anywhere" (CLAUDE_RULES.md's
-  // Architecture Review paragraph on this exact bug shape).
-  private async assertReachable(restaurantId: string, user: AuthenticatedUser): Promise<void> {
+  /**
+   * Scope check for a single Transaction read by id (`GET /transactions/{id}`).
+   *
+   * **Reachability alone used to be the whole rule, and it leaked.** Measured, not inferred
+   * (PR #108): a zero-permission Waiter at this Restaurant received gross, net revenue, net tip,
+   * net platform fee, tax, refunds and chargebacks. `isRestaurantReachable` is satisfied by *any*
+   * Membership, and this route carried no `@RequirePermission` above it.
+   *
+   * Now `hasPermissionAtRestaurant`, which is the same predicate `permittedScope` filters
+   * `buildWhere` with — asked about one known row rather than used to build a query. The list and
+   * the by-id read now answer the same question the same way; ADR-043 closed the list and this
+   * route was simply never part of it.
+   */
+  private async assertPermittedAtRestaurant(
+    restaurantId: string,
+    user: AuthenticatedUser,
+  ): Promise<void> {
     const restaurant = await this.prisma.restaurant.findFirst({
       where: { id: restaurantId, deletedAt: null },
       select: { id: true, organizationId: true },
@@ -271,8 +283,9 @@ export class TransactionService {
     if (!restaurant) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
     }
-    const reachable = isRestaurantReachable(user, restaurant);
-    if (!reachable) {
+    if (!hasPermissionAtRestaurant(user, restaurant, TRANSACTION_PERMISSION)) {
+      // 404 rather than 403: confirming a transaction exists at a restaurant the caller cannot
+      // read is itself the disclosure. Same answer the list gives by omitting the row.
       throw new AppException("NOT_FOUND", "Transaction not found.", 404);
     }
   }

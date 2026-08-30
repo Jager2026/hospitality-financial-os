@@ -68,12 +68,17 @@ export class PaymentController {
     return this.paymentService.findAllForUser(user, query);
   }
 
+  // ADR-043 gave the LIST `reports.view`; this route was left with none, and a zero-permission
+  // Waiter could read any payment at a restaurant they reached — measured in PR #108. The same
+  // threshold now applies to both formats of the same question.
   @Get(":id")
+  @RequirePermission("reports.view")
   findOne(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.paymentService.findOne(id, user);
   }
 
   @Get(":id/status")
+  @RequirePermission("reports.view")
   @HttpCode(HttpStatus.OK)
   getStatus(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.paymentService.getStatus(id, user);
