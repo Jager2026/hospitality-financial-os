@@ -95,14 +95,17 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
     );
   });
 
+  // Hoisted: both production rules below need a value the other rule accepts, otherwise every
+  // "boots in production" case would fail on the rule it is not testing.
+  const WEBHOOK = "https://hooks.example.com/services/T000/B000/XXXX";
+  const PROD_FRONTEND = "https://portal.example.com";
+
   // ADR-045. ALERT_WEBHOOK_URL stopped being an ops convenience the moment main.ts began
   // reporting-and-continuing after an unhandled rejection instead of exiting. All three cases are
   // required together: the rejection alone would pass against an implementation that demands the
   // variable everywhere (which would break every developer machine and the test suite), and the
   // acceptances alone would pass against no rule at all.
   describe("ALERT_WEBHOOK_URL is required in production (ADR-045)", () => {
-    const WEBHOOK = "https://hooks.example.com/services/T000/B000/XXXX";
-
     it("refuses to boot in production without it — alerting off is not a state we start in", () => {
       expect(() => validateEnv(envWith({ NODE_ENV: "production" }))).toThrow(
         /ALERT_WEBHOOK_URL is required when NODE_ENV=production/,
@@ -110,7 +113,13 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
     });
 
     it("boots in production with it", () => {
-      const parsed = validateEnv(envWith({ NODE_ENV: "production", ALERT_WEBHOOK_URL: WEBHOOK }));
+      const parsed = validateEnv(
+        envWith({
+          NODE_ENV: "production",
+          ALERT_WEBHOOK_URL: WEBHOOK,
+          FRONTEND_URL: PROD_FRONTEND,
+        }),
+      );
       expect(parsed.ALERT_WEBHOOK_URL).toBe(WEBHOOK);
     });
 
@@ -124,6 +133,61 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
       // this rule never runs. Production sets NODE_ENV explicitly, which is what makes the rule
       // effective there; this test exists so the dependency is visible instead of implied.
       expect(() => validateEnv(envWith({}))).not.toThrow();
+    });
+  });
+
+  // The Stripe onboarding return_url. Unlike ALERT_WEBHOOK_URL this variable has a localhost
+  // DEFAULT, so "unset" and "explicitly localhost" are the same value by the time validation sees
+  // it — which is why the rule constrains the host rather than requiring presence.
+  describe("FRONTEND_URL must not be a loopback address in production", () => {
+    it("rejects the localhost default — the silent failure at the end of onboarding", () => {
+      expect(() =>
+        validateEnv(envWith({ NODE_ENV: "production", ALERT_WEBHOOK_URL: WEBHOOK })),
+      ).toThrow(/FRONTEND_URL must not point at a loopback address/);
+    });
+
+    it("rejects loopback in every shape it actually takes, not just the literal string", () => {
+      // A substring check on "localhost" would pass three of these four and is exactly the kind of
+      // implementation this test exists to fail against.
+      for (const url of [
+        "http://127.0.0.1:3000",
+        "http://127.1.2.3:3000",
+        "http://LOCALHOST:3000",
+        "http://[::1]:3000",
+      ]) {
+        expect(() =>
+          validateEnv(
+            envWith({ NODE_ENV: "production", ALERT_WEBHOOK_URL: WEBHOOK, FRONTEND_URL: url }),
+          ),
+        ).toThrow(/FRONTEND_URL must not point at a loopback address/);
+      }
+    });
+
+    it("accepts a real production origin", () => {
+      const parsed = validateEnv(
+        envWith({
+          NODE_ENV: "production",
+          ALERT_WEBHOOK_URL: WEBHOOK,
+          FRONTEND_URL: PROD_FRONTEND,
+        }),
+      );
+      expect(parsed.FRONTEND_URL).toBe(PROD_FRONTEND);
+    });
+
+    it("does not flag a legitimate host that merely contains the word", () => {
+      const parsed = validateEnv(
+        envWith({
+          NODE_ENV: "production",
+          ALERT_WEBHOOK_URL: WEBHOOK,
+          FRONTEND_URL: "https://localhost-tools.example.com",
+        }),
+      );
+      expect(parsed.FRONTEND_URL).toBe("https://localhost-tools.example.com");
+    });
+
+    it("leaves the localhost default alone outside production — that is what it is for", () => {
+      expect(() => validateEnv(envWith({ NODE_ENV: "development" }))).not.toThrow();
+      expect(() => validateEnv(envWith({ NODE_ENV: "test" }))).not.toThrow();
     });
   });
 });
