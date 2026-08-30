@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.16.0
+version: 2.17.0
 status: Active
 classification: Critical
 priority: Highest
@@ -279,11 +279,11 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   | **B** | 4 | Reachability **+** permission → `hasPermissionAtRestaurant` — `membership` L141, `restaurant` L217, `settings` L67 are drop-in; **`payment` L272 is not** (`getGrantingMembershipOrThrow` returns the granting Membership, not a boolean, and needs a `findGrantingMembership` helper) | ~45 min | **Low, concentrated in one site** — and that site is on the money path. |
   | **C** | 2 | **Not the same call.** `membership` L123 and `wallet` L155 reach a *Membership*, not a Restaurant: their `restaurantId` may legitimately be null, and Wallet adds an own-wallet short-circuit plus its own `restaurantId !== null` requirement. | — | Forcing these into the shared signature would be the actual danger. |
 
-  **Recommendation: consolidate the eleven, deliberately exclude the two, and say so in the utility.** That converts a silently-growing exception into a bounded, named one — which is the real defect here, not the duplication itself.
+  **CLOSED by ADR-047.** Ten sites consolidated, three excluded — not two. The estimate above counted `MembershipService` as one exclusion; it holds *two* nullable-target checks (`getReachableOrThrow` and `assertPermission`), so the split is 10/3 rather than 11/2.
 
-  **Existing tests cover the change**; nothing new is needed to prove correctness. What *is* needed is the mechanism that stops it recurring: **a check that fails if the raw predicate reappears inline**, the same shape as `fixture-safety.spec.ts`. Without it the count starts climbing again the next time someone writes a service.
+  **The exclusion stopped being a judgement call while the work was being done.** Surveying these very call sites turned up a live cross-Organization leak in `MembershipService`: with an org-wide target, `m.restaurantId === target.restaurantId` is `null === null` for any caller org-wide in any Organization, and `||` short-circuits before the organizations are compared. An unrelated Owner could read another Organization's org-wide Membership and re-role it. `WalletService` faces the identical nullable target and is correct, because it refuses org-wide Wallets outright. **The two read as the same call and differed on exactly the check that decides** — which is what makes excluding them a safety property rather than tidiness.
 
-  **Total: roughly two hours including that guard.**
+  The recurrence guard landed with it: `repo-invariants.spec.ts` fails if the predicate is written inline anywhere outside the utility, falsified by reintroducing it in `tip.service.ts`. Deliberately no allowlist — the excluded three compare against a Membership's or Wallet's `organizationId`, never a Restaurant's, so they are excluded by construction rather than by a list someone edits to go green.
 
 - **Fixtures build their Role and Permissions from the seed, mechanically rather than by discipline.** `CLAUDE.md`'s Testing Philosophy now forbids the literal; this item is what would make the rule unbreakable rather than remembered — the same preference for a mechanism that produced the fixture-safety check and the absent warning colour.
 
