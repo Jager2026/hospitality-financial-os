@@ -173,7 +173,17 @@ The two analytics reads attach names to already-ranked results. They are **histo
 
 This is also the map's first finding to change behaviour rather than describe it, and it arrived from a question about erasure rather than about access. The two are the same question asked at different times: **what does the system do when a person is supposed to stop being present?**
 
-**So: today there is no mechanism, soft or hard, to remove or obscure a person's data. A GDPR erasure request has no code path at all.** Stated plainly because it is the single most consequential fact in this document.
+**This was the single most consequential fact in this document, and it is now closed (ADR-052).** It read: *there is no mechanism, soft or hard, to remove or obscure a person's data; a GDPR erasure request has no code path at all.*
+
+There is one now — `pnpm --filter backend run redact:user`. It empties the person (`email`, `displayName`, `passwordHash`, plus any `MembershipInvitation` carrying that address) and retains `Membership` and every financial row hanging from it, **because the ten-year floor in §6 requires them.** The nothing-else-changes half is what §2's boundary buys: the money was never pointed at the person.
+
+Three things about it belong in this map rather than only in the ADR:
+
+- **It is not reachable over HTTP, and that is enforced rather than described.** `repo-invariants.spec.ts` fails if any controller or module imports it. A subject-rights request at this scale is a manual, verified act; a route that empties a user is the most dangerous thing this codebase could expose.
+- **It is dry-run by default.** A run without `--confirm` prints what would change and writes nothing — verified by running all four modes against a real row, not by reading the branch.
+- **It is deliberately partial, and says so on every run.** Emptying `User` does not reach `ipAddress`/`userAgent` on that person's `AuditLog` and `AgreementAcceptance` rows. Whether those are retained as security records or erased with the person is the open decision in §6, and the script refuses to settle it by default: it prints the row count and the words *this erasure is partial* every time, so an incomplete erasure cannot be reported as a complete one by someone who did not know.
+
+**What remains open is the policy question above, not the mechanism.**
 
 ---
 
