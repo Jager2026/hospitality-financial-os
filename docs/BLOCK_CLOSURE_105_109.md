@@ -19,13 +19,19 @@ Five pull requests merged without a closure pass: #105 (erasure), #106 (legal-cl
 
 # 0. The finding that has nothing to do with code
 
-**A real person registered on production today, and there is now one `agreement_acceptance` row naming a document that does not exist.**
+**There is one `agreement_acceptance` row on production naming a document that does not exist. It belongs to the Founder's own account** — confirmed by him after this was raised.
 
-Found while reconciling row counts during §1, not by looking for it. Production held 10 users at the start of this check and 11 at the end, with my own probe created and removed in between — the difference is a genuine registration at `2026-08-31T00:06Z`, and it wrote an acceptance against `UNPUBLISHED-no-terms-document-exists-yet`.
+Found while reconciling row counts during §1, not by looking for it. Production held 10 users at the start of this check and 11 at the end, with my own probe created and removed in between; the difference is a genuine registration at `2026-08-31T00:06Z`, which wrote an acceptance against `UNPUBLISHED-no-terms-document-exists-yet`.
 
-`IMPLEMENTATION_PLAN.md`'s "Blocking Gate Before The First Pilot Restaurant" says exactly this must not happen: *an acceptance pointing at a text that does not exist is not a missing record, it is a false one.* **The gate is no longer hypothetical — it has been crossed once.**
+**Whose account it is changes the urgency and not the fact.** No outside party has been given a false record, so nothing here is owed to anyone. The row still asserts agreement to a text nobody can produce, and `IMPLEMENTATION_PLAN.md`'s pre-pilot gate exists precisely so that such rows are not sitting in the table when the first real restaurant arrives.
 
-Not touched. It is real data and the decision is the Founder's: delete that one acceptance row, or publish the terms and let it stand as the first genuine acceptance. Either is cheap today and neither is cheap after a pilot.
+**Not touched.** Three options, all cheap while this is the only such row:
+
+1. **Leave it.** Defensible while the account is the Founder's own. The row must not still be there when a pilot begins.
+2. **Delete the acceptance row, keep the account.** These are separable — the account is a normal, useful account; only the acceptance names a nonexistent document.
+3. **Publish the terms**, and let this stand as the first genuine acceptance. Only honest if the row's version is then reconciled with the published one, which it currently would not be.
+
+**One thing this incidentally proves**, and it is worth keeping: registration on production works end to end for a real human, not only for a `curl` probe — the same path, the same acceptance write, from a browser.
 
 ---
 
@@ -164,4 +170,4 @@ Everything from this block written down as "not verified", "consistent but not p
 
 **Never rehearsed:** restoring from a Railway volume snapshot (THREAT_MODEL, and it cannot be rehearsed safely without staging).
 
-**Claimed by a document and contradicted by production:** the pre-pilot gate — see §0.
+**Claimed by a document and not yet true of production:** the pre-pilot gate — one acceptance row names the placeholder, on the Founder's own account. See §0.
