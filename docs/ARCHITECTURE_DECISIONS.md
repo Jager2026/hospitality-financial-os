@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.42.0
+version: 1.43.0
 status: Active — forty-eight ADRs, all Accepted
 classification: Internal
 owner: Founder
@@ -1515,6 +1515,33 @@ The unit test carries all four combinations as parameters, so the falsification 
 **Consequences.** Registration on production is closed until the terms exist. That is the intended effect and it is worth stating plainly rather than discovering: **nobody, including the Founder, can create an account on production until a real terms document is published.** The screen shows a specific sentence rather than "check the details above", which would have been false — nothing about the details is wrong.
 
 **Not addressed here:** `POST /memberships/invitations/accept`, the second path that creates a `User`, still writes no acceptance at all (ADR-049 records this). It is therefore not gated by this change and does not need to be — it records nothing false, because it records nothing.
+
+---
+
+## ADR-056 — A changed document must move its own version, because agreement proved nothing
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** The #105–#109 block closure compared every version in `INDEX.md` against each document's own frontmatter and found them in **perfect agreement**. The agreement was worthless: **not one version had moved** across six new ADRs and four substantially rewritten documents. `ARCHITECTURE_DECISIONS.md` still said 1.42.0 with ADR-054 inside it.
+
+**A consistency check cannot distinguish "these agree" from "these both stood still."** It is the Ledger invariant passing on zero rows, and it had been passing that way for an entire block.
+
+**Decision: an invariant on the DIFF, not on the file. If a change touches `docs/X.md`, it must touch that document's `version:` line.**
+
+Lives in `repo-invariants.spec.ts`, resolves `git merge-base origin/main HEAD`, and asks the one question a static comparison cannot: *did this change move the number?*
+
+**Two alternatives were considered and rejected on their weaknesses, not on effort:**
+
+- **The file's git timestamp against the version's.** Cleverer, needs nothing stored, and produces **false positives on every typo fix** — which forces a threshold for "substantial", and nobody can set that honestly. A check that cries wolf is a check people learn to override.
+- **A content hash written into the frontmatter.** Exact, no false positives, and it introduces a **generated field** — which becomes precisely the thing someone edits or regenerates to make the build green. The same rubber-stamp decay `CLAUDE.md` names, installed deliberately.
+
+**The chosen option's weakness, recorded here rather than discovered later: a one-character typo fix must also bump the version.** That cost is paid on every documentation pull request. It is accepted because it is smaller than the finding it prevents, and because it fails in the honest direction: it can only ever demand a bump that was already the convention, never permit a stale one.
+
+**Scope limit, stated rather than patched with an allowlist.** Only documents that *have* a `version:` line are covered. Four (`CONCEPT_VISION_RU.md` and the three `SEQUENCE_*` files) carry no frontmatter at all, and turning an unrelated edit to one of them into a frontmatter migration would make this the guard people route around. Deleting a `version:` line to escape the rule remains possible and is a deliberate act, visible in the diff.
+
+**Fails loudly rather than skipping when git history is unavailable.** A check reporting "nothing to compare" is indistinguishable, in a green run, from one that compared and passed — the exact failure ADR-050 records for the frontend build guard. It therefore throws, naming `fetch-depth: 0` as the fix. **That makes `ci.yml`'s checkout depth load-bearing rather than incidental**, and the line says so.
+
+**Falsified in all three directions asked for:** editing a document without a bump fails, naming the document; the same edit with a bump passes; a change outside `docs/` does not trigger it at all. The third matters as much as the first — an invariant that fired on every commit would be turned off within a week.
 
 ---
 
