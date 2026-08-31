@@ -1,6 +1,11 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
+import {
+  CURRENT_PLATFORM_TERMS_VERSION,
+  assertPlatformTermsPublished,
+} from "../common/agreements/agreement-versions";
 import { AuditEntity } from "../common/decorators/audit-entity.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthService } from "./auth.service";
@@ -15,11 +20,28 @@ import { JwtAuthGuard, type AuthenticatedUser } from "./guards/jwt-auth.guard";
 @Controller("auth")
 @Throttle({ default: { limit: 10, ttl: 60_000 } })
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Post("register")
   @AuditEntity("Authentication")
   register(@Body(new ZodValidationPipe(registerSchema)) dto: RegisterDto, @Req() req: Request) {
+    // ADR-055. The pre-pilot gate, on the route rather than on the screen.
+    //
+    // It was written as "the registration screen must not be shown to a real restaurant", and the
+    // route kept accepting requests regardless — so a real acceptance row naming a document that
+    // does not exist reached production anyway. A gate that protects a screen protects nothing.
+    //
+    // Here rather than inside `AuthService.register`, deliberately: this is a statement about
+    // whether the route is open at all, not a rule about registering, and putting it here keeps
+    // `ConfigService` out of a constructor that eleven tests build by hand.
+    assertPlatformTermsPublished(
+      this.config.getOrThrow<string>("NODE_ENV"),
+      CURRENT_PLATFORM_TERMS_VERSION,
+    );
+
     // ADR-049: the acceptance record carries where it came from, so the same context the refresh
     // route already collects is passed here too.
     return this.authService.register(dto, {

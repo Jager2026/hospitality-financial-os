@@ -1482,5 +1482,41 @@ The reporting half is not decoration. **A suite that only proved a closed venue 
 
 ---
 
+## ADR-055 — The pre-pilot gate protected a screen, and the route kept writing
+
+**Status:** Accepted (Sprint 14)
+
+**Context.** ADR-049 created the gate and `IMPLEMENTATION_PLAN.md` recorded it: *"the registration screen must not be shown to a real restaurant while `CURRENT_PLATFORM_TERMS_VERSION` is still the placeholder"*, because an acceptance naming a document that does not exist is **a false record, not a missing one.**
+
+**It did not hold.** A real acceptance row reached production — written from a browser, by the Founder's own registration, found while reconciling row counts during the #105–#109 block closure and removed by hand afterwards.
+
+**The rule was about a screen. `POST /auth/register` was never asked.** It accepted the request, checked the submitted version against the server's own — which matched, because both were the placeholder — and wrote the row. Nothing in the path consulted whether that version named anything real.
+
+**A gate that protects a screen protects nothing. The route is what writes.** The screen is one caller; `curl` is another, and so is anything else that reaches the API. Established by execution rather than inferred: a registration sent directly to the production API with the placeholder current returned **201** and produced the row, contents and all.
+
+**Decision: the gate moves to the API, as a refusal.**
+
+`assertPlatformTermsPublished(nodeEnv, currentVersion)` refuses `POST /auth/register` with **503 `REGISTRATION_UNAVAILABLE`** while the current platform terms version is the placeholder. Refusal, not a warning — the same shape as ADR-050, and for the same reason: a warning beside a write that happens anyway is precisely the state being replaced.
+
+**503 rather than a 4xx.** Nothing about the request is wrong, and no edit to it would help. The service cannot honestly accept a registration while its own terms are unpublished; that is a server state.
+
+**Production only — and this is deliberately not the mistake ADR-050 records.** That failure was a *build script* switching itself off on an unset `NODE_ENV` that nothing in that process validated. This runs inside the NestJS app, where `validateEnv` makes `NODE_ENV` a required enum with no default (ADR-045) — it cannot go missing without the app refusing to boot. `StripeService`'s boot probe already depends on exactly this, for exactly this reason. **The distinction is whether the reading process validates the value, not whether the variable is named `NODE_ENV`.**
+
+Outside production the placeholder is harmless: a development row naming an unpublished document is equally false and matters to nobody. Gating on the environment is also what keeps every test run from having to bypass the guard — the rubber-stamp decay `CLAUDE.md` names, and the reason this is not a value-only check.
+
+**On the controller, not in `AuthService`.** It is a statement about whether the route is open at all rather than a rule about registering, and it keeps `ConfigService` out of a constructor that eleven tests build by hand.
+
+**No second switch.** The gate lifts when `CURRENT_PLATFORM_TERMS_VERSION` stops being the placeholder — which is the same edit as publishing the document. There is no flag to set, nothing to keep in step, and nothing to forget.
+
+**Falsified end to end, twice, and the first attempt was wrong.** Booted in production mode: placeholder → **503** with the right code; a published version → **201**. The first run of the second half also reported 503, and it was an artifact — `pkill` had not killed the earlier server, the new process failed with `EADDRINUSE`, and the request reached the old build. Found by checking the port and the boot log rather than by trusting the result. **This is the leftover-process hazard `CLAUDE.md` records, met while doing the thing that records it.**
+
+The unit test carries all four combinations as parameters, so the falsification is provable without editing a constant, and one case asserts the gate is *currently closed* — reading the live constant, so that publishing the terms forces a deliberate visit here rather than lifting the gate unremarked.
+
+**Consequences.** Registration on production is closed until the terms exist. That is the intended effect and it is worth stating plainly rather than discovering: **nobody, including the Founder, can create an account on production until a real terms document is published.** The screen shows a specific sentence rather than "check the details above", which would have been false — nothing about the details is wrong.
+
+**Not addressed here:** `POST /memberships/invitations/accept`, the second path that creates a `User`, still writes no acceptance at all (ADR-049 records this). It is therefore not gated by this change and does not need to be — it records nothing false, because it records nothing.
+
+---
+
 ## Superseded / Retired
 - **CTO Operating Manual** — superseded by ADR-011; content to be merged into `CLAUDE_RULES.md`, then removed from the repository.

@@ -100,6 +100,8 @@ export default function RegisterPage(): JSX.Element {
         setError({ kind: "message", text: t("register.error.unreachable") });
       else if (result.error.status === 429)
         setError({ kind: "message", text: t("register.error.tooManyAttempts") });
+      else if (result.error.code === "REGISTRATION_UNAVAILABLE")
+        setError({ kind: "message", text: t("register.error.unavailable") });
       else if (result.error.status === 409)
         setError({ kind: "message", text: t("register.error.rejected") });
       else setError({ kind: "message", text: t("register.error.invalid") });

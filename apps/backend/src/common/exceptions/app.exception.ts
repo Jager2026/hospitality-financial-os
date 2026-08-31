@@ -24,6 +24,10 @@ export type ErrorCode =
   // One code for both would force the UI to guess from the message text, which is the one part of
   // the envelope this contract says may be translated.
   | "TERMS_VERSION_MISMATCH"
+  // ADR-055. 503, not a 4xx: nothing about the request is wrong. The service cannot honestly
+  // accept a registration while its own terms are unpublished, and that is a server-side state
+  // the caller can do nothing about.
+  | "REGISTRATION_UNAVAILABLE"
   | "VALIDATION_ERROR"
   | "NOT_FOUND"
   | "UNKNOWN_ERROR";
