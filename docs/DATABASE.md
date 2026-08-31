@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.12.0
+version: 2.13.0
 status: Active
 classification: Internal
 owner: Founder
@@ -37,9 +37,9 @@ Every table that records a financial fact is immutable. Corrections are new rows
 
 # Core Domain
 
-Twenty-one entities. Ten existed in v1.0. Ten were added directly by `ARCHITECTURE_DECISIONS.md` to close gaps the Sprint 0 review found — this is the schema catching up with already-agreed architecture, not scope creep. `MembershipInvitation` (ADR-020) is the twenty-first, added while starting Sprint 4 to close a gap between `MASTERPLAN.md`'s own user journey and the Sprint 0 schema.
+Twenty-two entities. Ten existed in v1.0. Ten were added directly by `ARCHITECTURE_DECISIONS.md` to close gaps the Sprint 0 review found — this is the schema catching up with already-agreed architecture, not scope creep. `MembershipInvitation` (ADR-020) is the twenty-first, added while starting Sprint 4 to close a gap between `MASTERPLAN.md`'s own user journey and the Sprint 0 schema. `AgreementAcceptance` (ADR-049) is the twenty-second, added in Sprint 14: until then a User could exist with no record of having agreed to anything.
 
-`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog`
+`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog` · `AgreementAcceptance`
 
 ---
 
@@ -328,6 +328,30 @@ AuditLog
 **Fields:** id, user_id, entity, entity_id, action, metadata, ip_address, user_agent, timestamp
 
 **Rules:** Append-only, never deleted or modified. Written by a shared interceptor applied to every mutating endpoint from Sprint 1 (ADR-010) — not a call each feature remembers to make.
+
+---
+
+# ENTITY
+AgreementAcceptance
+############################################################
+**Purpose:** What a specific party agreed to, which revision of it, and when. Added by ADR-049 (Sprint 14) after the Stripe research established that we owe both our own terms of service and our own privacy policy, and that a published document nobody is recorded as having read proves nothing about any particular person.
+
+**Fields:** id, agreement, version, user_id, restaurant_id, accepted_at, ip_address, user_agent
+
+**Rules — two subjects, exactly one per row, and this is the substantive part of the design.** Platform terms are accepted by a **person** (`user_id`); Stripe's connected-account agreement is accepted by a **business** (`restaurant_id`). One table serves both, and precisely one subject column is populated.
+
+The reason is a waiter: they sign up as a person, work a shift, and never touch Stripe. Collapsing both agreements onto `User` would record them as having accepted a payment processor's terms they have no relationship with — and it would be wrong in the other direction too, since the Stripe account holder is the legal entity, and a Restaurant can outlive the individual who created it.
+
+**Two `CHECK` constraints make that a rule rather than a convention**, both applied in the migration rather than expressed in Prisma:
+
+- `agreement_acceptance_subject_matches_type` — platform terms require a user and forbid a restaurant; the Stripe agreement requires the reverse.
+- `agreement_acceptance_version_not_blank` — `NOT NULL` is satisfied by `"   "`, and such a row would claim someone agreed to a revision it cannot name. The empty string is a present value, not an absent one.
+
+**Written in the same transaction as the `User` it belongs to** (`AuthService.register`). A User existing without one would be a person using the platform with no record of having agreed to anything, which is the gap this closes.
+
+**The submitted version is checked against the server's own and a mismatch is refused** (409 `TERMS_VERSION_MISMATCH`), never silently corrected — correcting it would record agreement to a document the person was never shown.
+
+**Not soft-deleted, and not on the erasure path** (ADR-052): a redaction clears the person, and this row is the evidence that the person agreed to something. Its `ip_address` and `user_agent` are personal data that emptying the `User` does not reach — an open decision recorded in `PERSONAL_DATA_MAP.md` §6, and the reason the erasure script reports every run as partial until it is made.
 
 ---
 
