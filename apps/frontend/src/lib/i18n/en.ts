@@ -81,6 +81,10 @@ export const en = {
   // that an address already has an account turns this form into an enumeration tool.
   "register.error.rejected":
     "We can’t create an account with these details. If you already have one, log in instead.",
+  // ADR-055. Without its own string this arrives as "check the details above", which is false:
+  // nothing about the details is wrong, and the person cannot fix it by editing the form.
+  "register.error.unavailable":
+    "Sign-ups aren’t open yet — our terms of service haven’t been published. Nothing was created.",
   "register.error.invalid": "Check the details above and try again.",
   "register.error.tooManyAttempts": "Too many attempts. Wait a minute and try again.",
   "register.error.unreachable": "We can’t reach the server right now. Nothing was sent.",

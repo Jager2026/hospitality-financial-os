@@ -451,11 +451,13 @@ GET /memberships?status=active
 
 # Error Codes
 
-AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · WITHDRAWAL_NOT_AVAILABLE · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · PASSWORD_BREACHED · TERMS_VERSION_MISMATCH · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
+AUTH_INVALID · AUTH_EXPIRED · PAYMENT_FAILED · PAYMENT_DECLINED · INVALID_TIP · MEMBERSHIP_NOT_FOUND · INVITATION_INVALID · PAYMENT_NOT_FOUND · RESTAURANT_NOT_FOUND · ORGANIZATION_NOT_FOUND · WALLET_NOT_FOUND · WITHDRAWAL_NOT_AVAILABLE · IDEMPOTENCY_KEY_CONFLICT · PERMISSION_DENIED · PASSWORD_BREACHED · TERMS_VERSION_MISMATCH · REGISTRATION_UNAVAILABLE · VALIDATION_ERROR · NOT_FOUND · UNKNOWN_ERROR
 
 `PASSWORD_BREACHED` (ADR-032, Sprint 13): the submitted password appears in a known public breach corpus (HaveIBeenPwned k-anonymity check) — returned only from `POST /auth/register` and `POST /memberships/invitations/accept`'s new-user path, never from Login.
 
 `TERMS_VERSION_MISMATCH` (ADR-049, Sprint 14): the submitted agreement version is not the one this server currently serves — returned from `POST /auth/register` with **409**. Its own code rather than a second `VALIDATION_ERROR` because registration's other 409 (an email already in use) must stay deliberately vague, while this one must say plainly that the terms changed and should be read again. A client cannot tell the two apart from the message, which is the one part of this envelope that may be translated.
+
+`REGISTRATION_UNAVAILABLE` (ADR-055, Sprint 14): the platform terms have not been published, so no honest acceptance record can be written — returned from `POST /auth/register` with **503**, in production only. Not a 4xx: nothing about the request is wrong and the caller can do nothing about it. The gate lifts when `CURRENT_PLATFORM_TERMS_VERSION` stops being the placeholder, which is the same edit as publishing the document.
 
 Codes never change. Messages may be translated. (`VALIDATION_ERROR`/`NOT_FOUND` were already live in `ErrorCode` and in active use — e.g. every Zod validation failure — but missing from this list; added here to close that gap, found while adding `PAYMENT_NOT_FOUND` for Sprint 5. `NOT_FOUND` is the generic fallback; prefer a dedicated `_NOT_FOUND` code per resource where one exists. `WITHDRAWAL_NOT_AVAILABLE` added for Sprint 7's Future Withdrawals Placeholder, ADR-024 — paired with HTTP 501, not 404 or 400.)
 

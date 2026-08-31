@@ -1,6 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
+import { ConfigService } from "@nestjs/config";
 import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -33,6 +34,12 @@ describe("AuthController — throttle (integration)", () => {
       controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: fakeAuthService },
+        // ADR-055: AuthController now reads NODE_ENV to decide whether registration is open at
+        // all. This test only calls /auth/login, but Nest resolves every constructor argument at
+        // compile time regardless of which route is exercised — the same reason TokenService is
+        // faked below. Returns "test", so the gate is inert here, which is what production-only
+        // gating is for.
+        { provide: ConfigService, useValue: { getOrThrow: () => "test" } },
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         // Never exercised by this test (only /auth/login is called) — needed only because
         // AuthController also declares /auth/me with @UseGuards(JwtAuthGuard), and Nest
