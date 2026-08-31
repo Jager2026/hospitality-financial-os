@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.43.0
-status: Active — forty-eight ADRs, all Accepted
+version: 1.44.0
+status: Active — ADR-001..056; ADR-057 onward in docs/adr/
 classification: Internal
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -12,6 +12,8 @@ technical_owner: AI Technical Co-Founder
 > "When someone asks in six months why we built it this way, the answer should already be written down."
 
 Purpose: record every architecture-level decision made while resolving the Sprint 0 documentation review, together with the reasoning behind each one. MASTERPLAN.md remains the single source of truth for product scope and philosophy. This document is the single source of truth for *how* the architecture implements that scope. Where DATABASE, SYSTEM_ARCHITECTURE, API, or IMPLEMENTATION_PLAN need to describe one of these decisions, they should reference the relevant ADR rather than restate it.
+
+**ADR-057 and everything after it lives in `docs/adr/`, one decision per file** (ADR-057). This document holds ADR-001 through ADR-056 and is not being added to. The split exists because two branches adding an ADR here always conflict — established in the #105–#109 closure as a property of this file having a single insertion point, not of merge order — and the existing fifty-six were left in place because a mechanical split of 1,570 lines can silently lose one and nothing checks this file's integrity. An invariant refuses the same ADR number in both locations.
 
 Status values:
 - **Accepted** — settled, ready to design and implement against.

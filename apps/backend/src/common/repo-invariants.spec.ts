@@ -445,4 +445,57 @@ describe("repository invariants", () => {
         offenders.join("\n"),
     ).toEqual([]);
   });
+
+  /**
+   * One ADR number, one home (ADR-057).
+   *
+   * ADRs now live in two places: 001–056 in `ARCHITECTURE_DECISIONS.md`, 057 onward as files in
+   * `docs/adr/`. That split is deliberate and its cost is a reader having to know about both — a
+   * cost worth paying to stop the merge conflicts, but only while the two halves stay disjoint.
+   *
+   * **The failure this prevents is not a duplicate file; it is a duplicate NUMBER.** Two documents
+   * both calling themselves ADR-058, written weeks apart, with every cross-reference in the
+   * codebase pointing ambiguously at both — and no way afterwards to tell which one a given
+   * `ADR-058` in a comment meant. That is unrecoverable by reading, which is precisely the
+   * property that made splitting the existing fifty-six too risky to do by hand.
+   *
+   * Cheaper as a check than as a habit, and it is the only thing keeping the split honest.
+   */
+  it("gives every ADR number exactly one home (ADR-057)", () => {
+    const monolith = readFileSync(join(REPO_ROOT, "docs", "ARCHITECTURE_DECISIONS.md"), "utf8");
+    const inMonolith = new Set([...monolith.matchAll(/^## ADR-(\d{3})\b/gm)].map((m) => m[1]));
+
+    const adrDir = join(REPO_ROOT, "docs", "adr");
+    const inFiles = new Map<string, string>();
+    for (const name of existsSync(adrDir) ? readdirSync(adrDir) : []) {
+      if (!name.endsWith(".md")) continue;
+      const m = /^ADR-(\d{3})-/.exec(name);
+      // A file that does not name its ADR number is its own defect: nothing could then detect a
+      // collision with it, which is the entire point of this check.
+      expect(
+        m,
+        `${name} must be named ADR-NNN-slug.md so its number is machine-readable`,
+      ).not.toBeNull();
+      inFiles.set(m![1], name);
+    }
+
+    // Non-vacuity: if either side parsed to nothing, every assertion below would pass while
+    // checking nothing — the shape of failure this repository has already been bitten by twice.
+    expect(inMonolith.size).toBeGreaterThan(50);
+    expect(inFiles.size).toBeGreaterThan(0);
+
+    const collisions = [...inFiles.entries()]
+      .filter(([number]) => inMonolith.has(number))
+      .map(
+        ([number, file]) =>
+          `ADR-${number} is in both ARCHITECTURE_DECISIONS.md and docs/adr/${file}`,
+      );
+
+    expect(
+      collisions,
+      `An ADR number must have exactly one home. Every "ADR-NNN" in a comment or another ` +
+        `document has to resolve to one decision, and a duplicated number makes every such ` +
+        `reference ambiguous forever. Collisions:\n${collisions.join("\n")}`,
+    ).toEqual([]);
+  });
 });
