@@ -239,6 +239,16 @@ Only then is MVP complete.
 
 ---
 
+# Block Closure Trigger
+
+**NEXT BLOCK CLOSURE: after PR #114.** Update this line when it fires.
+
+A block closure is the five-point pass: live verification against production, permission-coverage audit, full document reconciliation, ADR contradictions, and the list of what remains unproven. The most recent one is `BLOCK_CLOSURE_105_109.md`.
+
+**This line exists because the habit failed.** Five PRs (#105–#109) merged with no closure pass, the counter having lived only in someone's memory — and the Founder noticed, not the process. A counter that is not written down is not a counter. It is recorded here, in the document that is authoritative for the queue, rather than in a commit message or a chat thread, because those are the two places work has already been lost from.
+
+---
+
 # Blocking Gate Before The First Pilot Restaurant
 
 **Not a task and not an intention. A condition that must be false before any real restaurant is shown the registration screen.**
