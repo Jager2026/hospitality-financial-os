@@ -82,7 +82,13 @@ jobs:
           --health-retries 5
 
     steps:
+      # ADR-056: the document-version invariant compares this branch against origin/main, which
+      # needs real history. The default shallow clone (fetch-depth 1) has none, and the invariant
+      # is written to FAIL rather than skip when it cannot resolve the merge base — so this line
+      # is load-bearing, not a convenience.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ADR-038, and a genuine tension this resolves rather than papers over. env.validation.ts now
       # requires the Stripe secrets to have production's real shape (prefix, alphanumeric body,

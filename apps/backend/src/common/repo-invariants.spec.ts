@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -373,6 +374,75 @@ describe("repository invariants", () => {
         `src/user-redaction/redact-user.ts. Decide for each whether an erasure request must clear ` +
         `it, and add it to REDACTED_USER_STRING_FIELDS or RETAINED_USER_STRING_FIELDS with the ` +
         `reason. Unclassified:\n${unclassified.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  /**
+   * A changed document must change its own `version:` line (ADR-056).
+   *
+   * **Why a check on the diff rather than on the file.** The #105–#109 closure compared every
+   * version in `INDEX.md` against each document's frontmatter and found them in perfect agreement
+   * — which proved nothing, because **not one version had moved** across six new ADRs and four
+   * substantially rewritten documents. A consistency check cannot tell "these agree" from "these
+   * both stood still". It is the Ledger invariant passing on zero rows.
+   *
+   * So this asks a question a static comparison cannot: *did this change move the number?*
+   *
+   * **Chosen over two alternatives, both rejected on their weaknesses** (ADR-056): comparing the
+   * file's git timestamp against the version's would produce false positives on typo fixes and
+   * needs a threshold nobody can set honestly; a content hash written into the frontmatter is
+   * exact and introduces a generated field that becomes the thing people edit to make the build
+   * green.
+   *
+   * **Its own weakness, accepted deliberately: a one-character typo fix must also bump the
+   * version.** That is the cost, it is paid on every documentation PR, and it is cheaper than the
+   * finding it prevents. Recorded here rather than discovered later.
+   *
+   * **Fails loudly rather than skipping when git is unavailable.** A check that reports "nothing
+   * to compare" is indistinguishable, in a green run, from one that compared and passed — the
+   * exact failure ADR-050 records for the frontend build guard.
+   */
+  it("makes a changed document move its own version (ADR-056)", () => {
+    const git = (cmd: string): string =>
+      execSync(cmd, { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+    let base: string;
+    try {
+      base = git("git merge-base origin/main HEAD");
+    } catch {
+      // Deliberately not a skip. If this cannot run it must say so and fail, so that a CI
+      // configuration change (a shallow clone, a missing remote ref) surfaces as a red check
+      // rather than as a silently absent invariant.
+      throw new Error(
+        "Cannot resolve `git merge-base origin/main HEAD`. This invariant needs real history: " +
+          "CI must check out with fetch-depth: 0. Refusing to pass without having checked.",
+      );
+    }
+
+    const changed = git(`git diff --name-only ${base} HEAD`)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("docs/") && l.endsWith(".md"))
+      // A deleted document has no version to move.
+      .filter((l) => existsSync(join(REPO_ROOT, l)));
+
+    const offenders = changed.filter((doc) => {
+      // Only documents that HAVE a version are covered. Stated as a limit rather than patched
+      // with an allowlist: four documents carry no frontmatter at all today, and turning an
+      // unrelated edit to one of them into a frontmatter migration would make this the guard
+      // people route around. Deleting a `version:` line to escape the rule is a deliberate act,
+      // visible in the diff.
+      if (!/^version:/m.test(readFileSync(join(REPO_ROOT, doc), "utf8"))) return false;
+      const diff = git(`git diff ${base} HEAD -- "${doc}"`);
+      return !/^[+-]version:/m.test(diff);
+    });
+
+    expect(
+      offenders,
+      `These documents changed without their \`version:\` moving. A version that does not move ` +
+        `makes every consistency check between documents pass for the wrong reason. Bump the ` +
+        `frontmatter version (and INDEX.md's row for it). Offending documents:\n` +
+        offenders.join("\n"),
     ).toEqual([]);
   });
 });
