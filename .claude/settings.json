@@ -1,40 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "env": {
+    "CLAUDE_CODE_USE_POWERSHELL_TOOL": "0"
+  },
   "permissions": {
     "defaultMode": "plan",
     "ask": [
       "Bash(git push *)",
-      "PowerShell(git push *)",
       "Bash(stripe *)",
-      "PowerShell(stripe *)",
       "Bash(railway *)",
-      "PowerShell(railway *)",
       "Bash(prisma migrate deploy *)",
       "Bash(npx prisma migrate deploy *)",
       "Bash(pnpm prisma:migrate:deploy *)",
       "Bash(pnpm run prisma:migrate:deploy *)",
       "Bash(pnpm --filter backend run prisma:migrate:deploy *)",
-      "PowerShell(prisma migrate deploy *)",
-      "PowerShell(npx prisma migrate deploy *)",
-      "PowerShell(pnpm prisma:migrate:deploy *)",
-      "PowerShell(pnpm run prisma:migrate:deploy *)",
-      "PowerShell(pnpm --filter backend run prisma:migrate:deploy *)",
       "Bash(prisma migrate dev *)",
       "Bash(npx prisma migrate dev *)",
-      "PowerShell(prisma migrate dev *)",
-      "PowerShell(npx prisma migrate dev *)"
+      "Bash(pnpm db:reset *)",
+      "Bash(pnpm run db:reset *)",
+      "Bash(pnpm --filter backend run db:reset *)"
     ],
     "deny": [
       "Bash(prisma migrate reset *)",
       "Bash(npx prisma migrate reset *)",
-      "Bash(pnpm db:reset *)",
-      "Bash(pnpm run db:reset *)",
-      "Bash(pnpm --filter backend run db:reset *)",
-      "PowerShell(prisma migrate reset *)",
-      "PowerShell(npx prisma migrate reset *)",
-      "PowerShell(pnpm db:reset *)",
-      "PowerShell(pnpm run db:reset *)",
-      "PowerShell(pnpm --filter backend run db:reset *)",
       "Read(./.env)",
       "Read(./.env.local)",
       "Read(./apps/backend/.env)",

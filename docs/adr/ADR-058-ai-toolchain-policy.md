@@ -44,21 +44,36 @@ Every pattern below was derived by searching `package.json` scripts, `.github/wo
 - `railway` — touches production infrastructure.
 - **`prisma migrate deploy` in all five real forms**: the raw command, `npx`, and the three `pnpm` wrappers (`pnpm prisma:migrate:deploy`, `pnpm run prisma:migrate:deploy`, `pnpm --filter backend run prisma:migrate:deploy`, the last being the one `railway.backend.json` runs on deploy).
 - **`prisma migrate dev`** — creates migrations, and `SPRINT_0_SCHEMA_AUDIT.md` documents `--create-only` as this project's route for hand-written SQL migrations. Real, used, and it writes to a database.
+- **The three `db:reset` wrappers** — `pnpm db:reset`, `pnpm run db:reset`, `pnpm --filter backend run db:reset`. See below for why these are `ask` and the raw command is `deny`.
 
 **`deny` — no confirmation available:**
 
-- **`prisma migrate reset` in all five real forms**, including the `db:reset` script wrappers, since `db:reset` *is* `prisma migrate reset --force`.
+- **The raw `prisma migrate reset` forms**, plain and via `npx`.
 - **Reading real env files**: `./.env`, `./.env.local`, `./apps/backend/.env` (the only real one on disk today) and the `**/` forms. Derived from `.gitignore` and confirmed against `git ls-files`. **`.env.example` stays readable** — it is tracked, contains no secrets, and is how a new machine is set up. No deny pattern matches it, verified rather than assumed.
 
-**Both `Bash(...)` and `PowerShell(...)` for every rule.** This is the one finding that changes the policy's shape rather than its content: **PowerShell is a separate tool with its own permission namespace**, it is actively used here (it appears throughout the 914 accumulated rules), and a rule written only for `Bash` is bypassed by the other shell without anyone intending to bypass anything.
+### 3. The second shell is removed rather than mirrored
 
-**This was measured, not assumed.** A temporary `Bash(echo DENYTEST *)` deny rule was added and exercised against a known-answer pair before being removed: the plain Bash form was denied, and the identical command issued through **PowerShell ran and returned its output**. The same test corrected a second belief in passing — an env-prefixed form (`FOO=1 echo DENYTEST …`) was *also* denied, so the matcher does handle env prefixes, which is the opposite of what was expected before running it. Both results matter: one justifies the mirroring, the other is a reminder that a pattern's reach is worth measuring rather than reasoning about.
+**Every `Bash(...)` rule above is silently bypassable through PowerShell, and this was measured, not assumed.** A temporary `Bash(echo DENYTEST *)` deny rule was added, exercised against a known-answer pair, and removed:
+
+| Command | Tool | Result |
+|---|---|---|
+| `echo DENYTEST plain` | Bash | **denied** |
+| `FOO=1 echo DENYTEST envprefixed` | Bash | **denied** — the matcher does handle an env prefix, the opposite of what was expected before running it |
+| `echo DENYTEST viapowershell` | **PowerShell** | **ran, output returned** |
+
+The third row is the finding: **PowerShell is a separate tool with its own permission namespace**, and a rule written for `Bash` does not constrain it at all.
+
+**The response is to remove the second shell, not to duplicate every rule into it.** `.claude/settings.json` sets `env.CLAUDE_CODE_USE_POWERSHELL_TOOL` to `"0"`, so the tool is not offered and there is one shell for a rule to be written about.
+
+**Why not mirroring** — it was implemented first and then withdrawn. Mirroring works only for the rules that exist at the moment someone remembers to mirror. Every future rule inherits the obligation, the duplicate is invisible when it is missing, and a missing duplicate is not a cosmetic gap but an open hole in exactly the rule someone cared enough to write. It is the same decay this document describes elsewhere: a mechanism whose correctness depends on nobody forgetting a step is a mechanism with a scheduled failure. Removing the tool has one failure mode instead of one per rule.
+
+**The cost, stated rather than buried: this makes the whole permission policy conditional on the PowerShell tool actually being absent.** That is precisely the shape `CLAUDE.md` warns about — *a conditional guard is only as reliable as the thing it is conditional on* — and it is accepted deliberately, because the alternative distributes the same dependency across every rule instead of concentrating it in one checkable place. **It must be checked rather than assumed** (see Consequences).
 
 **`ask` and `deny` are written so they do not overlap.** Deny covers `migrate reset` only; ask covers `deploy` and `dev` only. Precedence between the two lists is therefore never load-bearing — a property chosen deliberately, because precedence is exactly the kind of assumption this project has been wrong about before.
 
 **No `allow` rules in this file.** Adding them here would re-create the 914-rule problem with a commit behind it. Routine approvals stay machine-local in `settings.local.json`, which `.gitignore` already excludes.
 
-### 3. A pull request template
+### 4. A pull request template
 
 `.github/pull_request_template.md`, with the section this project needed most: **what was RUN, with results, versus what was written but not run.** `IMPLEMENTATION_PLAN.md`'s Definition of Done has required that distinction for eleven sprints; the template is where it stops depending on anyone remembering. It also asks for falsification evidence, docs version bumps, and **the CI result of the head commit rather than the fact of a push** — a distinction that once went unnoticed for two entire sprints.
 
@@ -67,6 +82,8 @@ Every pattern below was derived by searching `package.json` scripts, `.github/wo
 ## Alternatives
 
 **`bypassPermissions` as the default — rejected.** It is the mode that makes every session faster and removes the last mechanical check between a plan and a destructive command. This project's own history is the argument: a leftover server that made a falsification report wrong, a `git checkout --` that discarded a session's work, four hundred and sixty accumulated payment rows, and a production `agreement_acceptance` row written by a real registration. None of those were caused by a permission prompt being absent — but every one of them is the class of thing a prompt is the last chance to catch, and the mode exists precisely to remove that chance. **A tool that never asks cannot be the thing that notices.** For a codebase that moves money it is the wrong default at any speed.
+
+**Mirroring every rule into `PowerShell(...)` — implemented, then withdrawn.** Reasoning in Decision §3: it protects only the rules that exist when someone remembers to mirror, and a forgotten duplicate is an open hole in exactly the rule someone cared enough to write.
 
 **Hooks — deliberately deferred to their own PR.** Hooks execute commands on tool events and can block. They are the natural mechanism for "run the gate before a push" or "refuse a commit whose docs versions did not move", and each is a behavioural change with its own failure modes — a hook that silently does nothing is worse than no hook, and proving one fires requires its own falsification. Mixing them into this change would put configuration, documentation and executable event handlers on one diff, which is the axis-mixing `AI_WORKFLOW.md` forbids.
 
@@ -78,12 +95,36 @@ Every pattern below was derived by searching `package.json` scripts, `.github/wo
 
 **Plan mode changes how work starts.** A session now proposes before it edits, and the Founder approves a plan rather than discovering a direction in a diff. That is the intended cost: it front-loads the disagreement to where it is cheap.
 
-**`pnpm run db:reset` is now denied, and this is worth flagging rather than discovering.** It is the documented precondition for a trustworthy test run — `IMPLEMENTATION_PLAN.md` states that in those words, after three suite failures caused by accumulated rows. **Under this policy a session cannot run it at all**, and `deny` has no confirmation path. Recorded here because the Founder asked for reset denied in every found form, and this is the found form that ordinary work uses several times a session. **If it proves too tight, the one-line change is moving the three `db:reset` patterns from `deny` to `ask`** — which keeps the raw `prisma migrate reset` forms denied while letting the sanctioned local wrapper through with a confirmation.
+**`db:reset` is `ask`, the raw `prisma migrate reset` is `deny`, and the split is not a compromise between them.** The first draft denied both, which would have blocked the documented precondition of a trustworthy test run — `IMPLEMENTATION_PLAN.md` states in those words that `pnpm run db:reset` is not hygiene but a precondition, after three suite failures caused by accumulated rows. A rule that ordinary work has to get past several times a session is the rubber-stamp pattern this project has already written down, arriving before it was even merged.
 
-**The `ask` rules are already neutralised on the Founder's machine, and no committed file can fix that.** Settings load user → project → **local**, so `.claude/settings.local.json` outranks this policy, and an `allow` there beats an `ask` here. It holds 926 such rules. The evidence is this ADR's own pull request: **its `git push` executed with no prompt**, because `Bash(git push *)` sits in that local allow list. The same collision covers `stripe docs` and 46 `railway` entries, `railway service *` and `railway variable *` among them.
+**The reasoning that resolves it: the danger of a reset is which database is on the other end, not which words are in the command.** `pnpm run db:reset` against the local development database is routine and expected several times a day; the identical command with a production `DATABASE_URL` in the environment is unrecoverable. A static pattern cannot tell those apart, because **the deciding value is not in the string being matched.** So the static rule is asked to do only what a static rule can do — be a gate, one deliberate confirmation at the boundary — and the raw forms, which have no sanctioned everyday use here, stay denied outright.
 
-The `deny` rules are unaffected — deny outranks allow, and no local rule allows `db:reset` or `migrate reset` in any case. Confirmed live alongside it: `apps/backend/.env` is refused and `apps/backend/.env.example` reads normally.
+**The contextual check is a `PreToolUse` hook, in the next PR.** A hook sees the environment the command would actually run in, so it can refuse on the basis of the active `DATABASE_URL` rather than the command text. That is the check that is worth having, and it is deliberately not smuggled into a configuration-only change — it is executable behaviour with its own failure modes, and a hook that silently does nothing is worse than no hook.
 
-So this policy is fully in force on a fresh machine and **partially inert on the one it was written on**, until those specific local entries are deleted. That file is personal and gitignored, so the deletion is the Founder's to make. **The point generalises past this ADR: a project policy is a floor, and a local allow list silently raises the floor out from under it** — which is the 914-rule problem doing damage, not merely being untidy.
+**OPEN QUESTION — whether the `ask` rules produce a confirmation on this machine at all.**
+
+The observation that raised it: this ADR's own `git push` **executed**, and `.claude/settings.local.json` holds 926 allow rules including `Bash(git push *)`.
+
+**The first explanation offered for that was wrong and is corrected here, because the correction is the more useful record.** It claimed local settings outrank project settings, so a local `allow` beats a project `ask`. That is not how the rules are evaluated: **the lists from every level are merged, and the merged rules are evaluated `deny` → `ask` → `allow`, regardless of which file a rule came from.** File precedence governs scalar settings, not the outcome of a permission decision. On that reading an `ask` is not beaten by an `allow` at all, and the observation needs a different explanation.
+
+**The more likely one: the session was running in Accept-edits mode.** That is a property of the session, not of the rules — a mode can relax confirmations no matter which file the rules live in — and it is consistent with an `ask` rule producing no visible prompt while every `deny` continued to fire.
+
+**And the fact that makes both explanations premature: the model cannot observe whether a prompt was shown.** What is visible from inside a session is that a command *executed*. Whether a confirmation appeared and was answered, or no confirmation was ever raised, is not in that signal. **"It ran" is not evidence of "it ran without asking"** — the earlier claim treated the two as the same thing, and that, not the precedence error, is the reusable mistake. Only a human watching the terminal can settle it.
+
+**Procedure, for the Founder to run and record:**
+
+1. Start a fresh session in this repository, in **Plan** mode.
+2. Temporarily move `.claude/settings.local.json` aside, so only this committed policy is in effect.
+3. Have the session attempt a `git push`.
+4. **Observe directly whether a confirmation prompt appears.**
+5. Restore `settings.local.json`.
+
+**Result: _(to be filled in by the Founder)_**
+
+What is *not* in question: the `deny` rules fire. That was observed by the refusal itself, which is a signal the model does receive — a denied tool call returns an error rather than a result. `apps/backend/.env` was refused while `apps/backend/.env.example` read normally, in the same session.
+
+**The PowerShell tool must be confirmed absent, not assumed absent.** Decision §3 makes the whole policy conditional on it, so the condition is the thing to check. **In a fresh session started in this repository, an attempt to use the PowerShell tool should not be possible at all** — the tool should not be offered, rather than being offered and refused. The same `echo DENYTEST` pair that measured the gap is the cheapest way to re-run the check: with the tool gone, the Bash form is still denied and the PowerShell form has no route to attempt.
+
+**What could not be established about that setting, stated plainly.** The variable is real — `CLAUDE_CODE_USE_POWERSHELL_TOOL` appears in the shipped `claude.exe`, its schema accessor is a tri-state boolean rather than a raw string, and the binary carries the string *"Set CLAUDE_CODE_USE_POWERSHELL_TOOL=1 to enable the PowerShell tool (preview)"*. **What could not be read out of a minified bundle is how that parser treats the literal `"0"`.** A tri-state boolean very probably maps it to false, which is the intent; if instead the raw non-empty string were tested for truthiness, `"0"` would read as *true* and enable the very tool it is meant to remove. That is this codebase's own documented trap — **the wrong falsy check is invisible until the case actually occurs** — and it is why the paragraph above asks for the tool's absence to be observed rather than inferred from the setting being present.
 
 **Verification this ADR cannot do for itself.** Permission rules take effect for sessions that start after the file exists, and a running session cannot observe its own startup validation. **Whether Claude Code accepts every pattern, and whether `plan` is actually the mode on launch, is verifiable only by starting a new session in this repository** — the schema, the JSON, and the rule shapes were checked here; the runtime acceptance was not.

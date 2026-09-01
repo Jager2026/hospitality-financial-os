@@ -24,7 +24,9 @@ v1.0 was written before the project had learned anything. Ten steps of the form 
 
 **Steps 1–4 of v1.0 — understand, understand the feature, locate the module, design first — are performed in `plan` mode, and approval of the plan is the gate before any code.** `.claude/settings.json` sets `permissions.defaultMode: "plan"` and is committed, so it is the project's policy rather than one machine's.
 
-This is v1.0's best line — *"never start coding immediately"* — turned from a thing a session remembers into a thing the tool refuses. The same file carries `ask` rules for `git push`, `stripe`, `railway` and every real form of `prisma migrate deploy`, and `deny` rules for `prisma migrate reset` and for reading real env files. It contains **no `allow` rules**, deliberately: `.claude/settings.local.json` had accumulated 914 of them, each approved once in a prompt and never reviewed, and committing that pattern would only give it a commit behind it.
+This is v1.0's best line — *"never start coding immediately"* — turned from a thing a session remembers into a thing the tool refuses. The same file carries `ask` rules for `git push`, `stripe`, `railway`, every real form of `prisma migrate deploy` and `migrate dev`, and the three `db:reset` wrappers; `deny` rules for the raw `prisma migrate reset` and for reading real env files. `db:reset` is `ask` rather than `deny` on purpose — **the danger of a reset is which database is on the other end, not which words are in the command**, and a static pattern cannot see that; the contextual check belongs to a `PreToolUse` hook in a later PR. The file also disables the PowerShell tool, so there is one shell for a rule to be written about rather than two namespaces to keep in sync.
+
+It contains **no `allow` rules**, deliberately: `.claude/settings.local.json` had accumulated over 900 of them, each approved once in a prompt and never reviewed, and committing that pattern would only give it a commit behind it.
 
 ## Still true — kept
 
