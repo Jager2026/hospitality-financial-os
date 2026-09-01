@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.21.0
+version: 2.23.0
 status: Active
 classification: Critical
 priority: Highest
@@ -374,7 +374,41 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
 
   **How fast it accumulates is deliberately not stated as a rate.** Observed counts across consecutive runs were 0 (after a reset), then 45, 10 and 61 — it depends on ordering and on how much each run's poller manages to publish. The honest claim is the direction and the threshold, not a per-run figure; an early draft of this entry asserted "roughly 45 per run" on the strength of a single measurement and the next run contradicted it.
 
+  **Two more failures on 2026-09-01, and the reason they are recorded here rather than as a new entry: they add numbers, not a new problem.** Both were `outbox-poller.service.spec.ts`, both during a documentation-only PR whose branch differed from `main` by nothing outside `docs/`, so the code under test was byte-identical to what CI was passing. Measured at the time: **622 rows** at the first failure and **492** at the second, with roughly **four full suite runs between them** — a `db:reset` in between, and the second failure arriving after the count had climbed back. Each was diagnosed from its own log and confirmed by querying the database directly, then fixed by `db:reset`.
+
+  **One measurement is weaker than it looks, and saying so is the point.** The second failure showed **16 unpublished** — well under the 50-per-poll threshold this entry names as the mechanism. That is not a refutation: **the count was taken after the run finished**, and the suite both creates and publishes rows while it runs, so it does not describe the state at the moment of failure. The honest position is that the threshold model is unconfirmed by this incident rather than contradicted by it, and that measuring during a failing run is what would settle it.
+
+  **Neither diagnosis used the instrument built for exactly this**, which is a separate problem and has its own entry below.
+
   **Deferred, with two things shipped in the meantime** (ADR-046's PR): `global-setup.ts` prints the counts unconditionally, and escalates to an explicit WARNING naming `db:reset` once `unpublished >= 50`. Neither fixes accumulation; together they remove the need to remember the rule before suspecting it, and turn a vague "too many rows" into the one number with a hard edge. **No trigger date — next whenever test infrastructure gets a slot.** The instrument stays useful afterwards: a count near zero is the fastest confirmation that cleanup actually works.
+
+- **The version invariant (ADR-056) proves a version moved, not that it is unique — and two branches can move it to the same number in silence.** The check is per-branch by construction: it diffs each changed document against `git merge-base origin/main HEAD` and requires the `version:` line to appear in that diff. Nothing looks sideways at the other open branches, because from inside one branch they do not exist.
+
+  **The failure it permits, concretely.** Two PRs branch from the same `main`, both edit `INDEX.md`, both bump `1.38.0 → 1.39.0`. Each passes the invariant honestly. The first merges. The second either conflicts — in which case a human resolves it and *may* notice — or, if the edits sit in different hunks, merges cleanly and leaves two distinct document states that both claim to be `1.39.0`. The version stops identifying a state, which is the one job it has.
+
+  **This is a near miss, not a hypothetical.** In the #118–#120 sequence the numbers happened not to collide: #118 took `1.39.0` and #119 had already taken `1.40.0` from the same base. Had #118 taken `1.40.0` as well, nothing in the repository would have said so. Three consecutive PRs in that sequence each conflicted on `INDEX.md` and each was resolved by hand.
+
+  **The shape of a fix, not a decision on it.** A CI check can see what a branch cannot: for each document the PR changes, compare its new version against that document's version on **every other open PR's head**, and fail on a duplicate. That needs the GitHub API rather than the local repository, which is why it does not belong in `repo-invariants.spec.ts` — the invariant suite is deliberately offline and should stay that way. **Estimate: small, and gated on deciding where it lives** (its own workflow, or a step in the existing one).
+
+  **No trigger date.** The related question — why `INDEX.md` is where these collisions keep happening — has its own entry below.
+
+- **A diagnostic instrument exists, is correct, and was not looked at twice in a row — and the question is not how to remember it.** `global-setup.ts` prints the accumulated Payment and OutboxEvent counts on every run and escalates to an explicit WARNING naming `db:reset` once `unpublished >= 50`. It was built so that nobody has to suspect the database before diagnosing. On 2026-09-01 two `outbox-poller.service.spec.ts` failures were each diagnosed from scratch — from the assertion text outward, then confirmed by querying the database by hand — while the answer was already printed in the same output.
+
+  **Reaching for "remember to check it" is the wrong fix, and it is the interesting part.** That remedy has a name in this project: it is the shape of every mechanism that decays. **This is the same class as the 914-rule `settings.local.json`** (ADR-058) and as the stale permission matrix in `test/global-setup.ts` — a mechanism that is technically present, technically correct, and not in anyone's field of view at the moment it matters. Discipline is what such a mechanism asks for, and discipline is exactly what it was built to stop requiring.
+
+  **So the question is about placement, not memory: why does this output not meet the eye at the moment of failure?** The plausible answer is that it is printed at setup, at the top of a long run, while the failure is read at the bottom, minutes later, after hundreds of lines of test output — and nothing connects them. A finding that arrives before the problem is, in practice, a finding that arrives after it. **Candidate directions, none chosen:** print the counts again in the failure path rather than only at setup; have the poller specs assert the precondition themselves and fail with a message naming `db:reset`; or make the WARNING loud enough to survive scrollback. The second is the most honest — a spec that depends on a clean table can say so — but it is also the one that touches spec files.
+
+  **No trigger date. Estimate: small once the placement is decided; the decision is the work.**
+
+- **`INDEX.md` has become the file ADR-057 split `ARCHITECTURE_DECISIONS.md` to stop being.** ADR-057's reasoning was not about ADRs. It was about a **file shape**: one document that every PR must touch, with a single insertion point, so that two branches conflict *mechanically, regardless of content*. That was established in the #105–#109 closure — nine PRs conflicted on merge and **not one had a content conflict**, which is what proved the cost was structural.
+
+  **`INDEX.md` now has that shape exactly.** Every documentation PR touches it, because it carries one row per document plus a `version:` line of its own at the top, and that line is a single insertion point every branch writes to. **The evidence is four consecutive PRs: #118, #119, #120 and #121 each conflicted on `INDEX.md`, and the fourth was predicted in its own PR description before it happened.** Three of the four conflicts were on the version line alone — no two branches disagreeing about content, only about a number.
+
+  **Why this is not merely annoying.** Each resolution is a hand edit to a file whose job is to be the accurate register of every document's version. A hand-merged register is a register that can be quietly wrong, and the version-uniqueness gap above is the second half of the same problem: the invariant cannot tell a correct resolution from a careless one.
+
+  **Options, none chosen, and the first is not obviously right.** *(a)* Split `INDEX.md` the way ADR-057 split the ADR log — one file per document, or per section, generated into a view. Removes the shared insertion point; costs the single-page overview that makes `INDEX.md` useful. *(b)* Generate it from the documents' own frontmatter, so no branch edits it by hand and the merge is a rebuild rather than a resolution. Most in the spirit of ADR-057 — the file stops being a source and becomes a projection — and it makes the row-versus-frontmatter cross-check unnecessary rather than automated. *(c)* Accept the conflicts as the cost of one authoritative page, and lean on the uniqueness check above to make careless resolutions visible.
+
+  **ADR-057 chose the analogous option (a) for ADRs and explicitly declined to migrate the existing fifty-six**, for a reason that applies here too: a mechanical split can silently lose an entry, and nothing checks the file's integrity. **No trigger date. Estimate: (b) is a script plus a CI check; (a) is a documentation-structure decision, not an afternoon.**
 
 - **Executable files that no compiler checks (audited on the Founder's instruction, after `prisma/seed.ts` turned out to be one — found the week it became able to delete production data).** The question is the input-grep method pointed at the compiler: *what runs that nothing typechecks?* Answered by listing every `.ts`/`.js`/`.mjs` outside a `src/` directory and checking it against each package's `tsconfig` include. `prisma/**` and `test/**` were closed in ADR-046's PR. Four remain, and the first two are the ones that matter because **they are themselves gates**:
 
