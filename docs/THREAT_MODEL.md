@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.12.0
+version: 1.13.0
 status: Active
 classification: Critical
 owner: Founder
@@ -321,6 +321,33 @@ This is listed here, separately from the Closed Threats above, on purpose: it is
 # Open, Not Answered
 
 Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet, or the answer depends on a decision outside this codebase entirely. Listed honestly rather than filled in with a guess, per the Founder's own instruction.
+
+## Any Membership at a venue can mint a Stripe onboarding link, and that link leads to the form that sets the payout bank account
+
+**This is not the read-scoping class, and the difference is why it is recorded here instead of being fixed alongside the by-id reads.** It was going to be fixed as the fourth instance of the #109 pattern. Establishing what the link actually permits — before writing the fix — showed it is a different question.
+
+**What the route does today.** `POST /restaurants/{id}/onboarding-link` calls `getReachableRestaurantOrThrow` and **nothing else**: no `@RequirePermission`, no `hasPermissionAtRestaurant`, and no gate on the venue's onboarding state. **Reachability is the entire rule**, and reachability is satisfied by any Membership — a zero-permission Waiter included.
+
+**What the recipient of the link can do, from Stripe's own reference rather than from memory:**
+
+- The link is `type: "account_onboarding"`, which *"provides a form for inputting outstanding requirements."*
+- For a connected account that has not finished onboarding, those outstanding requirements **include the external account — the bank account that receives the venue's payouts.** Stripe's hosted-onboarding documentation describes collecting bank account information as part of the flow.
+- `type: "account_update"` — the mode that edits *already-provided* information — **cannot be created for our accounts at all.** Stripe refuses it for accounts with Stripe-hosted Dashboard access, which ours have by ADR-014 (`dashboard: "full"`). So the exposure is bounded to requirements that are still outstanding; it is not a route to changing a bank account that has already been set.
+
+**How long it lives, and whether it can be re-issued:**
+
+- **Single-use**, in Stripe's own words on the create endpoint.
+- **A few minutes** — Stripe's documentation says a link is invalid once *"a few minutes went by since the link was created"*, and the API reference's own example shows `expires_at` exactly 300 seconds after `created`.
+- **Re-issuable without limit.** Nothing in the API prevents minting another while one is live — `refresh_url` exists precisely so a caller generates a fresh link — and our route carries no throttle beyond the global 100/min.
+- Stripe additionally notes that **email clients which automatically visit links can consume one**, which is a reason a link may be spent without its intended recipient ever seeing it.
+
+**So the exposure, stated precisely.** At a venue whose Stripe onboarding is incomplete, anyone holding any Membership there can mint an unlimited series of short-lived, single-use links to the flow that sets where that venue's money will be paid. It is bounded by the link's lifetime, by single use, by Stripe's own identity checks inside the flow, and by only outstanding requirements being collectable. It is **not** bounded by who may mint it, nor by how many.
+
+**Why this is stopped here rather than fixed.** A read-scoping defect leaks information. This one sits on the path to a form that decides where money goes, and the correct answer may not be "add the permission that the other three routes got" — it may be that this route should also be gated on onboarding state, or rate-limited, or only ever reachable by the person who created the venue. **Choosing among those is a decision about money movement, and the Founder takes those.**
+
+**Permissions that exist, shown rather than invented.** The seeded vocabulary is `restaurant.create`, `restaurant.edit`, `restaurant.delete`, `membership.invite`, `membership.manage`, `reports.view`, `payments.manage`, `tips.configure`, `data.export`, `roles.manage`. The closest existing fit is **`restaurant.edit`** — held by Owner, Administrator and Manager. Whether a Manager should be able to set the venue's payout account is exactly the question above, and it is not answered by picking the nearest available name. No new Permission is proposed here; adding one is an RBAC change with its own reconciliation consequences (ADR-046, ADR-048).
+
+**Not verified:** what the hosted flow shows for a venue whose onboarding is already complete. Reading the API reference says there would be no outstanding requirements to collect, so the form should have nothing to offer — but that is inference from documentation, not an observation, and it is the difference between "bounded" and "harmless".
 
 ## Cross-Organization access by a legitimately-authenticated caller — reopened, and split, because the two halves no longer have the same evidence
 
