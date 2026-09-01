@@ -35,5 +35,8 @@ Thumbs.db
 # Claude Code local session settings (machine-specific, not shared)
 .claude/settings.local.json
 
+# Obsidian vault metadata (personal, machine-specific)
+.obsidian/
+
 # Docker
 docker/data/

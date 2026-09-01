@@ -1,6 +1,6 @@
 ---
 title: AI_WORKFLOW
-version: 2.0.0
+version: 2.1.0
 status: Active
 classification: Critical
 owner: Founder
@@ -20,6 +20,14 @@ supersedes: AI_WORKFLOW v1.0 — reconciled below rather than discarded
 
 v1.0 was written before the project had learned anything. Ten steps of the form *"Never start coding immediately"*, *"Write tests. Run tests"*, *"Prefer small commits"*. Gone through by category, the way `UX_MAP.md` was.
 
+## Now mechanised rather than intended (ADR-058)
+
+**Steps 1–4 of v1.0 — understand, understand the feature, locate the module, design first — are performed in `plan` mode, and approval of the plan is the gate before any code.** `.claude/settings.json` sets `permissions.defaultMode: "plan"` and is committed, so it is the project's policy rather than one machine's.
+
+This is v1.0's best line — *"never start coding immediately"* — turned from a thing a session remembers into a thing the tool refuses. The same file carries `ask` rules for `git push`, `stripe`, `railway`, every real form of `prisma migrate deploy` and `migrate dev`, and the three `db:reset` wrappers; `deny` rules for the raw `prisma migrate reset` and for reading real env files. `db:reset` is `ask` rather than `deny` on purpose — **the danger of a reset is which database is on the other end, not which words are in the command**, and a static pattern cannot see that; the contextual check belongs to a `PreToolUse` hook in a later PR. The file also sets `env.CLAUDE_CODE_USE_POWERSHELL_TOOL`, and the PowerShell tool is in fact absent — verified 2026-09-01 on Claude Code 2.1.252 — so there is one shell for a rule to be written about rather than two namespaces to keep in sync. **That the setting is what removes it was never established** (ADR-058 records the alternative candidate), so the absence is re-checked after any Claude Code upgrade or any change to the `Bash` deny rules rather than assumed to persist.
+
+It contains **no `allow` rules**, deliberately: `.claude/settings.local.json` had accumulated over 900 of them, each approved once in a prompt and never reviewed, and committing that pattern would only give it a commit behind it.
+
 ## Still true — kept
 
 - **"Never start coding immediately."** The single best line in v1.0, and it survived everything.
@@ -35,7 +43,7 @@ v1.0 was written before the project had learned anything. Ten steps of the form 
 - **"Testing"** as one step, after implementation. In practice tests are how a claim is *established* — often before there is anything to fix, as with the measurement that preceded the by-id permission fix.
 - **"Prefer small commits."** Wrong axis. Size was never the problem; **type** is. A large single-purpose PR is fine and a small one mixing an access fix with a document edit is not.
 - **The document order in Step 1** lists `PRODUCT_REQUIREMENTS` and `API`, which do not exist under those names. `INDEX.md` is the live list.
-- **Step 9's PR contents** are right as far as they go and omit what PR descriptions have actually had to carry: the falsification evidence, and what was verified live versus only by tests.
+- **Step 9's PR contents** are right as far as they go and omit what PR descriptions have actually had to carry: the falsification evidence, and what was verified live versus only by tests. **Closed by `.github/pull_request_template.md`** (ADR-058), whose sections are exactly those: business value, architecture and trade-offs, **what was RUN with results versus what was written but not run**, docs touched with version bumps, the CI result of the head commit rather than the fact of a push, and known limitations.
 
 ## Missing entirely — practice exists, the document does not
 
