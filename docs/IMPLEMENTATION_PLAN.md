@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.20.0
+version: 2.21.0
 status: Active
 classification: Critical
 priority: Highest
@@ -268,6 +268,24 @@ Two obligations feed the same gate, both found in the Sprint 14 Stripe research 
 ---
 
 # Deferred, Not Yet Scheduled
+
+## Tip ownership at the moment of payment — blocked on a written answer, and the reason it is listed here
+
+**ADR-053 records the decision. This line records the work, because the number is not the work.**
+
+The task was assigned twice and lost twice between sessions — the ADR number was held while the work itself existed only in correspondence, which `AI_WORKFLOW.md` now names as the one place the queue is not. It is written here first for that reason.
+
+**What is settled (ADR-053):** Model A — a single Direct charge to the venue, with the waiter's share recorded as a `TIP_ALLOCATED` Ledger obligation — is what is built and what the pilot runs on. Model B — the tip separating at payment and landing directly in the waiter's own account — is the target product model. **A is not a rejected alternative and not a fallback.**
+
+**What is blocked, and on what:** splitting the funds at payment, waiter onboarding with KYC, and `Withdrawal` implemented as a transfer. All three wait on a **written** answer from VMI or the Bank of Lithuania (Newcomer Programme); both requests are sent. **The money flow is not to be touched before one arrives.**
+
+**Trigger:** a written answer from either body. It is recorded verbatim, with its boundaries — which question it answers and which it does not — before any code is planned against it.
+
+**What is NOT blocked, and this is the point of the ADR:** the `tip_payable` Ledger line is identical under both models, so everything up to *settlement* is model-independent and proceeds now — Ledger, the six accounts, both portals, auth, Membership, refund accounting, GDPR, agreements, the design system.
+
+**If B is chosen: three to four weeks** of rework across ADR-014, ADR-022, ADR-023, Wallet and waiter onboarding. Estimated in the ADR, not here.
+
+---
 
 Dependency-audit findings that require a major-version bump are never mixed into a routine audit or another sprint's own task list — each earns its own focused task with its own live verification (typecheck, tests, both builds, and a real running-app check where the surface is user-facing), the same discipline `@nestjs/core` 10→11 got once assigned to Sprint 11 above. Listed here until a Sprint claims them, so the decision isn't only recoverable from chat history:
 
