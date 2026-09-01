@@ -137,7 +137,15 @@ The observation that raised it: this ADR's own `git push` **executed**, and `.cl
 4. **Observe directly whether a confirmation prompt appears.**
 5. Restore `settings.local.json`.
 
-**Result: _(to be filled in by the Founder)_** — still open. The 2026-09-01 verification below settles the PowerShell question, not this one: it reports a tool's absence, and nothing about whether a confirmation prompt was raised on `git push`.
+**Result — partial, 2026-09-01, Claude Code 2.1.252.**
+
+*Observation.* The Founder saw a confirmation dialog in this session: **"Allow Claude to run Extract usage context around the env var?"**, with **Deny / Always allow / Allow once**, raised on a Bash command running `grep` over the shipped binary.
+
+*What it proves.* **The confirmation mechanism in desktop Claude Code works and is visible to the Founder.** That disposes of the general form of the earlier "ask is inert" finding, which is now withdrawn: confirmations are raised and shown.
+
+*What it does not prove.* **That any `ask` rule in this file fires.** The observed prompt was on a different command, matched by no rule here — Claude Code prompts for unfamiliar Bash commands on its own. A prompt appearing for some command is not evidence that the `git push` rule produces one.
+
+*Still open, and it closes itself.* The `git push` question needs no separate experiment: the next push made while the Founder is watching answers it. Recorded here so the answer is written down when it arrives rather than noticed and forgotten.
 
 What is *not* in question: the `deny` rules fire. That was observed by the refusal itself, which is a signal the model does receive — a denied tool call returns an error rather than a result. `apps/backend/.env` was refused while `apps/backend/.env.example` read normally, in the same session.
 
