@@ -63,7 +63,25 @@ Every pattern below was derived by searching `package.json` scripts, `.github/wo
 
 The third row is the finding: **PowerShell is a separate tool with its own permission namespace**, and a rule written for `Bash` does not constrain it at all.
 
-**The response is to remove the second shell, not to duplicate every rule into it.** `.claude/settings.json` sets `env.CLAUDE_CODE_USE_POWERSHELL_TOOL` to `"0"`, so the tool is not offered and there is one shell for a rule to be written about.
+**The response is to remove the second shell, not to duplicate every rule into it.** `.claude/settings.json` sets `env.CLAUDE_CODE_USE_POWERSHELL_TOOL` to `"0"`, and the tool is in fact gone. **Those are two statements, and only the second is established** — they are recorded separately below, because collapsing them would put an unverified mechanism in the load-bearing position.
+
+**Observation — 2026-09-01, Claude Code 2.1.252, fresh session, `settings.json` committed:**
+
+- The PowerShell tool is absent from the active tool list.
+- It is absent from the deferred list that `ToolSearch` draws on.
+- An explicit `select:PowerShell,Bash` returned **only `Bash`**. This is the form the claim rests on: two names requested, one known to exist and one under test, and only the control came back. A miss inside a request whose control matched is evidence; an empty search result would not have been, since it could be blamed on the query.
+- `Bash`'s own description now states it runs Git Bash, not PowerShell.
+
+**Attribution — not established.** Two candidates remain, and this ADR does not choose between them:
+
+1. `env.CLAUDE_CODE_USE_POWERSHELL_TOOL`, the setting written here;
+2. Claude Code's own behaviour, which appeared in the 2.1.220 binary to withdraw the tool on Windows when a `Bash` deny rule exists and no rule mentions PowerShell — both true of this repository regardless of the setting.
+
+The separating experiment is straightforward — remove the `env` block, keep the deny rules, and see whether the tool returns — and it was **deliberately not run**: the surface is already closed, and the cost of the attribution was judged higher than its value. Recorded as a decision, not an oversight.
+
+**Consequence for whoever maintains this.** Because the mechanism is unknown, the fact does not carry forward on its own. **Re-observe it after any change to the `Bash` deny rules, and after any Claude Code upgrade** — either could be the thing that was holding the door, and neither would announce itself. The check is one `ToolSearch` call, and it costs seconds.
+
+**Environment fact, recorded because it bounds the evidence above.** Claude Code was upgraded **2.1.220 → 2.1.252 during work on this PR.** The mirroring gap was measured on `.220`, and the reasoning about *why* the tool disappears was read out of the `.220` binary. **Those readings do not transfer to `.252`** and are not relied on here — which is a second, independent reason the attribution stays open.
 
 **Why not mirroring** — it was implemented first and then withdrawn. Mirroring works only for the rules that exist at the moment someone remembers to mirror. Every future rule inherits the obligation, the duplicate is invisible when it is missing, and a missing duplicate is not a cosmetic gap but an open hole in exactly the rule someone cared enough to write. It is the same decay this document describes elsewhere: a mechanism whose correctness depends on nobody forgetting a step is a mechanism with a scheduled failure. Removing the tool has one failure mode instead of one per rule.
 
@@ -119,12 +137,16 @@ The observation that raised it: this ADR's own `git push` **executed**, and `.cl
 4. **Observe directly whether a confirmation prompt appears.**
 5. Restore `settings.local.json`.
 
-**Result: _(to be filled in by the Founder)_**
+**Result: _(to be filled in by the Founder)_** — still open. The 2026-09-01 verification below settles the PowerShell question, not this one: it reports a tool's absence, and nothing about whether a confirmation prompt was raised on `git push`.
 
 What is *not* in question: the `deny` rules fire. That was observed by the refusal itself, which is a signal the model does receive — a denied tool call returns an error rather than a result. `apps/backend/.env` was refused while `apps/backend/.env.example` read normally, in the same session.
 
-**The PowerShell tool must be confirmed absent, not assumed absent.** Decision §3 makes the whole policy conditional on it, so the condition is the thing to check. **In a fresh session started in this repository, an attempt to use the PowerShell tool should not be possible at all** — the tool should not be offered, rather than being offered and refused. The same `echo DENYTEST` pair that measured the gap is the cheapest way to re-run the check: with the tool gone, the Bash form is still denied and the PowerShell form has no route to attempt.
+**The PowerShell tool must be confirmed absent, not assumed absent.** Decision §3 makes the whole policy conditional on it, so the condition is the thing to check — and the check is that the tool is **not offered at all**, which is a different outcome from being offered and refused. Refusal would mean something still holds the door and this ADR names the wrong mechanism.
 
-**What could not be established about that setting, stated plainly.** The variable is real — `CLAUDE_CODE_USE_POWERSHELL_TOOL` appears in the shipped `claude.exe`, its schema accessor is a tri-state boolean rather than a raw string, and the binary carries the string *"Set CLAUDE_CODE_USE_POWERSHELL_TOOL=1 to enable the PowerShell tool (preview)"*. **What could not be read out of a minified bundle is how that parser treats the literal `"0"`.** A tri-state boolean very probably maps it to false, which is the intent; if instead the raw non-empty string were tested for truthiness, `"0"` would read as *true* and enable the very tool it is meant to remove. That is this codebase's own documented trap — **the wrong falsy check is invisible until the case actually occurs** — and it is why the paragraph above asks for the tool's absence to be observed rather than inferred from the setting being present.
+**Result: Verified by Founder on 2026-09-01, Claude Code 2.1.252: fresh session, Plan mode, `settings.local.json` removed, PowerShell tool absent.**
+
+**This closes the surface and leaves the mechanism open**, per Decision §3. The gate is shut; which of the two candidates shut it was not determined, by decision rather than by omission. **Re-observe after any change to the `Bash` deny rules and after any Claude Code upgrade** — a fact whose cause is unknown does not survive changes to either candidate on its own.
+
+**Process lesson, and it is the reusable part of this ADR.** The attribution is unavailable because **two changes went into one commit**: the `PowerShell(...)` mirror rules were removed and `env.CLAUDE_CODE_USE_POWERSHELL_TOOL` was added together. Either alone would have been decisive; together they are not separable after the fact. This is `AI_WORKFLOW.md`'s *one axis of risk per PR* — violated one level down, **at the commit**, where the rule is easy to think does not apply because the PR as a whole still has one axis. It does apply: **a commit is the unit at which a cause can still be isolated**, and once two candidate causes land together, the only way back is an experiment someone has to decide is worth running. Here it was not, and the cost is a permanent open question in a document about a security boundary.
 
 **Verification this ADR cannot do for itself.** Permission rules take effect for sessions that start after the file exists, and a running session cannot observe its own startup validation. **Whether Claude Code accepts every pattern, and whether `plan` is actually the mode on launch, is verifiable only by starting a new session in this repository** — the schema, the JSON, and the rule shapes were checked here; the runtime acceptance was not.
