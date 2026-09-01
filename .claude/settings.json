@@ -4,7 +4,6 @@
     "CLAUDE_CODE_USE_POWERSHELL_TOOL": "0"
   },
   "permissions": {
-    "defaultMode": "plan",
     "ask": [
       "Bash(git push *)",
       "Bash(stripe *)",
