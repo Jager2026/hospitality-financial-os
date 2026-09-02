@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.16.0
+version: 1.17.0
 status: Active
 classification: Critical
 owner: Founder
@@ -473,6 +473,19 @@ A chargeback on a payment taken months before the disconnection is Stripe revers
 **Why this is filed separately from the entry above** rather than as part of it: that one is about money that cannot be reconciled, and this one is about a state change the system is blind to. **The blindness is the more general problem** — it would still be a problem if the reconciliation question were answered tomorrow, because every other decision that assumes a live connection inherits it.
 
 **Options, none chosen:** treat a run of failing API calls for one account as evidence and mark it disconnected; add a periodic liveness check per connected account; or accept the blindness and require offboarding to be recorded by hand in our own system, which is the cheapest and depends entirely on somebody remembering — **the shape this project has already recorded as the one that decays** (ADR-058, and the backlog entry on instruments nobody reads).
+
+---
+
+## A chargeback reverses the whole charge, tip included, and the bank does not distinguish the bill from the tip
+**What exists:** the product rule from ADR-062: a refund returns the bill amount and the tip is not reversed — industry practice, and what actually happens at the table (two refunds in four years, both immediate). The Ledger reverses `RESTAURANT_REVENUE_PAYABLE`, `TAX_PAYABLE` and `PLATFORM_FEE_REVENUE`; `TIP_PAYABLE` is untouched. (ADR-023's proportional reversal still includes the tip in code — a recorded divergence, resolved separately.)
+
+**What's genuinely missing: a chargeback is not a refund.** The guest's bank reverses the entire charge and does not know a tip was in it. **The decision is the bank's — not ours, not the restaurant's** — and the whole amount comes back. Established against the live Stripe API on 2026-09-02 (ADR-062): a transfer reversal never fails for insufficient funds, the recipient goes negative and sees it labelled `"REFUND FOR PAYMENT"`, and the platform is reserved the shortfall in the same second as `losses_collector` — a reserve that persists after the account is closed. Under Model B the tip has already reached the waiter, who may have spent it.
+
+**Deliberately not treated with a withdrawal window.** Holding every waiter's money, always, against an event that almost never occurs costs more than the event. ADR-062 chose a window for one day and cancelled it on the fact that refunds do not return tips; a chargeback is rarer still.
+
+**Options, none chosen** — ADR-062 keeps six answers to *"who pays when the tip comes back"* with what the Ledger says, what each party sees and what it costs. They were written for the refund and are the menu for the chargeback.
+
+**Trigger for a decision: the first real chargeback, or a number from the pilot** — how much tip money is charged back, how long after payment. Until then the exposure is unknown rather than estimated, and it is recorded as unknown.
 
 ---
 

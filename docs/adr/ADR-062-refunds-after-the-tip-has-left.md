@@ -1,7 +1,7 @@
 ---
 title: ADR-062 — Refunds after the tip has left: what a reversal does when the waiter has already been paid
-version: 1.1.0
-status: Accepted — pilot on Option 4, target Option 2; window length undecided by design
+version: 1.2.0
+status: Superseded in part — the withdrawal window is cancelled; tips are not reversed on refund; chargebacks stay open in THREAT_MODEL
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,7 +9,7 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-062 — Refunds after the tip has left: what a reversal does when the waiter has already been paid
 
-**Status: Accepted, 2026-09-02.** The pilot runs on **Option 4** — a window during which tips cannot be withdrawn. **Option 2** — withhold from future tips — is the target after the pilot. **The window's length is not decided, and that is part of the decision** (see *Decision*). The options below are kept as written: the reasons for rejecting each are in the Decision, and an option whose text has been deleted cannot be re-examined when the number that decides it arrives. No code.
+**Status: Superseded in part, 2026-09-02 — the same day it was accepted.** The withdrawal window (Option 4) is **cancelled**, and with it Options 1, 2, 3, 5 and 6 as answers to this ADR's question — because **the question was wrong**: on a refund, the tip does not come back. See *Decision reversed*. The product rule that replaces all six is stated there. **Chargebacks are a different event and remain open**, in `THREAT_MODEL.md`. The option texts, the live Stripe findings and the first decision are all kept as written: they answer a question that will be asked again if chargebacks turn out to be frequent, and an option whose text has been deleted cannot be re-examined then. No code.
 
 ---
 
@@ -150,6 +150,41 @@ The live experiment showed what a reversal looks like from the recipient's side:
 
 ---
 
+## Decision reversed — 2026-09-02, the Founder's, on a fact from practice
+
+**Two facts from four years of working in restaurants, and the first one dissolves this ADR's question.**
+
+1. **Tips are not part of a refund.** The bill amount is returned; the tip stays with the waiter. **This is industry practice, not something this product invents.** A guest who was over-charged gets the over-charge back; the tip they chose to leave was a gift to a person, and the refund of the bill does not un-give it.
+2. **Two refunds in four years — both immediate, at the table, one for a mis-keyed amount.** A refund two weeks later, the scenario this ADR was built around, is not what refunds look like where the money is made.
+
+**All six options answered *"who pays when the tip is refunded."* The tip is not refunded. ADR-062 solved a problem that does not exist.** The window is cancelled with the rest: holding everyone's money, always, against an event that does not occur is a cost with no risk behind it.
+
+### What becomes the product rule
+
+**A refund returns the bill amount. Tips are not reversed.**
+
+**Ledger:** on a refund, `RESTAURANT_REVENUE_PAYABLE`, `TAX_PAYABLE` and `PLATFORM_FEE_REVENUE` are reversed. **`TIP_PAYABLE` is not touched.** (`TAX_PAYABLE` is named for the day it has a writer — today nothing posts to it, ADR-029's block stands; the rule includes it so the day it does, no one re-derives whether tax follows the bill. It does.)
+
+**Consequence for the waiter:** the tip is paid immediately. `pendingBalance` stays at zero exactly as ADR-024 left it — not as a placeholder now, but as the correct value: nothing is pending because nothing is held back.
+
+### Divergence from ADR-023 — recorded, not fixed here
+
+**ADR-023 reverses three accounts proportionally, and `TIP_PAYABLE` is one of them.** `handleChargeRefunded` (`webhooks.service.ts:292`) calls `splitProportionally` (`:483`) across `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE` and `TIP_PAYABLE` at the waiter's own Membership (`:344`), and ADR-023's own worked example refunds 500 of tip out of a 2000 bill. **Under the rule above that is wrong: the tip share of a refund must be zero, and the refund must be sized to the bill, not the gross.**
+
+**This PR does not change ADR-023 or the code.** It records that the accepted decision and the running implementation now disagree, in a money path, and that the disagreement is to be resolved as its own change with its own tests — ADR-023's falsification suite asserts the proportional tip reversal and will have to be rewritten to assert its absence. One axis of risk: this is documentation; that is money.
+
+### What stays open — the chargeback, which is not a refund
+
+**A chargeback is the guest's bank reversing the whole charge, and the bank does not distinguish the bill from the tip.** The decision is the bank's, not ours and not the restaurant's; the entire amount comes back, tip included, and the live findings above apply in full: the reversal never fails, the recipient goes negative, the platform is reserved the shortfall in the same second.
+
+**Not treated with a window.** Holding everyone's money to cover an event that almost never happens costs more than the event. Recorded in `THREAT_MODEL.md` under *Open, Not Answered*, with its trigger: **the first real chargeback, or a number from the pilot.** The six options above are the menu for that day, which is why their text is kept.
+
+### What this reversal does not undo
+
+The live Stripe findings — a reversal never fails, the recipient sees *"REFUND FOR PAYMENT"*, the platform pays in the same second — are facts about chargebacks now, and stay. The screen-copy note stays for the same reason. The commitments below stay, re-pointed: they are now the preconditions for answering the chargeback, not the refund.
+
+---
+
 ## What every option needs — now recorded as commitments, each with its trigger
 
 | Commitment | Trigger — the moment it becomes due | Why it is not optional |
@@ -164,7 +199,8 @@ The live experiment showed what a reversal looks like from the recipient's side:
 ## Boundaries
 
 - **No code.** Nothing here changes `handleChargeRefunded`, `splitProportionally`, or the projection.
-- **The window is not built and `pendingBalance` is not touched.** The decision names Option 4; it does not name a length, and a window without a length is not buildable — by design, see *Decision*.
+- **The window is cancelled, so there is nothing to build, and `pendingBalance` stays at zero** — no longer as ADR-024's placeholder but as the correct value under the product rule: nothing is held back.
+- **ADR-023 is not edited.** The divergence is recorded above and resolved as its own change, with its own tests, on the money axis.
 - **The sandbox is not tidied.** The closed probe account at −700 and the persisting `reserve_transaction −700` stay as they are. The way to clear a negative recipient balance is to transfer into it — which is the mechanism of Option 6, an option this decision did not choose. Tidying would mean exercising a path the product has decided against.
 - **`PROCESSOR_CLEARING_CONTRA` is not touched** — it is the neighbouring open item in THREAT_MODEL and is orthogonal to this one.
 - **The money fork is not built** (ADR-053, ADR-061). This ADR assumes it exists and asks what happens after.
