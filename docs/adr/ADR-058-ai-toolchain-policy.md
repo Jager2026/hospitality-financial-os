@@ -1,6 +1,6 @@
 ---
 title: ADR-058 — AI toolchain policy: plan mode default, permission rules, PR template
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -137,15 +137,15 @@ The observation that raised it: this ADR's own `git push` **executed**, and `.cl
 4. **Observe directly whether a confirmation prompt appears.**
 5. Restore `settings.local.json`.
 
-**Result — partial, 2026-09-01, Claude Code 2.1.252.**
+**Result — CLOSED, 2026-09-01, Claude Code 2.1.252.**
 
-*Observation.* The Founder saw a confirmation dialog in this session: **"Allow Claude to run Extract usage context around the env var?"**, with **Deny / Always allow / Allow once**, raised on a Bash command running `grep` over the shipped binary.
+*Observation.* Across the pushes made on 2026-09-01 the Founder watched the terminal and **the confirmation dialog appeared, and was answered with Allow once each time.** That includes the force-pushes that followed each rebase — `git push --force-with-lease origin <branch>`, which the `Bash(git push *)` pattern matches.
 
-*What it proves.* **The confirmation mechanism in desktop Claude Code works and is visible to the Founder.** That disposes of the general form of the earlier "ask is inert" finding, which is now withdrawn: confirmations are raised and shown.
+*What it proves, and it is the whole question.* **The `ask` rule on `git push` fires.** The permission policy in this file produces a confirmation for the command it was written about. **The earlier "ask is inert" finding is withdrawn in full** — not only in its general form, but for this specific rule.
 
-*What it does not prove.* **That any `ask` rule in this file fires.** The observed prompt was on a different command, matched by no rule here — Claude Code prompts for unfamiliar Bash commands on its own. A prompt appearing for some command is not evidence that the `git push` rule produces one.
+*Why this observation counts and the previous one did not.* An earlier dialog had already been seen in the same session, on a Bash command running `grep` over the shipped binary. That proved only that **the mechanism** works: the command was matched by **no rule in this file**, and Claude Code raises its own prompt for unfamiliar Bash commands. **A prompt for some command is not a prompt for this command.** The difference here is not that the Founder looked more carefully — it is that the command under observation was one **this file's own rule covers**, so the prompt has only one available explanation.
 
-*Still open, and it closes itself.* The `git push` question needs no separate experiment: the next push made while the Founder is watching answers it. Recorded here so the answer is written down when it arrives rather than noticed and forgotten.
+*The reusable part, restated because it survives the finding it corrected.* The original claim — that `ask` was inert — was never observed. It was inferred from a command having **executed**, and the model cannot see whether a prompt was raised and answered. **"It ran" was never evidence of "it ran without asking."** Two hypotheses were then built on that inference (a file-precedence rule that does not exist, and Accept-edits mode), and both were beside the point: the inference itself was the error, and no amount of choosing between explanations for a non-observation would have reached it. **What closed the question was a human looking at the screen** — the one instrument this session does not have.
 
 What is *not* in question: the `deny` rules fire. That was observed by the refusal itself, which is a signal the model does receive — a denied tool call returns an error rather than a result. `apps/backend/.env` was refused while `apps/backend/.env.example` read normally, in the same session.
 
