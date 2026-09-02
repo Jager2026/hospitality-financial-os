@@ -1,7 +1,7 @@
 ---
 title: MASTERPLAN
 subtitle: Hospitality Financial Operating System
-version: 2.2.0
+version: 2.3.0
 status: Active
 classification: Internal
 owner: Founder
@@ -33,16 +33,17 @@ If any documentation contradicts this document on scope, MASTERPLAN.md takes pre
 6. Why Existing Solutions Fail
 7. Our Solution
 8. Product Vision
-9. Company Philosophy
-10. Product Philosophy
-11. Business Philosophy
-12. Technical Philosophy
-13. MVP
-14. Future Vision
-15. Engineering Principles
-16. AI Governance
-17. Success Metrics
-18. Long-Term Mission
+9. Product Positioning & Restaurant Value Proposition
+10. Company Philosophy
+11. Product Philosophy
+12. Business Philosophy
+13. Technical Philosophy
+14. MVP
+15. Future Vision
+16. Engineering Principles
+17. AI Governance
+18. Success Metrics
+19. Long-Term Mission
 
 ---
 
@@ -465,6 +466,134 @@ Our long-term vision extends far beyond accepting cards.
 Payments become the foundation.
 
 Financial infrastructure becomes the destination.
+
+---
+
+# Product Positioning & Restaurant Value Proposition
+
+**This is a strategic specification, not marketing copy.** It exists so that sales material, pitch decks and screen copy are derived from one agreed set of claims rather than invented per conversation. **Nothing here is written to persuade.** Where a statement cannot currently be supported, it is labelled a hypothesis and says what would settle it.
+
+---
+
+## Core positioning
+
+> **"You don't need another payment system.
+> You need to know where every euro goes."**
+
+---
+
+## Business model
+
+**Model B — the tip belongs to the waiter — is the single target model.** Not one of two supported modes: the target.
+
+**The "two payout modes" hypothesis is CLOSED, not deferred.** The product will not offer a restaurant a choice between tips settling to the venue and tips settling to the individual. Two modes would mean two tax positions, two reconciliation paths, two support stories and two versions of every screen that shows a tip — permanently, and for a distinction the customer never asked for. **Closed as a decision. This is the first document to record it: no canonical document previously carried the hypothesis, so its closure is recorded here rather than struck from somewhere else.**
+
+**Model A is the current state of the implementation and is to be replaced.** It is not a fallback and not a rejected alternative — it is what can be built and put in front of a real restaurant while the question gating B is answered by people who are not us. Its full reasoning, and what specifically blocks B, are in **ADR-053**.
+
+**The consequence for positioning: no external material may describe Model A as the product.** It is the bootstrap the pilot runs on.
+
+---
+
+## Value to the restaurant
+
+**The order below is deliberate and is itself part of the specification.** It is ordered by defensibility, not by how well each item demonstrates. Material derived from this section must not promote items 6-8 above items 1-2 — that is the order in which every competitor already describes itself.
+
+### Tier 1 — what competitors do not have
+
+**1. Trust layer: the restaurant and the waiter read one financial history.**
+
+Immutable double-entry accounting; attribution through Membership rather than through a name typed on a screen; projections rebuilt from the entries rather than stored and hoped to match. **Auditable and deterministic** — a balance can be recomputed from scratch and must land on the same number.
+
+**Qualification, and it belongs in the specification rather than a footnote: this is a lead in time, not a barrier to entry.** Double-entry accounting is well understood and copyable by any competent team. What is expensive to copy is not the ledger — it is the ledger *wired into* refunds, disputes and payouts, so that a reversal months later lands correctly in both parties' view of the same history. **The advantage is the wiring, and the lead is measured in engineering months, not in structural protection.** Any claim of a durable moat here is unsupported.
+
+**2. Tips by name.** Not a shared pool divided afterwards, but a specific waiter, fixed at the moment of payment. The person recorded is whoever was selected as having served the table — which may be a Manager or the Owner, not only someone holding a Waiter role.
+
+### Tier 2 — strong, and reproducible by a competitor
+
+**3. Automatic reconciliation** of payments, bills, tips, commissions, refunds and payouts.
+
+**4. Transparency for staff** — both sides look into one system, rather than the venue holding the record and the waiter holding a belief.
+
+**5. Payout administration.**
+
+### Tier 3 — parity with the market, not differentiation
+
+**6. Modern terminals and instructions for using them.**
+
+**7. Refunds that work.**
+
+**8. Support during the restaurant's own working hours** — subject to the SLA section below, which is currently undefined.
+
+**These three are table stakes.** They must be true, and none of them is a reason to switch.
+
+---
+
+## Taxes — a hypothesis, not a promise
+
+**The permitted formulation is exactly this, and no stronger:**
+
+> **"as much of the payout and tax administration as legally and technically possible."**
+
+**Until there is a written answer from VMI, tax handling is not marketed as automated.** Not "automatic tax", not "we handle the tax", not "compliant by default". The verbs carry more risk than the nouns: *administers* is defensible, *automates* is not.
+
+**Why this is a hard boundary rather than caution.** For Model A the position is settled — tips distributed by the employer are employment income and the restaurant is the tax agent. **For Model B nobody has an answer**, including us (ADR-053). A claim of automated tax handling made before that answer would be a claim about Lithuanian tax law made by a company that has not obtained one.
+
+---
+
+## Switching cost — the central GTM constraint
+
+**A restaurant's terminal is tied to its acquirer.** Connecting to this platform requires moving to compatible payment infrastructure.
+
+**Integration with a restaurant's existing third-party terminals has not been established as possible, and no pitch may rest on it.** Not "not yet built" — *not established*. Until it is demonstrated against a real device and a real acquirer, any material implying a venue can keep its current terminal is claiming something unverified.
+
+**This is the primary obstacle to sales, not a footnote.** It is the first question a solvent, interested restaurant will ask, and the honest answer costs the deal more often than any feature gap will. Every go-to-market plan derived from this document must state how it handles that answer, rather than discovering it in the first meeting.
+
+---
+
+## Pilot limitations — what cannot be promised
+
+**None of the following may appear in pilot material, in any softened form.**
+
+- **Reconciliation against the till DOES NOT WORK. There is no POS integration.** The complaint *"the X/Z reports do not add up"* is **not solved by the pilot** — and it is exactly the pain a hospitality buyer will assume this product addresses. It must be ruled out explicitly rather than left unmentioned.
+- **Compatible payment infrastructure is mandatory** (see Switching cost).
+- **Withdrawal does not exist.** A waiter cannot take money out. Balances are visible and uncashable.
+- **The Waiter Portal is not built.**
+- **A refund and dispute procedure must exist before a live pilot.** The mechanism partly exists; the operational procedure does not.
+- **Waiter onboarding and KYC must be defined before Model B launches**, and are not.
+
+---
+
+## Support SLA
+
+**SLA IS NOT DEFINED.**
+
+No hours and no target response time have been set by the Founder, so none is recorded here.
+
+**This is written as an absence on purpose.** A vague formulation — "responsive support", "we are there when you need us" — reads as a guarantee in a pitch and is then measured against whatever the reader imagined. **An undefined SLA stated plainly is honest; a soft one is a promise nobody agreed to make.** No support commitment may appear in external material until this section carries numbers.
+
+**Two figures are needed to close this section:**
+
+1. **Support hours** — specific, and aligned to the restaurant's operating window rather than to office hours.
+2. **Target response time** within those hours.
+
+**Scaling threshold: ALSO NOT DEFINED.** The number of venues up to which founder-led support remains feasible has not been established. It is required, because it is the point at which either support quality falls or hiring must already have happened — and both are decisions that must be made before the threshold arrives rather than at it.
+
+---
+
+## Open questions — Model B
+
+**Three architectural questions with no answer. They block design, not merely implementation** — each changes the shape of what gets built rather than the order it gets built in.
+
+**1. When does a waiter complete onboarding — at invitation, or later?**
+At invitation, every new hire faces an identity check before their first shift, and a venue short-staffed on a Friday feels that immediately. Later, the platform holds money for a person who is not yet verified — which is question 2.
+
+**2. What happens to tips earned before KYC is complete?**
+They exist, they are attributable, and they cannot be paid out. Whether they accrue against the person, are held by the venue, or are refused at the point of payment is undecided, and each answer produces a different Ledger shape.
+
+**3. One waiter working at two restaurants — one Stripe account or two?**
+One account is a single identity across employers with one payout stream; two are separate relationships that never merge. This is not only technical: it decides whether that person's earnings across two employers are ever visible as one figure, and to whom.
+
+**None of these is answered by ADR-053**, which settles who owns the tip, not how the recipient comes to exist.
 
 ---
 
