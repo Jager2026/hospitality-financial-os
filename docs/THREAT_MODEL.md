@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.13.0
+version: 1.14.0
 status: Active
 classification: Critical
 owner: Founder
@@ -414,6 +414,43 @@ The entry below is a different kind of open item from every one above it — not
 **What's genuinely missing:** whether a waiter receiving tips through this platform is, for GPM purposes, an employee of the restaurant, self-employed, or something else is undecided — and that classification determines the applicable rate, the legal basis for any tax treatment, and who (if anyone) is the tax agent. This blocks two distinct things, not one: actually computing an estimated tax figure, and merely *displaying* one next to the existing gross/net tip amounts (`MASTERPLAN.md`, "Pilot-Ready Product," ADR-029 Decision 2). Becomes answerable only when the Founder has a written answer from a Lithuanian tax/payroll consultant — not a development task, and not something this codebase's own code can close by itself.
 
 **What this does NOT block, added because it was assumed to and the assumption stood unchallenged for a day: data retention periods.** Those are decided by accounting law and do not wait on this classification. The two were being treated as one open question when only one was open, and the effect was to hold up something answerable — the privacy policy's retention section — behind something that is not. Retention is now determined (`PERSONAL_DATA_MAP.md` §6). **The scope of an open item is part of the item**: an entry that does not say where it stops will be read as stopping wherever the reader fears, and a blocked-on-legal-advice entry is the kind most likely to be read expansively.
+
+## A chargeback after the account is disconnected never reaches our books, and reconciliation reports a discrepancy it cannot resolve
+**What exists:** `PaymentReconciliationService` (ADR-031/032) compares our records against Stripe's and reports what does not match. The webhook path processes late events normally and deliberately (ADR-054).
+
+**What's genuinely missing:** the events themselves, once a connected account is disconnected. Stripe stated it in writing on 2026-09-02:
+
+> "If a connected account has been disconnected from your Platform, any events on the connected account will not reach the Platform's webhook endpoint."
+
+A chargeback on a payment taken months before the disconnection is Stripe reversing money our Ledger still records as received. **No event arrives, so nothing reverses it here.** Reconciliation then reports a difference **whose resolving data sits on the other side of a connection that no longer exists** — and reports it on every subsequent run, for that account, indefinitely. ADR-054's guarantee that late events land in the Ledger holds only while the connection does, which nobody on this side controls.
+
+**Options, none chosen:**
+
+- **(a) Reconcile from Stripe's side before the connection is lost** — settle open exposure at closure, on the assumption disconnection follows. Cheap, but it guesses at a human action that may come months later or not at all, and it cannot see a chargeback that has not happened yet.
+- **(b) Detect disconnection and freeze that account's reconciliation** — stop reporting differences that are known to be unresolvable, and mark the account's books as closed-with-exposure rather than wrong. Does not recover the money; it stops a permanent false signal, which is the part that erodes trust in the check.
+- **(c) Accept the exposure and record it per account** — an explicit, bounded liability rather than a recurring alert. Honest, and it needs a number: what a platform's realistic worst-case chargeback exposure is over the dispute window after a venue leaves.
+- **(d) Hold funds until the dispute window closes.** The complete answer and the most expensive, in product terms rather than engineering: it changes what a departing owner is paid and when, which is a commercial decision, not a technical one.
+
+**Not urgent, and the reason is specific rather than optimistic:** no restaurant is connected today, so there is no exposure to carry. This must be answered **before the first pilot restaurant is offboarded**, not before the first is onboarded.
+
+---
+
+## Disconnecting a connected account is Dashboard-only, so offboarding cannot be automated and the product cannot see it happen
+**What exists:** nothing. This is not a gap in our code — it is a property of Stripe's API surface, stated in writing on 2026-09-02:
+
+> "There's no API path to disconnect a connected account. It is currently a Dashboard-only feature."
+
+**What's genuinely missing, and it is two separate things.**
+
+**Offboarding cannot be a code path.** Whatever "a venue leaves the platform" is supposed to mean operationally, the final step is a human being logging into a Stripe Dashboard and clicking. No runbook this project writes can be executed by the system, and any future offboarding flow ends in an instruction to a person rather than a call.
+
+**More consequentially: the platform cannot observe it.** With no API to perform the action there is equally no call that reports it, and **the disconnection is performed by the account owner, not by us** — so the party who acts and the party who needs to know are different people, with nothing between them. The platform learns of it only by inference: events that stop arriving, or an API call that starts failing. Neither is watched today, and "events stopped" is indistinguishable from "a quiet venue" without something that expects them.
+
+**Why this is filed separately from the entry above** rather than as part of it: that one is about money that cannot be reconciled, and this one is about a state change the system is blind to. **The blindness is the more general problem** — it would still be a problem if the reconciliation question were answered tomorrow, because every other decision that assumes a live connection inherits it.
+
+**Options, none chosen:** treat a run of failing API calls for one account as evidence and mark it disconnected; add a periodic liveness check per connected account; or accept the blindness and require offboarding to be recorded by hand in our own system, which is the cheapest and depends entirely on somebody remembering — **the shape this project has already recorded as the one that decays** (ADR-058, and the backlog entry on instruments nobody reads).
+
+---
 
 ---
 

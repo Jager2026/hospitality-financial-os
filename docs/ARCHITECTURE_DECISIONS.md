@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.44.0
+version: 1.45.0
 status: Active — ADR-001..056; ADR-057 onward in docs/adr/
 classification: Internal
 owner: Founder
@@ -1470,6 +1470,8 @@ Three things were wrong about that, and only one of them was in the code.
 - **Not renamed:** the HTTP method (`DELETE`) and the permission identifier (`restaurant.delete`). Both are identifiers rather than words a customer reads, and renaming the permission would be an RBAC data migration whose reconciliation gate (ADR-048) would refuse the next deploy over a revocation nobody intended. **Cosmetics are not worth a blocked deploy**; the description carries the meaning instead.
 - **The authorization/reporting split stands unchanged** — the same distinction ADR-051 drew. Operational reads filter; reporting reads must not, because a payment taken before closing still happened and the ten-year floor requires it to remain in the books of its own period.
 
+> **AMENDED 2026-09-02 — the guarantee below holds only while the account stays connected, and nothing guarantees that. See the Amendment at the end of this ADR.**
+
 **Webhooks arriving after closure are processed normally, and that is now a decision rather than an accident.** It was already the behaviour — the webhook path never reads `Restaurant` through a gate at all — but nothing recorded it and nothing tested it. Refusing them would strand money: Stripe would hold a settled charge our books never recorded, and `PaymentReconciliationService` compares exactly those two. The capture in flight when the owner clicked close, and a chargeback six months later, both belong in the Ledger.
 
 **The sub-case gets a searchable log line and deliberately no alert.** A `payment_intent.succeeded` with no matching `Payment` row means a charge created outside this platform — most plausibly by the owner in their own Stripe Dashboard. It carries a `marker` field so it can be searched for rather than noticed. **No alert, because there is nobody on call to receive one, and a channel with no recipient is worse than none — it looks like coverage.**
@@ -1481,6 +1483,26 @@ Three things were wrong about that, and only one of them was in the code.
 The reporting half is not decoration. **A suite that only proved a closed venue disappears would pass against an implementation that erased its financial history** — the outcome the retention floor forbids, and the one a well-meaning "make delete actually delete" change would produce.
 
 **Not decided here:** reopen (its own change); whether a closed venue should still absorb Stripe `account.updated` events; and the exact wording alignment between the screen and Terms of Service §4/§11, which cannot be completed while the Terms text lives outside this repository.
+
+### Amendment — 2026-09-02: disconnection stops the events this decision depends on
+
+**Stripe answered in writing, and it voids the premise rather than the reasoning:**
+
+> "If a connected account has been disconnected from your Platform, any events on the connected account will not reach the Platform's webhook endpoint."
+
+> "There's no API path to disconnect a connected account. It is currently a Dashboard-only feature."
+
+**What survives, stated first because the distinction is the whole content of this amendment.** *Closing a venue* on our side still changes nothing at Stripe — `close()` touches no Stripe API, the account stays open, and its events keep arriving. For closure alone, the decision above is correct exactly as written.
+
+**What does not survive is the guarantee.** The decision rests on an unstated premise: that the connection outlives the closure. It need not. **Disconnection is a separate act, performed by the account owner in their own Stripe Dashboard, and it is precisely what someone does when they finish with a platform** — most naturally in the same session in which they closed their venue. The moment they do, the late events this ADR promised to process stop existing. *"The capture in flight when the venue closed will still land in the Ledger"* is true only if nobody pressed that button.
+
+**The consequence is not a lost webhook; it is books that cannot be closed.** A chargeback on a payment taken months earlier is Stripe reversing money that our Ledger still records as received. With no event, nothing reverses it here. `PaymentReconciliationService` compares our records against Stripe's and will report a discrepancy **it has no way to resolve**, because the data needed to resolve it is on the other side of a connection that no longer exists — and it will report it on every run, forever, for that account.
+
+**And we cannot see it happen.** With no API to disconnect, there is equally no API call that says *"you have been disconnected"*. The platform learns of it only by inference — events that stop, or an API call that fails — and neither is watched today. **The first symptom will be a reconciliation discrepancy whose cause is invisible from inside this system.**
+
+**Not fixed here, deliberately.** No restaurant is connected today, so nothing is currently at risk and there is no incident to respond to. The open question is recorded in `THREAT_MODEL.md` under *Open, Not Answered*, in two entries — the reconciliation gap, and the fact that offboarding cannot be automated — with options shown and none chosen.
+
+**What this does not change:** the rename, the authorization/reporting split, the tests, and the reopen copy. All stand.
 
 ---
 
