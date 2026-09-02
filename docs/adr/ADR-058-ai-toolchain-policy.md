@@ -1,6 +1,6 @@
 ---
 title: ADR-058 — AI toolchain policy: plan mode default, permission rules, PR template
-version: 1.1.0
+version: 1.2.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -9,7 +9,7 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-058 — AI toolchain policy: plan mode default, permission rules, PR template
 
-**Status:** Accepted (Sprint 14)
+**Status:** Accepted (Sprint 14), **with Decision §1 reversed by the Founder on 2026-09-01** — see *Amendment* at the end. §2, §3 and §4 stand.
 
 ---
 
@@ -26,6 +26,8 @@ Three of its rules are mechanisable, and this ADR mechanises them.
 ## Decision
 
 ### 1. `plan` is the default permission mode, committed to the repository
+
+> **REVERSED 2026-09-01 by the Founder.** `defaultMode` is no longer set; the session runs in Accept-edits. The reasoning below is kept as written because the *Amendment* at the end answers it, and a decision whose original argument has been deleted cannot be re-examined. **§2, §3 and §4 are unaffected** — `ask` and `deny` are untouched.
 
 `.claude/settings.json` is checked in with `permissions.defaultMode: "plan"`.
 
@@ -158,3 +160,23 @@ What is *not* in question: the `deny` rules fire. That was observed by the refus
 **Process lesson, and it is the reusable part of this ADR.** The attribution is unavailable because **two changes went into one commit**: the `PowerShell(...)` mirror rules were removed and `env.CLAUDE_CODE_USE_POWERSHELL_TOOL` was added together. Either alone would have been decisive; together they are not separable after the fact. This is `AI_WORKFLOW.md`'s *one axis of risk per PR* — violated one level down, **at the commit**, where the rule is easy to think does not apply because the PR as a whole still has one axis. It does apply: **a commit is the unit at which a cause can still be isolated**, and once two candidate causes land together, the only way back is an experiment someone has to decide is worth running. Here it was not, and the cost is a permanent open question in a document about a security boundary.
 
 **Verification this ADR cannot do for itself.** Permission rules take effect for sessions that start after the file exists, and a running session cannot observe its own startup validation. **Whether Claude Code accepts every pattern, and whether `plan` is actually the mode on launch, is verifiable only by starting a new session in this repository** — the schema, the JSON, and the rule shapes were checked here; the runtime acceptance was not.
+
+---
+
+## Amendment — 2026-09-01: Decision §1 reversed, plan mode is not the default
+
+**Founder's decision.** `permissions.defaultMode` is removed from `.claude/settings.json`. The session runs in **Accept-edits**, as it did before this ADR. **The reason given is cost: plan mode proved more expensive than expected in practice.**
+
+**Scope of the reversal, stated narrowly on purpose.** Only §1 falls. **§2's `ask` and `deny` rules are untouched**, and that is the point rather than a detail — plan mode and the permission rules were doing different jobs, and only one of them was expensive. Plan mode gated *every edit*, which is most of the work; `ask` gates a handful of commands that are irreversible or reach outside the machine. **The cost of a gate is how often ordinary work has to pass it**, which is exactly the reasoning §2 already used to move `db:reset` out of `deny`. Applied to plan mode, it lands the same way.
+
+**What this restores, and it is worth naming honestly.** §1's argument was that *"never start coding immediately"* — v1.0's best line — becomes something the tool refuses rather than something a session remembers. Reversing it returns that step to convention, which is where v1.0 had it and where this ADR's own Context observed that conventions decay. **That objection is not answered by this amendment; it is accepted as the price.** The claim is not that the design step no longer matters, only that it is not worth a confirmation on every edit.
+
+### What still gets checked, and by whom
+
+**The session report — checked, after the fact, by the architect.** This is the surviving verification, and it is the one this project has always actually relied on: the distinction between what was *run*, with results, and what was written and not run. `IMPLEMENTATION_PLAN.md`'s Definition of Done and `.github/pull_request_template.md` (§4) are unaffected by this amendment and now carry proportionally more weight.
+
+**The state of GitHub before a merge — checked by nobody.** The Founder does not open GitHub. Nobody looks at the branch, the conflict status, or which check ran against which commit. **A merge therefore rests entirely on the session's own account of the repository**, and there is no second reader between the report and the merge.
+
+**Why that is recorded here rather than left as an operational detail.** It is the same shape as the finding this ADR spent a day on: *"it ran" was never evidence of "it ran without asking."* A session cannot see whether a prompt appeared, and it equally cannot be audited on a repository state nobody else looks at. **The remedy is not a new gate; it is that the report must name the thing rather than imply it** — the CI *result* of the *head commit*, not the fact of a push; the merge-base a version was checked against, not "versions bumped". Both are already required. The reversal is what makes them load-bearing.
+
+**Not changed by this amendment:** §2 (permission rules), §3 (the second shell, and its open attribution), §4 (the PR template), and every observation dated 2026-09-01 recorded above.

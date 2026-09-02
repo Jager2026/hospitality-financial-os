@@ -1,6 +1,6 @@
 ---
 title: AI_WORKFLOW
-version: 2.1.0
+version: 2.2.0
 status: Active
 classification: Critical
 owner: Founder
@@ -16,17 +16,35 @@ supersedes: AI_WORKFLOW v1.0 — reconciled below rather than discarded
 
 ---
 
+# The working cycle
+
+This is how work actually moves, recorded because the gate is inside it and is easy to mistake for absent.
+
+1. **The Founder writes the task.** Format and boundaries as below.
+2. **Claude Code does the work and reports.** The report is the reviewable artefact: what was run with its results, versus what was written and not run.
+3. **The Founder forwards the report to the architect.** The Founder does not open GitHub.
+4. **The architect approves or returns corrections.**
+5. **Claude Code merges, on approval** — rebasing onto current `main`, updating the branch, waiting for CI, and merging only on a green head commit.
+
+**The Founder does not open GitHub, and this is the fact that decides how everything else must be written.** Nobody checks the repository state before a merge — not the branch, not the conflict status, not which check ran on which commit. **Whatever a merge depends on has to be established in the report or by the session itself**, because there is no second pair of eyes on the repository between the report and the merge. A report that says "pushed" instead of naming the CI result of the head commit is not a smaller report; it is a report the reader cannot act on.
+
+**Claude Code merging is not the gate being removed. It is the gate being moved.** The decision to merge belongs to the architect's approval, and the session executes it. What the session may decide is *how* to land an approved change — rebase, conflict resolution, waiting for a check — never *whether* to land it. **An approval is for a change, not for a branch**: if resolving a conflict alters what the change does, that is new work and needs approving again, not merging on the strength of the earlier answer.
+
+# The permission policy (ADR-058)
+
+`.claude/settings.json` is committed, so it is the project's policy rather than one machine's. It carries `ask` rules for `git push`, `stripe`, `railway`, every real form of `prisma migrate deploy` and `migrate dev`, and the three `db:reset` wrappers; `deny` rules for the raw `prisma migrate reset` and for reading real env files. `db:reset` is `ask` rather than `deny` on purpose — **the danger of a reset is which database is on the other end, not which words are in the command**, and a static pattern cannot see that; the contextual check belongs to a `PreToolUse` hook in a later PR. The file also sets `env.CLAUDE_CODE_USE_POWERSHELL_TOOL`, and the PowerShell tool is in fact absent — verified 2026-09-01 on Claude Code 2.1.252 — so there is one shell for a rule to be written about rather than two namespaces to keep in sync. **That the setting is what removes it was never established** (ADR-058 records the alternative candidate), so the absence is re-checked after any Claude Code upgrade or any change to the `Bash` deny rules rather than assumed to persist.
+
+It contains **no `allow` rules**, deliberately: `.claude/settings.local.json` had accumulated over 900 of them, each approved once in a prompt and never reviewed, and committing that pattern would only give it a commit behind it.
+
+**It no longer sets `defaultMode`.** Plan mode was the committed default for one day and the Founder reversed it on 2026-09-01 (ADR-058): the session now runs in Accept-edits, as it did before. **The `ask` and `deny` rules are untouched** — they were never what plan mode did. Reversing the default returns the *design* step to convention, which is where v1.0 had it; the *dangerous commands* stay mechanically gated.
+
+**What that leaves checked, and what it does not.** Steps 1–4 — understand, locate, design before coding — are once again a thing a session does because it is expected to, not a thing the tool refuses to skip. **The session report is what remains checked**, by the architect, after the fact. **What is checked by nobody is the state of the repository before a merge**, since the Founder does not open GitHub. Both facts belong in the same paragraph because together they say where to be careful: a report can be read, and an unpushed assumption cannot.
+
+---
+
 # Reconciliation of v1.0
 
 v1.0 was written before the project had learned anything. Ten steps of the form *"Never start coding immediately"*, *"Write tests. Run tests"*, *"Prefer small commits"*. Gone through by category, the way `UX_MAP.md` was.
-
-## Now mechanised rather than intended (ADR-058)
-
-**Steps 1–4 of v1.0 — understand, understand the feature, locate the module, design first — are performed in `plan` mode, and approval of the plan is the gate before any code.** `.claude/settings.json` sets `permissions.defaultMode: "plan"` and is committed, so it is the project's policy rather than one machine's.
-
-This is v1.0's best line — *"never start coding immediately"* — turned from a thing a session remembers into a thing the tool refuses. The same file carries `ask` rules for `git push`, `stripe`, `railway`, every real form of `prisma migrate deploy` and `migrate dev`, and the three `db:reset` wrappers; `deny` rules for the raw `prisma migrate reset` and for reading real env files. `db:reset` is `ask` rather than `deny` on purpose — **the danger of a reset is which database is on the other end, not which words are in the command**, and a static pattern cannot see that; the contextual check belongs to a `PreToolUse` hook in a later PR. The file also sets `env.CLAUDE_CODE_USE_POWERSHELL_TOOL`, and the PowerShell tool is in fact absent — verified 2026-09-01 on Claude Code 2.1.252 — so there is one shell for a rule to be written about rather than two namespaces to keep in sync. **That the setting is what removes it was never established** (ADR-058 records the alternative candidate), so the absence is re-checked after any Claude Code upgrade or any change to the `Bash` deny rules rather than assumed to persist.
-
-It contains **no `allow` rules**, deliberately: `.claude/settings.local.json` had accumulated over 900 of them, each approved once in a prompt and never reviewed, and committing that pattern would only give it a commit behind it.
 
 ## Still true — kept
 
