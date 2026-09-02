@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.13.0
+version: 2.14.0
 status: Active
 classification: Internal
 owner: Founder
@@ -81,7 +81,9 @@ User
 ############################################################
 **Purpose:** Authentication identity.
 
-**Fields:** id, email, display_name, password_hash, email_verified, two_factor_enabled, locale, last_login, status, created_at, updated_at
+**Fields:** id, email, display_name, password_hash, email_verified, two_factor_enabled, locale, last_login, status, created_at, updated_at, stripe_account_id, stripe_onboarding_status, stripe_transfers_status, stripe_payouts_status, stripe_requirements_due, stripe_account_created_at
+
+**Stripe recipient account (ADR-061, Model B).** One person, one connected account, attached here and never to a Membership: a waiter completes KYC once and carries it between venues, and a second Membership references the same account through `user_id` without creating anything. `stripe_account_id` is unique and nullable — only a User invited as staff ever gets one — and a database CHECK refuses the empty string, so NULL is the only way to say "no account". This is a **recipient** account (v2, `configuration.recipient`, `dashboard: "none"`): it receives transfers and never takes card payments, and it must not be handed to code written for `restaurant.stripe_account_id`, which is a merchant account. `stripe_onboarding_status` reuses the `onboarding_status` enum and reads `complete` when `stripe_transfers` is active — the one status that decides whether this person may be selected as a tip recipient at all (ADR-061 §3). `stripe_transfers_status` and `stripe_payouts_status` are kept separately because they answer different questions — may money reach this account, and may it leave to a bank — and a person can be a valid recipient while payouts still wait on a bank account. All of it is derived from the live account on refresh, never parsed from a webhook payload, the same rule Restaurant follows (ADR-009). Measured against the live API on 2026-09-02 for an individual in Lithuania: twelve requirement entries at creation — name, date of birth, address, bank account, Terms attestation, `business_url` — and **no identity document**.
 
 **Relationships:** User → many Membership (across Organizations and Restaurants)
 

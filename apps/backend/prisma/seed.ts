@@ -83,6 +83,14 @@ const ROLES: Array<{
     description: "Day-to-day operational control of one Restaurant",
     permissions: MANAGER_PERMISSIONS,
   },
+  // ADR-061: still zero, and now on purpose rather than by omission. Everything a waiter does
+  // with their own money is reached by OWNERSHIP, not by a Permission: `GET /wallets` returns the
+  // caller's own Wallets (JwtAuthGuard only, no @RequirePermission), `GET /tips/me` likewise, and
+  // starting or resuming one's own Stripe onboarding is an act on the caller's own User row. The
+  // one thing a Permission here would have to gate — whether this person can be selected as a
+  // tip recipient at all — is not a right the waiter holds; it is a fact about their Stripe
+  // account (`stripe_transfers` active), enforced at staff selection (ADR-061 §3). A Permission
+  // that a Role grants cannot express "verified by a third party", so none is added.
   { name: "Waiter", description: "Restaurant staff member", permissions: [] },
 ];
 

@@ -38,8 +38,27 @@ export const REDACTED_USER_STRING_FIELDS = ["email", "displayName", "passwordHas
  *    financial row indirectly hangs from. Erasing it would mean deletion, which is the option
  *    rejected above.
  *  - `locale` — a display preference. Not an identifier, and no more revealing than the fact that
- *    a row exists at all. */
-export const RETAINED_USER_STRING_FIELDS = ["id", "locale"] as const;
+ *    a row exists at all.
+ *  - `stripeAccountId` (ADR-061) — a join key to a financial counterparty, the same shape as `id`
+ *    and `Membership.id`: once Model B moves money, every transfer to this person hangs from this
+ *    id for the ten-year retention period, and erasing it would sever the retained financial rows
+ *    from the account they settled to. It is not a name, an address or a contact detail — those
+ *    live at Stripe, under Stripe's own controller obligations, and are erased there by Stripe's
+ *    process, not by clearing a pointer here. Stated honestly: the pointer is a linkage from an
+ *    emptied row to an identity Stripe still holds, exactly as `id` is a linkage to the audit
+ *    trail. Whether an emptied person must also stop being a *selectable tip recipient* is a
+ *    Model B question (ADR-061 §3) that nothing today needs answered, because nothing today moves
+ *    money to a person.
+ *  - `stripeTransfersStatus`, `stripePayoutsStatus` (ADR-061) — Stripe's capability-status
+ *    strings ("active", "restricted"). Facts about an account's state, not about a person; no
+ *    more revealing than the row's existence. Same reasoning as `locale`. */
+export const RETAINED_USER_STRING_FIELDS = [
+  "id",
+  "locale",
+  "stripeAccountId",
+  "stripeTransfersStatus",
+  "stripePayoutsStatus",
+] as const;
 
 /** `.invalid` is reserved by RFC 2606 and can never be routable, so a tombstone can never
  * accidentally become a deliverable address. Unique per redaction, not a shared constant: `email`

@@ -254,6 +254,28 @@ model User {
   updatedAt        DateTime     @updatedAt @map("updated_at")
   deletedAt        DateTime?    @map("deleted_at")
 
+  /// ADR-061 (Model B, ADR-053): one person, one Stripe connected account — attached to the
+  /// User, never to a Membership. A waiter completes KYC once and carries it between venues; a
+  /// second Membership references the same account through `userId` and creates nothing. This is
+  /// a *recipient* account (v2, `configuration.recipient`, `dashboard: "none"`), not a merchant
+  /// one like Restaurant.stripeAccountId — it receives transfers, it never takes card payments.
+  /// Nullable: only Users who have been invited as staff ever get one (ADR-061 §2).
+  stripeAccountId          String?           @unique @map("stripe_account_id")
+  /// Derived from the live account on every refresh, the same way Restaurant's is (ADR-009):
+  /// never parsed from a webhook payload. COMPLETE means `stripe_transfers` is active — the one
+  /// capability that decides whether this person can be a tip recipient at all (ADR-061 §3).
+  stripeOnboardingStatus   OnboardingStatus  @default(NOT_STARTED) @map("stripe_onboarding_status")
+  /// Raw capability statuses, kept separately because they answer different questions:
+  /// `stripe_transfers` = may money be moved TO this account; `payouts` = may it leave to a bank.
+  /// A person can be a valid recipient while payouts are still blocked on a bank account.
+  stripeTransfersStatus    String?           @map("stripe_transfers_status")
+  stripePayoutsStatus      String?           @map("stripe_payouts_status")
+  /// `requirements.entries` as Stripe returns them — the list the onboarding screen shows and the
+  /// reason a status is what it is. Measured on 2026-09-02 for an LT individual: 12 entries at
+  /// creation, identity fields + bank account + ToS attestation, no identity document (ADR-061).
+  stripeRequirementsDue    Json?             @map("stripe_requirements_due")
+  stripeAccountCreatedAt   DateTime?         @map("stripe_account_created_at")
+
   memberships          Membership[]
   invitationsSent      MembershipInvitation[] @relation("MembershipInvitationInvitedBy")
   auditLogs            AuditLog[]
