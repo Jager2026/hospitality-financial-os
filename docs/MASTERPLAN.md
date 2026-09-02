@@ -1,7 +1,7 @@
 ---
 title: MASTERPLAN
 subtitle: Hospitality Financial Operating System
-version: 2.3.0
+version: 2.4.0
 status: Active
 classification: Internal
 owner: Founder
@@ -506,7 +506,7 @@ Immutable double-entry accounting; attribution through Membership rather than th
 
 **Qualification, and it belongs in the specification rather than a footnote: this is a lead in time, not a barrier to entry.** Double-entry accounting is well understood and copyable by any competent team. What is expensive to copy is not the ledger — it is the ledger *wired into* refunds, disputes and payouts, so that a reversal months later lands correctly in both parties' view of the same history. **The advantage is the wiring, and the lead is measured in engineering months, not in structural protection.** Any claim of a durable moat here is unsupported.
 
-**2. Tips by name.** Not a shared pool divided afterwards, but a specific waiter, fixed at the moment of payment. The person recorded is whoever was selected as having served the table — which may be a Manager or the Owner, not only someone holding a Waiter role.
+**2. Tips by name.** Not a shared pool divided afterwards, but a specific waiter, fixed at the moment of payment — and paid at once, with no holding period. **A refund returns the bill; the tip stays with the waiter** (ADR-062). That is industry practice, not something this product invents, and it is why no withdrawal window exists. The person recorded is whoever was selected as having served the table — which may be a Manager or the Owner, not only someone holding a Waiter role.
 
 ### Tier 2 — strong, and reproducible by a competitor
 
