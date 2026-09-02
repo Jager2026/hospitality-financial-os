@@ -107,6 +107,25 @@ export class RestaurantController {
     await this.restaurantService.close(id, user);
   }
 
+  /**
+   * THREAT_MODEL (#118). Three separate measures, because no one of them closes this alone.
+   *
+   * The permission lives in the service (`restaurant.create`, 404 not 403). **This throttle is
+   * the part a permission cannot do:** an Owner legitimately holds the right and can still mint an
+   * unbounded series, and links get burned without anyone's intent — mail clients follow links to
+   * scan them, and a burned link sends the owner back for another.
+   *
+   * **The threshold comes from the measured lifetime.** A link created against a real test account
+   * on 2026-09-02 expired **five minutes** later. Ten per hour therefore lets a legitimate owner
+   * re-request one roughly every six minutes, continuously, for an hour — beyond any plausible
+   * honest need — while turning "unlimited" into a number.
+   *
+   * **What it does not do, stated because the limit matters:** `ThrottlerGuard` tracks by IP, not
+   * by user or by venue. This bounds one source; it does not bound a determined caller with
+   * several. The existing mechanism (ADR-042, Redis-backed and shared across instances) was used
+   * rather than a new one, and its tracking granularity is what it is.
+   */
+  @Throttle({ default: { limit: 10, ttl: 3_600_000 } })
   @Post("restaurants/:id/onboarding-link")
   @HttpCode(HttpStatus.OK)
   createOnboardingLink(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {

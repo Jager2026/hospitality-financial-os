@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.23.0
+version: 2.24.0
 status: Active
 classification: Critical
 priority: Highest
@@ -391,6 +391,16 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **The shape of a fix, not a decision on it.** A CI check can see what a branch cannot: for each document the PR changes, compare its new version against that document's version on **every other open PR's head**, and fail on a duplicate. That needs the GitHub API rather than the local repository, which is why it does not belong in `repo-invariants.spec.ts` — the invariant suite is deliberately offline and should stay that way. **Estimate: small, and gated on deciding where it lives** (its own workflow, or a step in the existing one).
 
   **No trigger date.** The related question — why `INDEX.md` is where these collisions keep happening — has its own entry below.
+
+- **Working files holding secrets get written to disk, and nothing stops them being created.** Over the course of Sprint 14 several landed in a scratch directory — `env-backup-real`, `ikey.txt`, `tok3.txt`, `.env.tmp` among them — created while verifying configuration and boot-time secret validation. **They were cleaned up and checked: no live key survived**, and none was ever inside the repository, so nothing reached git.
+
+  **The gap is that this depended entirely on someone noticing.** `.claude/settings.json` denies *reading* `.env` (ADR-058), and `.gitignore` stops `.env` files being committed — but neither prevents a secret being **copied into a differently-named file**, and a file called `ikey.txt` matches no ignore rule and trips no deny pattern. The protections in place are all shaped around one filename convention, and a copy escapes them by not using it.
+
+  **Why it is worth an entry rather than a resolution to be careful:** the file that leaks is by definition the one nobody was thinking about, so "remember not to" is the remedy this project has already recorded as the shape that decays. The directory is outside the repository, which is what kept git clean and is also why no repository-level check would ever have seen it.
+
+  **Options, none chosen.** A pre-commit or CI scan for high-entropy strings and known key prefixes (`sk_live_`, `sk_test_`, `whsec_`) across the working tree, not only staged files — catches the copy, and costs a false-positive budget. Or a session-hygiene rule that verification writes only to the scratchpad and the scratchpad is emptied at session end — cheaper, and depends on the same discipline the entry doubts. Or accept it and rely on the fact that no such file has ever been inside the repository, which is true so far and is an observation rather than a mechanism.
+
+  **Trigger: before any secret with production scope exists on this machine.** Today every key that has touched it is test-mode. That is the property doing the protecting, and it expires the first time a live key is handled locally.
 
 - **A diagnostic instrument exists, is correct, and was not looked at twice in a row — and the question is not how to remember it.** `global-setup.ts` prints the accumulated Payment and OutboxEvent counts on every run and escalates to an explicit WARNING naming `db:reset` once `unpublished >= 50`. It was built so that nobody has to suspect the database before diagnosing. On 2026-09-01 two `outbox-poller.service.spec.ts` failures were each diagnosed from scratch — from the assertion text outward, then confirmed by querying the database by hand — while the answer was already printed in the same output.
 

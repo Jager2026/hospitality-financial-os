@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.14.0
+version: 1.15.0
 status: Active
 classification: Critical
 owner: Founder
@@ -301,28 +301,30 @@ And nothing ran the seed. `preDeployCommand` ran migrations only, so **ADR-044's
 
 **A related audit, reported and not fixed.** Every route was enumerated with a parser validated against a known-answer pair first — the first attempt read decorators in the wrong order and produced a page of phantom findings, the same bug `repo-invariants.spec.ts` already records. **36 of 57 routes carry no `@RequirePermission`**, and most are correctly so: public auth and agreements routes, `/health`, currency reference data, invitation acceptance, self-scoped profile and `tips/me`, the ownership-scoped wallet routes, and the Stripe webhook. Three are worth their own look and are **not** part of this fix:
 
-- `POST /restaurants/{id}/onboarding-link` — reachability only, and it is an **action**: it mints a Stripe onboarding link for the venue's connected account.
+- ~~`POST /restaurants/{id}/onboarding-link` — reachability only, and it is an **action**: it mints a Stripe onboarding link for the venue's connected account.~~ **Closed 2026-09-02 — see Closed Threat 27.** It needed three measures rather than the permission this list implies.
 - `GET /restaurants/{id}` — reachability only; returns `companyNumber`, `vatNumber`, `stripeAccountId` and payout status.
 - `GET /tips/{id}` — reachability only; one waiter may read another's tip at the same restaurant.
 
----
+## 27. Any Membership at a venue could mint a Stripe onboarding link, and that link leads to the form that sets the payout bank account
 
-# Accepted Risk (Not Closed — Deliberately Left Open)
+**Closed by three measures, 2026-09-02 — and the count is the finding.** A single permission would have left two of the three ways in open, which is why this was recorded and stopped rather than fixed as "the fourth instance of the #109 pattern".
 
-## Redis flush silently un-revokes outstanding refresh tokens and token families
-**Risk:** If Redis is flushed or lost (crash without persistence, manual `FLUSHALL`, infrastructure failure), every revoked `jti` and revoked `familyId` disappears. A previously-stolen-and-revoked refresh token would once again verify successfully by signature until its own natural expiry (up to 7 days, `JWT_REFRESH_TTL_SECONDS`).
+**1. The permission — `restaurant.create`, checked at the venue, 404 rather than 403.** `hasPermissionAtRestaurant`, the same predicate #109 used. **`restaurant.edit` was rejected on the merits:** Manager holds it, and the account a venue's money is paid into is the owner's decision, not the shift's. **No new Permission was created** — a new RBAC row is a data migration whose reconciliation gate (ADR-046/ADR-048) would refuse the next deploy over a grant nobody intended. `restaurant.create` is not a stretch: `POST /restaurants` is gated by it and is the call that **creates the Stripe Connect account**, so finishing that account is the same act continued. **It restricts to Owner and Administrator** — the two seeded Roles holding it — not to Owner alone, because Administrator holds every Permission by design (ADR-044) and is platform-only.
 
-**Recorded in:** ADR-019, Consequences. *"Accepted risk, unchanged from the original decision: a Redis flush would silently un-revoke every outstanding refresh token and family flag (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage."*
+**2. The status gate — DEFERRED, and the reason is a fact that could not be established.** The intended rule was to refuse the route once no requirements remain, closing the window rather than narrowing it. It turns on what the hosted form shows for an account whose onboarding is complete. **Zero of the 32 connected accounts in the sandbox has completed onboarding** — every one has `details_submitted: false` and 18 outstanding requirements — and completing one means submitting identity and bank-account details, which this session does not do. **Live Stripe was reachable; the missing thing was a completed account, not the connection.**
 
-This is listed here, separately from the Closed Threats above, on purpose: it is a threat the Founder and this project have knowingly chosen to accept for MVP, not one that has a mitigation in place. Revisiting it is an explicit future decision, not a bug.
+**What that probe did establish, by execution rather than from the reference:** `account_update` **is refused for our accounts** — Stripe's own words, *"You cannot create `account_update` type Account Links for this account. Valid types for this account are [\"account_onboarding\"]"* — and an `account_onboarding` link created against a real account expired **exactly five minutes** later. The earlier entry inferred both from documentation; both are now measured. The premise behind the deferred gate therefore holds, even though the gate itself is unbuilt.
 
----
+**3. The throttle — 10 per hour on the route, via the existing Redis-backed mechanism (ADR-042).** **A permission cannot do this job:** an Owner legitimately holds the right and can still mint an unbounded series, and mail clients burn links by following them to scan. The threshold comes from the measured five-minute lifetime — ten per hour allows a re-request roughly every six minutes, continuously, past any honest need. **Its limit, stated rather than implied:** `ThrottlerGuard` tracks by IP, not by user or venue, so this bounds one source and not a caller with several.
 
-# Open, Not Answered
+**Why one permission was not enough, which is the transferable part.** The three measures answer three different questions — *who may ask*, *when asking still makes sense*, and *how often*. The permission alone leaves an Owner minting an unlimited series into a window that never closes; the throttle alone leaves a Waiter doing it slowly; the gate alone leaves anyone doing it while onboarding is unfinished, which is exactly when the bank-account form is live. **Treating this as one more instance of the #109 read-scoping pattern would have shipped one third of the fix and closed the entry.**
 
-Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet, or the answer depends on a decision outside this codebase entirely. Listed honestly rather than filled in with a guess, per the Founder's own instruction.
+**Residual, named rather than left implicit.** With measure 2 deferred, an Owner at a venue whose onboarding is already complete can still mint links, capped at ten per hour. What such a link displays is the fact above that could not be established. **Reopen this entry if that ever proves to be an editable form.**
 
-## Any Membership at a venue can mint a Stripe onboarding link, and that link leads to the form that sets the payout bank account
+**Falsified individually.** Removing the permission check fails the permission test alone (9 of 10 still green); removing the throttle fails the throttle test alone (9 of 10 still green). The permission test asserts the **positive** case in the same run — an Owner is served — because #108's first falsification was unclean in exactly that way, with markers flipping for a crash rather than a denial.
+
+**What was verified below is what the entry said when it was opened**, kept as written. Two of its inferences have since been confirmed by execution, noted above.
+
 
 **This is not the read-scoping class, and the difference is why it is recorded here instead of being fixed alongside the by-id reads.** It was going to be fixed as the fourth instance of the #109 pattern. Establishing what the link actually permits — before writing the fix — showed it is a different question.
 
@@ -348,6 +350,24 @@ Genuinely unanswered — not because no one has thought about them, but because 
 **Permissions that exist, shown rather than invented.** The seeded vocabulary is `restaurant.create`, `restaurant.edit`, `restaurant.delete`, `membership.invite`, `membership.manage`, `reports.view`, `payments.manage`, `tips.configure`, `data.export`, `roles.manage`. The closest existing fit is **`restaurant.edit`** — held by Owner, Administrator and Manager. Whether a Manager should be able to set the venue's payout account is exactly the question above, and it is not answered by picking the nearest available name. No new Permission is proposed here; adding one is an RBAC change with its own reconciliation consequences (ADR-046, ADR-048).
 
 **Not verified:** what the hosted flow shows for a venue whose onboarding is already complete. Reading the API reference says there would be no outstanding requirements to collect, so the form should have nothing to offer — but that is inference from documentation, not an observation, and it is the difference between "bounded" and "harmless".
+---
+
+---
+
+# Accepted Risk (Not Closed — Deliberately Left Open)
+
+## Redis flush silently un-revokes outstanding refresh tokens and token families
+**Risk:** If Redis is flushed or lost (crash without persistence, manual `FLUSHALL`, infrastructure failure), every revoked `jti` and revoked `familyId` disappears. A previously-stolen-and-revoked refresh token would once again verify successfully by signature until its own natural expiry (up to 7 days, `JWT_REFRESH_TTL_SECONDS`).
+
+**Recorded in:** ADR-019, Consequences. *"Accepted risk, unchanged from the original decision: a Redis flush would silently un-revoke every outstanding refresh token and family flag (they'd still verify by signature until natural expiry, typically within days) — acceptable for MVP; revisit if refresh-token revocation ever needs to survive a Redis outage."*
+
+This is listed here, separately from the Closed Threats above, on purpose: it is a threat the Founder and this project have knowingly chosen to accept for MVP, not one that has a mitigation in place. Revisiting it is an explicit future decision, not a bug.
+
+---
+
+# Open, Not Answered
+
+Genuinely unanswered — not because no one has thought about them, but because the code they'd be answered by doesn't exist yet, or the answer depends on a decision outside this codebase entirely. Listed honestly rather than filled in with a guess, per the Founder's own instruction.
 
 ## Cross-Organization access by a legitimately-authenticated caller — reopened, and split, because the two halves no longer have the same evidence
 
