@@ -261,4 +261,79 @@ describe("RestaurantService (real database)", () => {
     const result = await service.refreshStripeStatusByAccountId("acct_does_not_exist");
     expect(result).toBeNull();
   });
+
+  /**
+   * THREAT_MODEL (#118), measure 1. The route carried no `@RequirePermission` at all, so
+   * reachability alone let any Membership at the venue mint links to the form where the **payout
+   * bank account** is set.
+   *
+   * Both Roles are read from the seed, never typed as literals — the fixture drift this project
+   * has already been bitten by twice described users the seed cannot produce.
+   */
+  it("createOnboardingLink: a Manager is refused, an Owner is served — the payout account is not the shift's decision", async () => {
+    const ownerUserId = await createTestUser();
+    const restaurant = await service.create(baseDto(), ownerUserId, null);
+
+    const ownerRole = await seededRole(prisma, "Owner");
+    const managerRole = await seededRole(prisma, "Manager");
+
+    // The discriminating fact this test rests on, asserted rather than assumed: Manager really
+    // does hold restaurant.edit and really does not hold the permission guarding this route. If
+    // the seed ever changed, the case below would silently stop discriminating.
+    expect(managerRole.permissions).toContain("restaurant.edit");
+    expect(managerRole.permissions).not.toContain("restaurant.create");
+    expect(ownerRole.permissions).toContain("restaurant.create");
+
+    const managerUserId = await createTestUser();
+    await prisma.membership.create({
+      data: {
+        userId: managerUserId,
+        organizationId: restaurant.organizationId,
+        restaurantId: restaurant.id,
+        roleId: managerRole.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const manager: AuthenticatedUser = {
+      id: managerUserId,
+      email: "manager@example.com",
+      locale: "en",
+      memberships: [
+        {
+          id: "irrelevant",
+          organizationId: restaurant.organizationId,
+          restaurantId: restaurant.id,
+          role: managerRole,
+        },
+      ],
+    };
+
+    const owner: AuthenticatedUser = {
+      id: ownerUserId,
+      email: "owner@example.com",
+      locale: "en",
+      memberships: [
+        {
+          id: "irrelevant",
+          organizationId: restaurant.organizationId,
+          restaurantId: null,
+          role: ownerRole,
+        },
+      ],
+    };
+
+    // Reachable but not permitted. 404 rather than 403, as #109: confirming the venue exists to
+    // a caller who cannot act on it is itself the disclosure.
+    await expect(service.createOnboardingLink(restaurant.id, manager)).rejects.toMatchObject({
+      code: "RESTAURANT_NOT_FOUND",
+    });
+
+    // Not a crash: the refusal above must be the permission check, not the route failing for
+    // everyone. #108's first falsification was unclean in exactly this way — markers flipped for
+    // a 500, not a denial — so the positive case is asserted in the same test.
+    await expect(service.createOnboardingLink(restaurant.id, owner)).resolves.toContain(
+      "connect.stripe.com",
+    );
+  });
 });

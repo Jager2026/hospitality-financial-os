@@ -13,6 +13,9 @@ import {
   isRestaurantReachable,
 } from "../common/restaurant-reachability.util";
 
+/** ADR-044/ADR-046: an existing Permission, deliberately, rather than a new RBAC row. */
+const ONBOARDING_LINK_PERMISSION = "restaurant.create";
+
 @Injectable()
 export class RestaurantService {
   constructor(
@@ -151,8 +154,33 @@ export class RestaurantService {
     });
   }
 
+  /**
+   * THREAT_MODEL (#118): this link leads to Stripe's hosted onboarding form, and that form is
+   * where the **payout bank account** is set. Until now the route carried no `@RequirePermission`
+   * at all, so `getReachableRestaurantOrThrow` alone let **any** Membership at the venue — a
+   * Waiter included — mint an unlimited series of them.
+   *
+   * The permission is `restaurant.create`, and it is not a stretch: `POST /restaurants` is
+   * gated by it and is the call that **creates the Stripe Connect account**. Finishing that
+   * account is the same act, continued. No new Permission was invented on purpose — a new row in
+   * the RBAC matrix is a data migration whose reconciliation gate (ADR-046/ADR-048) would refuse
+   * the next deploy over a grant nobody intended, and this is the existing Permission whose
+   * meaning already covers it.
+   *
+   * `restaurant.edit` was rejected: Manager holds it, and the account the venue's money is paid
+   * into is the owner's decision, not the shift's.
+   *
+   * **This restricts to Owner and Administrator**, the two seeded Roles holding
+   * `restaurant.create` — not to Owner alone, because Administrator holds every Permission by
+   * design (ADR-044) and is platform-only.
+   */
   async createOnboardingLink(id: string, user: AuthenticatedUser): Promise<string> {
     const restaurant = await this.getReachableRestaurantOrThrow(id, user);
+    if (!hasPermissionAtRestaurant(user, restaurant, ONBOARDING_LINK_PERMISSION)) {
+      // 404, not 403 — the form as #109: the caller may hold no permission here at all, and
+      // confirming the venue exists is itself a disclosure.
+      throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant not found.", 404);
+    }
     if (!restaurant.stripeAccountId) {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant has no Stripe account.", 404);
     }
