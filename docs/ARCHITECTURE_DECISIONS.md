@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.45.0
+version: 1.46.0
 status: Active — ADR-001..056; ADR-057 onward in docs/adr/
 classification: Internal
 owner: Founder
@@ -1503,6 +1503,17 @@ The reporting half is not decoration. **A suite that only proved a closed venue 
 **Not fixed here, deliberately.** No restaurant is connected today, so nothing is currently at risk and there is no incident to respond to. The open question is recorded in `THREAT_MODEL.md` under *Open, Not Answered*, in two entries — the reconciliation gap, and the fact that offboarding cannot be automated — with options shown and none chosen.
 
 **What this does not change:** the rename, the authorization/reporting split, the tests, and the reopen copy. All stand.
+
+### Amendment 2 — 2026-09-02: the platform does not disconnect, so the gap above is theoretical (ADR-059)
+
+**Same day, later.** Stripe's written advice — keep connections active, especially around seasonality; the reset surface will grow; disconnection is a total loss of access — is recorded in full in **ADR-059**, which decides that **the platform does not disconnect connected accounts**: not on closure, not for a seasonal pause, not when a venue leaves.
+
+**What that changes about the Amendment above: its premise, not its reasoning.** Everything it says about what disconnection *does* — events stop, a later chargeback never reaches the Ledger, reconciliation reports a difference it cannot resolve, and we cannot see it happen — is correct as written and stands. What no longer holds is that disconnection is what happens when a venue leaves. **It is not. Closing a venue is an operation of this system alone; the Stripe connection is not touched by it, and will not be.**
+
+**The reconciliation discrepancies are therefore theoretical, and the word is chosen carefully.** The scenario is excluded **by decision, not made technically impossible.** Disconnection remains Dashboard-only and remains the owner's to perform; nothing on our side prevents it. The risk described above arrives only if the decision is broken — by a future change on our side that reintroduces disconnection, or by an owner acting unilaterally. The `THREAT_MODEL.md` entries are reformulated on that basis and **deliberately not closed**: a decision is a reason the risk is unlikely, not a mechanism that makes it absent.
+
+**Still not decided, and now differently shaped:** whether a closed venue absorbs `account.updated` events becomes the ordinary case rather than a question — a closed venue's account stays connected, so it will keep sending them, and the webhook path already processes them.
+
 
 ---
 

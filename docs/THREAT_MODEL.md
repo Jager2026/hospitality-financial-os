@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.15.0
+version: 1.16.0
 status: Active
 classification: Critical
 owner: Founder
@@ -436,6 +436,8 @@ The entry below is a different kind of open item from every one above it — not
 **What this does NOT block, added because it was assumed to and the assumption stood unchallenged for a day: data retention periods.** Those are decided by accounting law and do not wait on this classification. The two were being treated as one open question when only one was open, and the effect was to hold up something answerable — the privacy policy's retention section — behind something that is not. Retention is now determined (`PERSONAL_DATA_MAP.md` §6). **The scope of an open item is part of the item**: an entry that does not say where it stops will be read as stopping wherever the reader fears, and a blocked-on-legal-advice entry is the kind most likely to be read expansively.
 
 ## A chargeback after the account is disconnected never reaches our books, and reconciliation reports a discrepancy it cannot resolve
+**Reformulated 2026-09-02 (ADR-059) — this risk arrives only if a decision is broken.** The platform does not disconnect connected accounts: not on closure, not for a seasonal pause, not when a venue leaves. Closing a venue (ADR-054) touches nothing at Stripe. So the scenario below — a disconnected account whose events stop — is **excluded by decision, not made technically impossible**. It occurs only if a future change on our side reintroduces disconnection, or if the account owner disconnects unilaterally from their own Dashboard, which nothing on our side can prevent. **Kept open, not closed:** the mechanism is real and a decision is not a lock. The entry as originally written follows, because it is what happens the day the decision does not hold.
+
 **What exists:** `PaymentReconciliationService` (ADR-031/032) compares our records against Stripe's and reports what does not match. The webhook path processes late events normally and deliberately (ADR-054).
 
 **What's genuinely missing:** the events themselves, once a connected account is disconnected. Stripe stated it in writing on 2026-09-02:
@@ -456,6 +458,8 @@ A chargeback on a payment taken months before the disconnection is Stripe revers
 ---
 
 ## Disconnecting a connected account is Dashboard-only, so offboarding cannot be automated and the product cannot see it happen
+**Reformulated 2026-09-02 (ADR-059) — this risk arrives only if a decision is broken.** The platform does not disconnect connected accounts: not on closure, not for a seasonal pause, not when a venue leaves. Closing a venue (ADR-054) touches nothing at Stripe. So the scenario below — a disconnected account whose events stop — is **excluded by decision, not made technically impossible**. It occurs only if a future change on our side reintroduces disconnection, or if the account owner disconnects unilaterally from their own Dashboard, which nothing on our side can prevent. **Kept open, not closed:** the mechanism is real and a decision is not a lock. The entry as originally written follows, because it is what happens the day the decision does not hold.
+
 **What exists:** nothing. This is not a gap in our code — it is a property of Stripe's API surface, stated in writing on 2026-09-02:
 
 > "There's no API path to disconnect a connected account. It is currently a Dashboard-only feature."
