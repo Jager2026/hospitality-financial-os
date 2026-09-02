@@ -156,6 +156,12 @@ jobs:
       # gate (pnpm's own version drives Railway's package-manager detection, ADR-031). See that
       # script's own comment for exactly which advisories are explicitly ignored and why — a new
       # high/critical finding anywhere else still fails this step.
+      # ADR-060: docs/INDEX.md no longer carries a version of its own — that single line was
+      # the site of five consecutive merge conflicts with no content in any of them. What it stood
+      # for (the register agrees with the documents) is checked here instead, both directions.
+      - name: Documentation index integrity
+        run: node .github/scripts/check-doc-index.js
+
       - name: Dependency vulnerability scan
         run: node .github/scripts/check-audit.js
 
