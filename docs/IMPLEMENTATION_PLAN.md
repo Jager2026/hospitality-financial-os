@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.24.0
+version: 2.25.0
 status: Active
 classification: Critical
 priority: Highest
@@ -379,6 +379,10 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **One measurement is weaker than it looks, and saying so is the point.** The second failure showed **16 unpublished** — well under the 50-per-poll threshold this entry names as the mechanism. That is not a refutation: **the count was taken after the run finished**, and the suite both creates and publishes rows while it runs, so it does not describe the state at the moment of failure. The honest position is that the threshold model is unconfirmed by this incident rather than contradicted by it, and that measuring during a failing run is what would settle it.
 
   **Neither diagnosis used the instrument built for exactly this**, which is a separate problem and has its own entry below.
+
+  **Corrected on 2026-09-02 by measurement, and the correction changes which number to watch.** `unpublished` as printed — `publishedAt IS NULL` — is the wrong count. It mixes two populations: rows that are merely *not yet polled* (other spec files write Outbox events and never call `poll()`), and rows that are *permanently unpublishable* (the deliberately malformed ones, retried forever because the batch query has no `attempts` filter). Only the second population can crowd a batch. Measured directly: the dev database read **85 unpublished** and the full suite passed twice at that level; one isolated run of `outbox-poller.service.spec.ts` against those 85 dropped the count to **15**, all with `attempts` between 8 and 150 — the permanent debris, and nothing else. **The threshold that matters is permanently-unpublishable rows against a batch of 50, and it sat at 15 after many runs.** The earlier figures in this entry (61, 16) were the mixed count and should be read as such. `global-setup.ts`'s warning still fires on the mixed count and will therefore warn early; that is the safe direction, but it means a warning is not yet a diagnosis.
+
+  **An unreproduced failure on the same day, recorded rather than closed.** 2026-09-02, branch `docs/masterplan-positioning` (documentation only, code identical to `main`): `db:reset` followed by the full suite → **one backend test failed, 343 of 344**; frontend green. **The log was deleted before it was read**, and two subsequent full runs were green (344/344). vitest's `results.json` was checked afterwards and had already been overwritten by the green runs. **Known:** it was not this entry's mechanism — the run was on a freshly reset database, and the poller spec passes in isolation against far more debris than a fresh database holds. **Unknown:** which test, which assertion. It stays open as a failure of unknown cause; two green runs establish non-reproducibility, not absence. The rule this produced is in `CLAUDE.md`, Testing Review.
 
   **Deferred, with two things shipped in the meantime** (ADR-046's PR): `global-setup.ts` prints the counts unconditionally, and escalates to an explicit WARNING naming `db:reset` once `unpublished >= 50`. Neither fixes accumulation; together they remove the need to remember the rule before suspecting it, and turn a vague "too many rows" into the one number with a hard edge. **No trigger date — next whenever test infrastructure gets a slot.** The instrument stays useful afterwards: a count near zero is the fastest confirmation that cleanup actually works.
 
