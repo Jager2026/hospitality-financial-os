@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.17.0
+version: 2.18.0
 status: Active
 classification: Critical
 priority: Highest
@@ -144,6 +144,8 @@ This is a method, not one incident's explanation. It is how a documented systema
 The generalisation worth carrying: **a search over source text can only ever prove a string is present.** Any claim stronger than that — "this check runs", "this branch is reachable", "this permission is enforced" — needs either an execution that would fail without it, or a reading of the condition's order. Preferably the first.
 
 Testing Review, specifically, for a CI failure that follows one already diagnosed this sprint: re-derive the cause from the real log or annotations for *this* failure, every time — never from resemblance to the prior incident. Three separate CI failures in one sprint each looked the same from the outside (a red check, a short runtime, a couple of annotations) and had three different root causes: an unawaited write in `AuditLogInterceptor` racing the HTTP response, a non-atomic Prisma `upsert()` racing across parallel test-file workers seeding the same `Currency`/`Role` rows, and a fully deterministic ESLint rule rejecting a Next.js-generated file. The first two were runtime races; the third wasn't a race at all. Assuming "this is probably the same class of bug as last time" would have produced the wrong fix for at least two of the three.
+
+Testing Review, one step before any of that — and it is a rule because it was broken on 2026-09-02, by the same session that had written the paragraph above: **the failure log is read before anything is re-run. The second run destroys the only evidence.** A gate on a documentation-only branch failed one backend test of 344; the log was deleted unread, and the suite was re-run to "check". Two green runs followed. They proved non-reproducibility, not absence — and by then vitest's own `results.json` had been overwritten as well, verified after the fact. The failure is recorded as unreproduced, cause unknown, and it stays open, because "ran twice, green" is not a diagnosis. This is the same class as ADR-058's attribution loss, where two changes in one commit made it impossible to say which one closed the door: **a cause is isolable exactly once.** A re-run, like a second change, is not neutral — it overwrites the state in which the cause could still be seen. So the order is fixed: capture the log to a file that nothing else writes to, read it, name the test and the assertion, and only then decide whether a re-run has anything to tell you.
 
 ---
 
