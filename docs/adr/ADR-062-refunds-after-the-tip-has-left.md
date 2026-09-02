@@ -1,7 +1,7 @@
 ---
 title: ADR-062 — Refunds after the tip has left: what a reversal does when the waiter has already been paid
-version: 1.0.0
-status: Proposed
+version: 1.1.0
+status: Accepted — pilot on Option 4, target Option 2; window length undecided by design
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,7 +9,7 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-062 — Refunds after the tip has left: what a reversal does when the waiter has already been paid
 
-**Status: Proposed.** Options are shown, none is chosen. The decision is the Founder's, after this report. No code.
+**Status: Accepted, 2026-09-02.** The pilot runs on **Option 4** — a window during which tips cannot be withdrawn. **Option 2** — withhold from future tips — is the target after the pilot. **The window's length is not decided, and that is part of the decision** (see *Decision*). The options below are kept as written: the reasons for rejecting each are in the Decision, and an option whose text has been deleted cannot be re-examined when the number that decides it arrives. No code.
 
 ---
 
@@ -121,18 +121,51 @@ Accept finding 3 as the design: the platform is `losses_collector`, the reserve 
 
 ---
 
-## What every option needs, regardless of which is chosen
+## Decision — 2026-09-02, the Founder's
 
-- **A refund and dispute procedure in writing before a live pilot** (MASTERPLAN, pilot limitations). This ADR is the design input for it, not a substitute.
-- **The exposure number.** Options 1, 3, 4 and 6 are all priced by *how much tip money is refunded how long after payment*. Nobody has measured it, and no option should be chosen by feel against it.
-- **The onboarding Terms for waiters.** Options 2 and 3 are claims against a person; they exist only if the person agreed to them at onboarding, in words that name the case.
-- **Two books that must agree.** Whatever the Ledger says, Stripe's recipient balance says something too, and it does not read our Ledger. Any option that leaves a recipient negative on Stripe's side while our Ledger says otherwise has two truths, and reconciliation will report the difference forever.
+**The pilot runs on Option 4: a window during which tips cannot be withdrawn.** Inside the window the money is still in one place, so **ADR-023 works unchanged**; `pendingBalance`, which ADR-024 left at zero because nothing was withdrawable, **becomes real** — pending until the window closes, available after. **The platform does not pay from its own funds**, which is the property the live experiment showed every other option lacks by default: finding 3 above is what Option 4 is chosen to avoid.
+
+**Option 2 — withhold from future tips — is the target model after the pilot**, once the pilot has produced the number it needs.
+
+### Why each of the others is not chosen now, in the words that decided it
+
+- **Options 5 and 6 need the exposure number, and at zero customers there is none.** Both are priced by *how much tip money comes back, how long after payment*. Choosing either today is a bet with the platform's own money, blind. They are not wrong; they are unpriceable.
+- **Option 1 makes the restaurant the insurer of its staff's tips without its consent**, and removes the waiter's stake in the service that earned the tip. A rule the venue never agreed to is a dispute waiting for its first refund.
+- **Option 3 requires collecting sums whose collection costs more than they are worth.** Five euros from a private person is a support ticket, a reputational cost and a Terms clause nobody has written — for five euros.
+- **Option 2 is the target, not the pilot,** because it is Option 3 with a softer face until the departure case is answered, and the departure case is priced by the same missing number.
+
+### The price of Option 4, stated without softening
+
+**Everyone is paid later, every time, to cover the rare case.** A trade that treats tips as cash at the end of the shift is being asked to wait. **The pitch changes: *"fixed at the moment of payment"* becomes *"paid N days later."*** MASTERPLAN's positioning section carries the first wording and must carry the second the day the window ships. And the window does not eliminate the shortfall — a refund after it closes is Options 1–3 again, only rarer.
+
+### The window's length is NOT decided — and that is part of the decision
+
+**120 days technically covers chargebacks and kills the product:** a waiter who waits four months is paid worse than in cash, and leaves. A number picked now would be picked from a feeling about disputes, not from disputes.
+
+**Open parameter, with its trigger:** the length is set **after the first restaurant**, from the **observed distribution of refunds** — how much comes back and how long after payment. The pilot's job is to produce that distribution. **Until that number exists, no window length goes into code.** A window with a placeholder length is a decision made by whoever typed the placeholder.
+
+### Recorded, not decided: what the waiter's screen must say
+
+The live experiment showed what a reversal looks like from the recipient's side: `payment_refund −700 "REFUND FOR PAYMENT"`. **Nothing on Stripe's side says *"the platform clawed this back"*; it says *refund*, negative.** Under Option 4 a waiter inside the window never sees this, because the money has not reached their Stripe balance. Under Option 2, after the pilot, they will. **This is a screen-copy question, and it appears when the screen does.** Recorded here so the person who builds that screen finds the fact before they find the complaint.
+
+---
+
+## What every option needs — now recorded as commitments, each with its trigger
+
+| Commitment | Trigger — the moment it becomes due | Why it is not optional |
+|---|---|---|
+| **A refund and dispute procedure, in writing** | **Before a live pilot.** No restaurant takes a real payment without it. | MASTERPLAN's pilot limitations already require it; this ADR is its design input, not a substitute. Under Option 4 the procedure must say what a refund *inside* the window does (ADR-023, unchanged) and what one *after* it does (Options 1–3, unresolved). |
+| **The exposure number** — how much tip money comes back, how long after payment | **After the first restaurant**, from observed refunds. **It is the trigger for the window's length and for moving to Option 2.** | Options 2, 5 and 6 and the window itself are all priced by it. Choosing any of them by feel is the bet this decision refuses to make. |
+| **Onboarding Terms for waiters that name the case** | **Before Option 2 ships** — and before any waiter is onboarded under a window, so the wait is agreed rather than discovered. | A withheld or delayed tip is a claim about a person's money; it exists only if the person agreed to it, in words that describe this situation. |
+| **Two books that agree** — our Ledger and Stripe's recipient balance | **Before Option 2 ships.** Under Option 4 the two cannot disagree, because nothing reaches the recipient inside the window; that is one of the reasons Option 4 is the pilot. | Stripe does not read our Ledger. Any state that leaves a recipient negative on Stripe's side while our Ledger says otherwise is two truths, and reconciliation reports the difference forever. |
 
 ---
 
 ## Boundaries
 
 - **No code.** Nothing here changes `handleChargeRefunded`, `splitProportionally`, or the projection.
+- **The window is not built and `pendingBalance` is not touched.** The decision names Option 4; it does not name a length, and a window without a length is not buildable — by design, see *Decision*.
+- **The sandbox is not tidied.** The closed probe account at −700 and the persisting `reserve_transaction −700` stay as they are. The way to clear a negative recipient balance is to transfer into it — which is the mechanism of Option 6, an option this decision did not choose. Tidying would mean exercising a path the product has decided against.
 - **`PROCESSOR_CLEARING_CONTRA` is not touched** — it is the neighbouring open item in THREAT_MODEL and is orthogonal to this one.
 - **The money fork is not built** (ADR-053, ADR-061). This ADR assumes it exists and asks what happens after.
 - **Sandbox state after the experiment, stated:** one closed recipient account with −700 outstanding, and a `reserve_transaction −700` (test money, €7.00) that **persists** on the platform test balance. Recorded rather than tidied, because tidying it would mean transferring into a closed account, and whether that is even possible is a question for the option that needs it.
