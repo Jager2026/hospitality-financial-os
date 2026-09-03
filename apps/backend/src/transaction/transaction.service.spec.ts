@@ -213,34 +213,35 @@ describe("TransactionService (real database)", () => {
         BigInt(beforeRefund.refundedAmount);
       expect(sumBefore).toBe(2000n); // == grossAmount, exactly
 
+      // ADR-062: a refund returns the BILL (1500), never the gross. The tip stays with the waiter.
       const { rawBody: refundRaw, signature: refundSig } = signEvent(
         buildEvent("charge.refunded", {
           id: `ch_${randomUUID()}`,
           payment_intent: piId,
-          amount_refunded: 2000,
+          amount_refunded: 1500,
           refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
         }),
       );
       await webhooks.handleEvent(refundRaw, refundSig);
 
       const afterRefund = await transactionService.findOne(transaction!.id, user);
-      // Every account nets to zero after a full refund — the whole point of ADR-025: this
-      // reflects the CURRENT state, not the frozen capture-time snapshot.
+      // Revenue and fee net to zero after the bill is fully refunded; the tip does NOT — ADR-062.
+      // The breakdown reflects the CURRENT state, not the frozen capture-time snapshot (ADR-025).
       expect(afterRefund.netRestaurantRevenue).toBe("0");
       expect(afterRefund.netPlatformFee).toBe("0");
-      expect(afterRefund.netTip).toBe("0");
-      expect(afterRefund.refundedAmount).toBe("2000");
+      expect(afterRefund.netTip).toBe("500"); // untouched — the discriminating line of this test
+      expect(afterRefund.refundedAmount).toBe("1500");
       const sumAfter =
         BigInt(afterRefund.netRestaurantRevenue) +
         BigInt(afterRefund.netTip) +
         BigInt(afterRefund.netPlatformFee) +
         BigInt(afterRefund.tax) +
         BigInt(afterRefund.refundedAmount);
-      expect(sumAfter).toBe(2000n); // still == grossAmount, exactly, even after the refund
+      expect(sumAfter).toBe(2000n); // still == grossAmount: 0 + 500 + 0 + 0 + 1500
       expect(afterRefund.grossAmount).toBe("2000"); // Transaction.grossAmount itself never changes
-      expect(afterRefund.status).toBe("REFUNDED");
+      expect(afterRefund.status).toBe("REFUNDED"); // ADR-062: the bill is what "fully refunded" measures
       expect(afterRefund.refunds).toHaveLength(1);
-      expect(afterRefund.refunds[0].tipRefunded).toBe(true);
+      expect(afterRefund.refunds[0].tipRefunded).toBe(false);
     },
   );
 

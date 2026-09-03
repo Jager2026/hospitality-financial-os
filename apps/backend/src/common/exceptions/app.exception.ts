@@ -15,6 +15,10 @@ export type ErrorCode =
   | "ORGANIZATION_NOT_FOUND"
   | "WALLET_NOT_FOUND"
   | "WITHDRAWAL_NOT_AVAILABLE"
+  // ADR-062: a refund larger than the bill has no balanced Ledger entry under the rule that the
+  // tip is never reversed. Raised inside the webhook handler, before any write, so the event is
+  // retried and alerted rather than booked wrong. Not a client-facing code.
+  | "REFUND_EXCEEDS_BILL"
   | "IDEMPOTENCY_KEY_CONFLICT"
   | "PERMISSION_DENIED"
   | "PASSWORD_BREACHED"

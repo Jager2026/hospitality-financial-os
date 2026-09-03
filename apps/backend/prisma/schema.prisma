@@ -594,6 +594,9 @@ model Refund {
   amount            BigInt // minor units (ADR-001)
   currency          String       @db.Char(3)
   reason            String
+  /// ADR-062: always false for refunds — a refund returns the bill and never reverses the tip.
+  /// Column kept, not dropped: rows written under ADR-023 carry true and are history, and the
+  /// chargeback rule (open) may yet need it. Written explicitly as `false` by the handler.
   tipRefunded       Boolean      @map("tip_refunded")
   requestedBy       String?      @map("requested_by") @db.Uuid
   approvedBy        String?      @map("approved_by") @db.Uuid

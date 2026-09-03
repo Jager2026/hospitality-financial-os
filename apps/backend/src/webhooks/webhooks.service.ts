@@ -283,12 +283,25 @@ export class WebhooksService {
     });
   }
 
-  /** ADR-008 + ADR-023: reverses THREE accounts proportionally, not one unconditionally —
-   * RESTAURANT_REVENUE_PAYABLE, PLATFORM_FEE_REVENUE, and TIP_PAYABLE (at the waiter's own
-   * membershipId) — never the original entry itself, always a new compensating one.
-   * `charge.amount_refunded` is Stripe's CUMULATIVE total refunded on this charge so far; the
-   * delta against what we've already recorded is THIS specific refund's amount, computed the same
-   * way per account as it already is for the total (DATABASE.md, Refund Rules). */
+  /** ADR-062 (superseding ADR-023 for refunds): a refund returns the BILL. It reverses
+   * RESTAURANT_REVENUE_PAYABLE and PLATFORM_FEE_REVENUE, proportionally over the bill
+   * (gross − tip), and never touches TIP_PAYABLE — the tip stays with the waiter, which is
+   * industry practice, not this product's invention. TAX_PAYABLE joins the reversal the day it
+   * has a writer (ADR-029 blocks it today). Chargebacks are NOT this rule: handleDisputeCreated
+   * keeps ADR-023's three-way proportional split, because a chargeback is the bank reversing the
+   * whole charge, and that question is open (THREAT_MODEL, ADR-062).
+   *
+   * `charge.amount_refunded` is Stripe's CUMULATIVE total refunded so far; the delta against what
+   * is already recorded is THIS refund's amount (DATABASE.md, Refund Rules).
+   *
+   * **A refund larger than the bill has no balanced entry under this rule, and this handler
+   * refuses it rather than inventing one.** REFUND_CONTRA must be credited with the money that
+   * actually left; if that exceeds the bill, the excess is the tip physically returned to the
+   * guest — and who bears it (the venue? the waiter, contradicting the rule?) is a decision
+   * nobody has made. The throw below leaves the event unprocessed and retried (handleEvent
+   * deletes the idempotency key and rethrows), so it surfaces through ADR-045's alerting instead
+   * of as a quietly wrong Ledger. Not a hypothetical shape: Stripe lets an operator refund the
+   * gross, tip included, from their own Dashboard. */
   private async handleChargeRefunded(event: Stripe.Event): Promise<void> {
     const charge = event.data.object as Stripe.Charge;
     const paymentIntentId =
@@ -324,17 +337,23 @@ export class WebhooksService {
     }
     const cumulativeRefunded = previouslyRecorded + newRefundAmount;
 
+    // ADR-062: the refund's universe is the bill, not the gross. The tip is not part of it.
+    const billAmount = payment.amount - payment.tipAmount;
+    if (cumulativeRefunded > billAmount) {
+      // Refused before any write — see the handler comment. The 422 is the "this is a real
+      // request the rule cannot book" code, not a validation failure on Stripe's side.
+      throw new AppException(
+        "REFUND_EXCEEDS_BILL",
+        `Refund of ${cumulativeRefunded} on Transaction ${transaction.id} exceeds the bill of ` +
+          `${billAmount} (gross ${payment.amount}, tip ${payment.tipAmount}). ADR-062: a refund ` +
+          `returns the bill and the tip is not reversed, so the excess has no balanced entry.`,
+        422,
+      );
+    }
+
     const originalFeeAmount = await this.getOriginalCapturedFeeAmount(transaction.id);
-    const {
-      tipShare: cumulativeTipReversed,
-      feeShare: cumulativeFeeReversed,
-      revenueShare: cumulativeRevenueReversed,
-    } = this.splitProportionally(
-      cumulativeRefunded,
-      payment.tipAmount,
-      originalFeeAmount,
-      payment.amount,
-    );
+    const { feeShare: cumulativeFeeReversed, revenueShare: cumulativeRevenueReversed } =
+      this.splitRefundOverBill(cumulativeRefunded, originalFeeAmount, billAmount);
 
     // "Already reversed" per account — read back from prior REFUND_ISSUED LedgerLines for this
     // Transaction, the same way previouslyRecorded above reads prior Refund rows. No new stored
@@ -347,13 +366,9 @@ export class WebhooksService {
       transaction.id,
       "PLATFORM_FEE_REVENUE",
     );
-    const priorTipReversed = payment.waiterMembershipId
-      ? await this.sumPriorRefundReversal(transaction.id, "TIP_PAYABLE", payment.waiterMembershipId)
-      : 0n;
 
     const revenueDelta = cumulativeRevenueReversed - priorRevenueReversed;
     const feeDelta = cumulativeFeeReversed - priorFeeReversed;
-    const tipDelta = cumulativeTipReversed - priorTipReversed;
 
     // Known boundary: under out-of-order delivery, `latestRefund` (Stripe's most-recent-first
     // list) isn't guaranteed to be the specific refund that produced THIS delta — the Ledger
@@ -370,7 +385,10 @@ export class WebhooksService {
           amount: newRefundAmount,
           currency: transaction.currency,
           reason: latestRefund?.reason ?? "unspecified",
-          tipRefunded: tipDelta > 0n, // ADR-023: computed per event, not hardcoded
+          // ADR-062: a refund never reverses the tip. Kept as a column (Chargeback still means
+          // something by it, and history rows from ADR-023's era carry true) — for refunds it is
+          // now a constant, written explicitly rather than computed to look like a decision.
+          tipRefunded: false,
           status: "SUCCEEDED",
         },
       });
@@ -378,7 +396,10 @@ export class WebhooksService {
       await tx.transaction.update({
         where: { id: transaction.id },
         data: {
-          status: cumulativeRefunded >= transaction.grossAmount ? "REFUNDED" : "PARTIALLY_REFUNDED",
+          // ADR-062: "fully refunded" means the BILL is fully refunded. Comparing against the
+          // gross (bill + tip) would leave every tip-bearing Transaction PARTIALLY_REFUNDED
+          // forever, since the tip is never returned.
+          status: cumulativeRefunded >= billAmount ? "REFUNDED" : "PARTIALLY_REFUNDED",
         },
       });
 
@@ -412,20 +433,9 @@ export class WebhooksService {
                   },
                 ]
               : []),
-            // Reverses the waiter's own credited share (ADR-022) — never the general
-            // membershipId: null line, which no longer exists once TIP_ALLOCATED has run.
-            ...(tipDelta > 0n && payment.waiterMembershipId
-              ? [
-                  {
-                    account: "TIP_PAYABLE" as const,
-                    direction: "DEBIT" as const,
-                    amount: tipDelta,
-                    currency: transaction.currency,
-                    restaurantId: transaction.restaurantId,
-                    membershipId: payment.waiterMembershipId,
-                  },
-                ]
-              : []),
+            // ADR-062: no TIP_PAYABLE line. The tip stays with the waiter. The entry still
+            // balances because the refund is bounded by the bill above, and revenueShare is the
+            // residual of the bill-scoped split — so revenue + fee == newRefundAmount exactly.
             {
               account: "REFUND_CONTRA",
               direction: "CREDIT",
@@ -474,7 +484,27 @@ export class WebhooksService {
     return capturedFeeLine?.amount ?? 0n;
   }
 
-  /** ADR-023: splits `portionAmount` (a refund delta, or a dispute amount) into the same three
+  /** ADR-062: splits a cumulative refund over the BILL (gross − tip) into the two shares a refund
+   * may touch — fee and revenue. No tip share exists here by rule. `revenueShare` is the residual
+   * (ADR-001/ADR-021's largest-remainder discipline), which is what keeps fee + revenue equal to
+   * the refund exactly and the entry balanced without a third line. The caller guarantees
+   * `cumulativeRefunded <= billAmount`; this function does not re-check it, so that the one place
+   * that refuses an over-bill refund is the one that can explain why. */
+  private splitRefundOverBill(
+    cumulativeRefunded: bigint,
+    originalFeeAmount: bigint,
+    billAmount: bigint,
+  ): { feeShare: bigint; revenueShare: bigint } {
+    const feeShare = billAmount === 0n ? 0n : (originalFeeAmount * cumulativeRefunded) / billAmount;
+    const revenueShare = cumulativeRefunded - feeShare;
+    return { feeShare, revenueShare };
+  }
+
+  /** ADR-023 — DISPUTES ONLY as of ADR-062 (refunds use splitRefundOverBill above, and never
+   * touch the tip). A chargeback is the bank reversing the whole charge, tip included, and that
+   * rule is open; until it is decided, disputes keep the three-way proportional split.
+   *
+   * Splits `portionAmount` (a dispute amount) into the same three
    * shares PAYMENT_CAPTURED itself split the original charge into. `revenueShare` is always the
    * residual, never its own independent division (ADR-001/ADR-021's largest-remainder
    * discipline: two independently-floored shares can round down and leave a remainder; deriving

@@ -183,26 +183,29 @@ describe("WalletProjectionService (real database)", () => {
     expect(wallet?.membershipId).toBe(waiterMembership.id);
   });
 
-  it("a refund lowers the projected balance — proves the projection reads DEBIT lines too, not just tip credits", async () => {
+  it("a refund of the full bill leaves the waiter's balance untouched (ADR-062) — the projection still reads DEBIT lines, there is simply no TIP_PAYABLE debit to read", async () => {
     const { org, restaurant } = await seedOrgRestaurant();
     const waiterMembership = await seedWaiterMembership(org.id, restaurant.id);
     const piId = await captureTipPayment(restaurant, waiterMembership.id, 2000n, 500n);
 
-    await walletProjection.recomputeBalance(waiterMembership.id);
+    const before = await walletProjection.recomputeBalance(waiterMembership.id);
+    expect(before?.availableBalance).toBe(500n);
 
-    // Full refund (ADR-023) reverses the waiter's own TIP_PAYABLE credit.
+    // ADR-062: a refund returns the BILL (2000 − 500 = 1500). The tip is never reversed.
+    // Under ADR-023 this same event, at 2000, drove the balance to zero; that is the behaviour
+    // this test now refuses.
     const { rawBody, signature } = signEvent(
       buildEvent("charge.refunded", {
         id: `ch_${randomUUID()}`,
         payment_intent: piId,
-        amount_refunded: 2000,
+        amount_refunded: 1500,
         refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
       }),
     );
     await webhooks.handleEvent(rawBody, signature);
 
     const wallet = await walletProjection.recomputeBalance(waiterMembership.id);
-    expect(wallet?.availableBalance).toBe(0n); // 500 credited, 500 reversed — net zero
+    expect(wallet?.availableBalance).toBe(500n); // 500 credited, nothing reversed
   });
 
   it(

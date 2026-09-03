@@ -191,6 +191,23 @@ describe("DashboardService (real database)", () => {
     await webhooks.handleEvent(rawBody, signature);
   }
 
+  /** ADR-062: a REFUND can no longer produce a TIP_PAYABLE debit — it returns the bill and the
+   * tip stays with the waiter. A CHARGEBACK still can, and deliberately: the bank reverses the
+   * whole charge, tip included, and that rule is open (ADR-062, THREAT_MODEL). So the netting
+   * case below is now built from a dispute, the only event that still debits a waiter's tip. */
+  async function disputeFull(piId: string, amount: bigint) {
+    const { rawBody, signature } = signEvent(
+      buildEvent("charge.dispute.created", {
+        id: `dp_${randomUUID()}`,
+        payment_intent: piId,
+        amount: Number(amount),
+        reason: "fraudulent",
+        status: "needs_response",
+      }),
+    );
+    await webhooks.handleEvent(rawBody, signature);
+  }
+
   /** Backdates every LedgerLine belonging to `transactionId` by `daysAgo` full days — simulates
    * "this financial event actually happened N days ago," which the real webhook write path has
    * no way to do directly (createdAt always defaults to now()). Needed to construct the
@@ -327,8 +344,9 @@ describe("DashboardService (real database)", () => {
 
   it(
     "Top Staff nets TIP_PAYABLE via SUM(CREDIT)-SUM(DEBIT), not a naive sum of TIP_ALLOCATED " +
-      "credits alone — a same-day refund on a tip-bearing payment must not overstate the waiter's " +
-      "collected tips (ADR-023's own bug class)",
+      "credits alone — a same-day CHARGEBACK on a tip-bearing payment must not overstate the " +
+      "waiter's collected tips (ADR-023's own bug class; since ADR-062 a refund cannot build " +
+      "this case at all, which is why the discriminating event here is a dispute)",
     async () => {
       const { org, restaurant } = await seedOrgRestaurant();
       const { user: waiterUser, membership: waiter } = await seedMembership(
@@ -337,12 +355,15 @@ describe("DashboardService (real database)", () => {
         "Waiter",
       );
       const { piId } = await capture(restaurant.id, 2000n, 500n, waiter.id);
-      await refundFull(piId, 2000n); // same day — fully reverses the tip too
+      // Same day, and a dispute rather than a refund: under ADR-062 a refund of the gross is
+      // refused outright (REFUND_EXCEEDS_BILL) and a refund of the bill never touches the tip,
+      // so a refund can no longer construct the overstatement this test exists to catch.
+      await disputeFull(piId, 2000n);
 
       const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
       const entry = summary.topStaff.find((s) => s.membershipId === waiter.id);
       // A naive "sum only TIP_ALLOCATED credits" implementation would report "500" here — wrong,
-      // since the tip was fully refunded the same day. Correct net is exactly 0.
+      // since the chargeback reversed the tip the same day. Correct net is exactly 0.
       if (entry) {
         expect(entry.tips).toBe("0");
       } else {
