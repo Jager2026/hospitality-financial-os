@@ -1,7 +1,7 @@
 ---
 title: MASTERPLAN
 subtitle: Hospitality Financial Operating System
-version: 2.4.0
+version: 2.5.0
 status: Active
 classification: Internal
 owner: Founder
@@ -496,7 +496,7 @@ Financial infrastructure becomes the destination.
 
 ## Value to the restaurant
 
-**The order below is deliberate and is itself part of the specification.** It is ordered by defensibility, not by how well each item demonstrates. Material derived from this section must not promote items 6-8 above items 1-2 — that is the order in which every competitor already describes itself.
+**The order below is deliberate and is itself part of the specification.** It is ordered by defensibility, not by how well each item demonstrates. Material derived from this section must not promote items 7-9 above items 1-3 — that is the order in which every competitor already describes itself.
 
 ### Tier 1 — what competitors do not have
 
@@ -508,21 +508,27 @@ Immutable double-entry accounting; attribution through Membership rather than th
 
 **2. Tips by name.** Not a shared pool divided afterwards, but a specific waiter, fixed at the moment of payment — and paid at once, with no holding period. **A refund returns the bill; the tip stays with the waiter** (ADR-062). That is industry practice, not something this product invents, and it is why no withdrawal window exists. The person recorded is whoever was selected as having served the table — which may be a Manager or the Owner, not only someone holding a Waiter role.
 
+**3. The restaurant's day, not the calendar day.** A venue closes its day with a Z-report, usually before midnight and regularly after it. €1,400 arriving at 01:00 during Saturday's shift belongs to **Saturday** — and every operational figure here says so, because every money line carries both its shift and its calendar instant (ADR-064, ADR-065). Competitors that count by the calendar disagree with the till on exactly the after-midnight payments, which is the discrepancy this product is sold against.
+
+**The owner is additionally shown, by name: that the shift closed after midnight, and how much arrived between midnight and the close.** That figure is the explanation for why a Z-report and a bank statement differ — offered rather than hidden, which is the difference between answering *"the books do not add up at the end of the day"* and reproducing it.
+
+**Accounting gets both lists — by shift and by calendar day.** The accountant is bound by law to a calendar period and reconciles against per-shift Z-reports; giving one forces them to rebuild the other by hand. Both come from the same rows, so they cannot disagree.
+
 ### Tier 2 — strong, and reproducible by a competitor
 
-**3. Automatic reconciliation** of payments, bills, tips, commissions, refunds and payouts.
+**4. Automatic reconciliation** of payments, bills, tips, commissions, refunds and payouts.
 
-**4. Transparency for staff** — both sides look into one system, rather than the venue holding the record and the waiter holding a belief.
+**5. Transparency for staff** — both sides look into one system, rather than the venue holding the record and the waiter holding a belief.
 
-**5. Payout administration.**
+**6. Payout administration.**
 
 ### Tier 3 — parity with the market, not differentiation
 
-**6. Modern terminals and instructions for using them.**
+**7. Modern terminals and instructions for using them.**
 
-**7. Refunds that work.**
+**8. Refunds that work.**
 
-**8. Support during the restaurant's own working hours** — subject to the SLA section below, which is currently undefined.
+**9. Support during the restaurant's own working hours** — subject to the SLA section below, which is currently undefined.
 
 **These three are table stakes.** They must be true, and none of them is a reason to switch.
 
@@ -554,7 +560,7 @@ Immutable double-entry accounting; attribution through Membership rather than th
 
 **None of the following may appear in pilot material, in any softened form.**
 
-- **Reconciliation against the till DOES NOT WORK. There is no POS integration.** The complaint *"the X/Z reports do not add up"* is **not solved by the pilot** — and it is exactly the pain a hospitality buyer will assume this product addresses. It must be ruled out explicitly rather than left unmentioned.
+- **Reconciliation against the till DOES NOT WORK. There is no POS integration.** Shifts (ADR-064/065) make our own figures agree with the venue's working day and explain the after-midnight difference — they do **not** compare anything against the till, because nothing reads the till. The complaint *"the X/Z reports do not add up"* is **not solved by the pilot** — and it is exactly the pain a hospitality buyer will assume this product addresses. It must be ruled out explicitly rather than left unmentioned.
 - **Compatible payment infrastructure is mandatory** (see Switching cost).
 - **Withdrawal does not exist.** A waiter cannot take money out. Balances are visible and uncashable.
 - **The Waiter Portal is not built.**
