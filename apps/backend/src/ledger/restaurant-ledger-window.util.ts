@@ -176,3 +176,39 @@ export async function netAfterMidnightForShift(
   const debit = groups.find((g) => g.direction === "DEBIT")?._sum.amount ?? 0n;
   return credit - debit;
 }
+
+/**
+ * `netForRestaurantWindow`'s definition, restricted to lines that carry NO Shift.
+ *
+ * **This exists because a shift-scoped financial export would otherwise lose money silently.**
+ * ADR-065's own Consequences say it: rows written before ADR-064 have no `shiftId`, and no
+ * backfill can honestly repair them — there is no record of when those venues closed their days.
+ * A by-shift export over such a period therefore omits real money, and a file that omits money
+ * without saying so is worse than no file at all for an accountant.
+ *
+ * So the by-shift exports end with an explicit `unassigned` row computed by this function, over
+ * the same calendar window the caller asked for. It is not a total that reconciles against the
+ * by-calendar-day export — the two partitions genuinely differ at the range edges, which is the
+ * whole reason both lists exist (ADR-065 §3) — it is a statement of what the shift cut cannot see.
+ */
+export async function netForRestaurantWindowWithoutShift(
+  prisma: PrismaService,
+  restaurantId: string,
+  accounts: LedgerAccount[],
+  start: Date,
+  end: Date,
+): Promise<bigint> {
+  const groups = await prisma.ledgerLine.groupBy({
+    by: ["direction"],
+    where: {
+      restaurantId,
+      account: { in: accounts },
+      shiftId: null,
+      createdAt: { gte: start, lt: end },
+    },
+    _sum: { amount: true },
+  });
+  const credit = groups.find((g) => g.direction === "CREDIT")?._sum.amount ?? 0n;
+  const debit = groups.find((g) => g.direction === "DEBIT")?._sum.amount ?? 0n;
+  return credit - debit;
+}

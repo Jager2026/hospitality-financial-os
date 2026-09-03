@@ -18,7 +18,7 @@ import {
 // API_Contract.md, ANALYTICS. Every route requires at least reports.view (ADR-026's own gate,
 // reused directly) — checked twice, same defense-in-depth shape as every other resource:
 // PermissionsGuard globally (fast reject), then getReachableReportingRestaurantOrThrow inside the
-// service (does the SPECIFIC reachable Membership carry it). The five /export routes additionally
+// service (does the SPECIFIC reachable Membership carry it). The ten /export routes additionally
 // require data.export instead (method-level @RequirePermission overrides the class-level default,
 // PermissionsGuard's own getAllAndOverride) — the same permission Sprint 8's Transaction export
 // already uses, and the seeded permission's own description ("Export transaction/report data")
@@ -67,6 +67,61 @@ export class AnalyticsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.analyticsService.exportTipsCsv(query, user);
+  }
+
+  // ADR-065 §3 gave accounting TWO lists; ADR-067 builds the second. Separate routes, never a
+  // `?byShift=true` flag: the call site has to say which question it is asking, and "by shift" /
+  // "by calendar day" must be legible without a tooltip (ADR-065's own wording).
+  @Get("revenue/export/by-shift")
+  @RequirePermission("data.export")
+  @SkipEnvelope()
+  @Header("Content-Type", "text/csv")
+  @Header("Content-Disposition", 'attachment; filename="revenue-by-shift.csv"')
+  exportRevenueByShift(
+    @Query(new ZodValidationPipe(analyticsQuerySchema)) query: AnalyticsQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.analyticsService.exportRevenueByShiftCsv(query, user);
+  }
+
+  @Get("tips/export/by-shift")
+  @RequirePermission("data.export")
+  @SkipEnvelope()
+  @Header("Content-Type", "text/csv")
+  @Header("Content-Disposition", 'attachment; filename="tips-by-shift.csv"')
+  exportTipsByShift(
+    @Query(new ZodValidationPipe(analyticsQuerySchema)) query: AnalyticsQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.analyticsService.exportTipsByShiftCsv(query, user);
+  }
+
+  // Staff earnings for a period (ADR-067). Named neutrally on purpose: it is NOT payroll, and in
+  // Model B (ADR-053) the restaurant never receives the tip and cannot pay it. No salary, no
+  // withholding, no tax column — VMI has not answered, and a column meaning the wrong thing is
+  // worse than a column added later.
+  @Get("staff-earnings/export")
+  @RequirePermission("data.export")
+  @SkipEnvelope()
+  @Header("Content-Type", "text/csv")
+  @Header("Content-Disposition", 'attachment; filename="staff-earnings-by-calendar-day.csv"')
+  exportStaffEarnings(
+    @Query(new ZodValidationPipe(analyticsQuerySchema)) query: AnalyticsQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.analyticsService.exportStaffEarningsCsv(query, user);
+  }
+
+  @Get("staff-earnings/export/by-shift")
+  @RequirePermission("data.export")
+  @SkipEnvelope()
+  @Header("Content-Type", "text/csv")
+  @Header("Content-Disposition", 'attachment; filename="staff-earnings-by-shift.csv"')
+  exportStaffEarningsByShift(
+    @Query(new ZodValidationPipe(analyticsQuerySchema)) query: AnalyticsQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.analyticsService.exportStaffEarningsByShiftCsv(query, user);
   }
 
   @Get("staff")
@@ -127,5 +182,17 @@ export class AnalyticsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.analyticsService.exportReportCsv(query, user);
+  }
+
+  @Get("reports/export/by-shift")
+  @RequirePermission("data.export")
+  @SkipEnvelope()
+  @Header("Content-Type", "text/csv")
+  @Header("Content-Disposition", 'attachment; filename="report-by-shift.csv"')
+  exportReportByShift(
+    @Query(new ZodValidationPipe(reportsQuerySchema)) query: ReportsQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.analyticsService.exportReportByShiftCsv(query, user);
   }
 }

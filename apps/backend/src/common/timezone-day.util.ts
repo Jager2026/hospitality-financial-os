@@ -133,3 +133,35 @@ function getTimezoneOffsetMinutes(timezone: string, instant: Date): number {
   );
   return Math.round((asUtc - instant.getTime()) / 60_000);
 }
+
+/**
+ * An instant written in a venue's own local time, with its UTC offset: `2026-06-16T02:00:00+03:00`.
+ *
+ * **This exists because the by-shift accounting export hid the very thing it was built to show.**
+ * A shift of 15 June that closes at 02:00 local on the 16th is `2026-06-15T23:00:00.000Z` in UTC —
+ * whose date reads *the 15th*. Rendered that way, the file silently agrees with the calendar cut
+ * at exactly the boundary where the two are supposed to differ, and the accountant reconciling a
+ * Z-report against it sees nothing to reconcile. Found by a test asserting the closing date was
+ * NOT the business date, which failed against the UTC rendering (ADR-067).
+ *
+ * The offset is kept rather than dropped: a bare local time would be ambiguous across the DST
+ * transition, and this file is evidence in a financial reconciliation.
+ */
+export function formatInstantInZone(timezone: string, instant: Date): string {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const p = Object.fromEntries(dtf.formatToParts(instant).map((x) => [x.type, x.value]));
+  const offsetMinutes = getTimezoneOffsetMinutes(timezone, instant);
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const abs = Math.abs(offsetMinutes);
+  const offset = `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}${offset}`;
+}

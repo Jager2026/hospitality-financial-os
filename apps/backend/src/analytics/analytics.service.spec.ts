@@ -50,6 +50,32 @@ function dateNDaysAgo(n: number): string {
   return getLocalDayWindow(TIMEZONE, n).date;
 }
 
+/** An RFC 4180-aware split, used by the escaping test. The naive `split(",")` the other
+ * assertions use is correct only for files whose fields cannot contain a comma — which is every
+ * file here except the one carrying a human-typed display name, and that is the whole point of
+ * that test. */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"' && line[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (c === '"') inQuotes = false;
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") {
+      out.push(field);
+      field = "";
+    } else field += c;
+  }
+  out.push(field);
+  return out;
+}
+
 describe("AnalyticsService (real database)", () => {
   const prisma = new PrismaService();
   let analyticsService: AnalyticsService;
@@ -574,6 +600,352 @@ describe("AnalyticsService (real database)", () => {
         ),
       ).rejects.toMatchObject({ code: "RESTAURANT_NOT_FOUND" });
     });
+  });
+
+  /**
+   * ADR-067 — accounting's SECOND list, by shift, alongside the calendar one that stays.
+   *
+   * **Fixed absolute instants, never "N days ago".** Every fixture below pins real UTC timestamps
+   * and a literal business date. A relative fixture has now cost this project twice — most
+   * recently `backdateToOwnShift` computing a business date in UTC while the query range was
+   * built in Europe/Vilnius, a disagreement that only appears between local midnight and UTC
+   * midnight and therefore passes on most runs. Fixed dates cannot drift with the clock.
+   *
+   * Europe/Vilnius is UTC+3 in June, so local midnight ending 2026-06-15 is 2026-06-15T21:00:00Z.
+   * Everything here is placed relative to that one boundary.
+   */
+  describe("Accounting exports: by shift, alongside by calendar day (ADR-067)", () => {
+    const BUSINESS_DATE = "2026-06-15";
+    const SHIFT_OPENED = new Date("2026-06-15T15:00:00.000Z"); // 18:00 local, the 15th
+    const BEFORE_MIDNIGHT = new Date("2026-06-15T17:00:00.000Z"); // 20:00 local, the 15th
+    const AFTER_MIDNIGHT = new Date("2026-06-15T22:30:00.000Z"); // 01:30 local, the 16th
+    const SHIFT_CLOSED = new Date("2026-06-15T23:00:00.000Z"); // 02:00 local, the 16th
+
+    /** Places every LedgerLine of a Transaction at a chosen instant and a chosen Shift (or none).
+     * Both labels are set explicitly because they are independent (ADR-064) — deriving one from
+     * the other in a fixture would assume exactly the property under test. */
+    async function placeLines(
+      transactionId: string,
+      createdAt: Date,
+      shiftId: string | null,
+    ): Promise<void> {
+      await prisma.ledgerLine.updateMany({
+        where: { journalEntry: { transactionId } },
+        data: { createdAt, shiftId },
+      });
+    }
+
+    async function openShiftCrossingMidnight(restaurantId: string): Promise<string> {
+      const shift = await prisma.shift.create({
+        data: {
+          restaurantId,
+          openedAt: SHIFT_OPENED,
+          closedAt: SHIFT_CLOSED,
+          closeReason: "BUTTON",
+          businessDate: new Date(`${BUSINESS_DATE}T00:00:00.000Z`),
+        },
+      });
+      return shift.id;
+    }
+
+    function parseCsv(csv: string): { header: string[]; rows: string[][] } {
+      const [head, ...rest] = csv.split("\n");
+      return { header: head.split(","), rows: rest.map((r) => r.split(",")) };
+    }
+
+    it(
+      "THE FALSIFICATION: a shift crossing midnight gives the by-shift and by-calendar-day " +
+        "exports DIFFERENT numbers — an implementation where they coincide fails here, because " +
+        "coincidence would prove the second cut never happened",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+
+        // 20:00 local on the 15th: same shift, same calendar day. Bill 900, tip 100.
+        const { transaction: early } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+        await placeLines(early.id, BEFORE_MIDNIGHT, shiftId);
+        // 01:30 local on the 16th: SAME shift, DIFFERENT calendar day. Bill 450, tip 50.
+        const { transaction: late } = await capture(restaurant.id, 500n, 50n, waiter.id);
+        await placeLines(late.id, AFTER_MIDNIGHT, shiftId);
+
+        const query = { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE };
+        const user = userReaching(org.id);
+
+        const byShift = parseCsv(await analyticsService.exportRevenueByShiftCsv(query, user));
+        const byCalendar = parseCsv(await analyticsService.exportRevenueCsv(query, user));
+
+        // The shift owns its whole working day: both bills, 900 + 450.
+        const shiftRow = byShift.rows.find((r) => r[0] === "shift");
+        expect(shiftRow?.[5]).toBe("1350");
+        // The calendar day ends at 21:00Z and cannot see the 22:30Z bill: 900 only.
+        expect(byCalendar.rows[0][1]).toBe("900");
+
+        // Stated as the inequality the task asked for, not only as two constants: an
+        // implementation that quietly bucketed both files by the same cut would satisfy neither
+        // number above, and would satisfy this line least of all.
+        expect(shiftRow?.[5]).not.toBe(byCalendar.rows[0][1]);
+      },
+    );
+
+    it(
+      "every by-shift row names WHICH day it means — the business date it is called, and the " +
+        "real calendar instants it spanned, so the split is visible in the file itself",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+        const { transaction } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+        await placeLines(transaction.id, AFTER_MIDNIGHT, shiftId);
+
+        const csv = await analyticsService.exportRevenueByShiftCsv(
+          { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE },
+          userReaching(org.id),
+        );
+        const { header, rows } = parseCsv(csv);
+        expect(header).toEqual([
+          "scope",
+          "businessDate",
+          "shiftId",
+          "openedAt",
+          "closedAt",
+          "amount",
+        ]);
+
+        const shiftRow = rows.find((r) => r[0] === "shift");
+        // The day it is CALLED...
+        expect(shiftRow?.[1]).toBe(BUSINESS_DATE);
+        expect(shiftRow?.[2]).toBe(shiftId);
+        // ...and the calendar instants it ACTUALLY spanned, which end on the following date. A
+        // file carrying only the business date could not be reconciled against a bank statement.
+        // ...and the calendar instants it ACTUALLY spanned, in the VENUE's own local time with
+        // its offset. This assertion is the reason the export does not render UTC: in UTC the
+        // closing instant is 2026-06-15T23:00:00Z, whose date reads "the 15th", and the line
+        // below — the one that matters — passed by accident while showing the accountant nothing.
+        expect(shiftRow?.[3]).toBe("2026-06-15T18:00:00+03:00");
+        expect(shiftRow?.[4]).toBe("2026-06-16T02:00:00+03:00");
+        // The working day is CALLED the 15th and ENDED on the 16th. A file that cannot show both
+        // cannot be reconciled against anything.
+        expect(shiftRow?.[4].slice(0, 10)).not.toBe(BUSINESS_DATE);
+      },
+    );
+
+    it(
+      "money carrying NO shift is named in its own row rather than silently dropped — the " +
+        "historical rows ADR-065 says no backfill can honestly repair",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+
+        const { transaction: onShift } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+        await placeLines(onShift.id, BEFORE_MIDNIGHT, shiftId);
+        // Written before ADR-064 existed: a real bill, on this calendar day, with no shift label.
+        const { transaction: orphan } = await capture(restaurant.id, 220n, 20n, waiter.id);
+        await placeLines(orphan.id, BEFORE_MIDNIGHT, null);
+
+        const csv = await analyticsService.exportRevenueByShiftCsv(
+          { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE },
+          userReaching(org.id),
+        );
+        const { rows } = parseCsv(csv);
+
+        expect(rows.find((r) => r[0] === "shift")?.[5]).toBe("900");
+        // 200, visible. An implementation that summed only shifts would report 900 and lose 200
+        // out of a FINANCIAL export without a word — the failure this row exists to prevent.
+        const unassigned = rows.find((r) => r[0] === "unassigned");
+        expect(unassigned?.[5]).toBe("200");
+        // It is money without a working day, so it has no business date to claim.
+        expect(unassigned?.[1]).toBe("");
+        expect(unassigned?.[2]).toBe("");
+      },
+    );
+
+    it(
+      "staff earnings differ between the two cuts for the same midnight-crossing shift — the " +
+        "same falsification applied to the per-person file",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+
+        const { transaction: early } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+        await placeLines(early.id, BEFORE_MIDNIGHT, shiftId);
+        const { transaction: late } = await capture(restaurant.id, 500n, 50n, waiter.id);
+        await placeLines(late.id, AFTER_MIDNIGHT, shiftId);
+
+        const query = { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE };
+        const user = userReaching(org.id);
+
+        const byShift = parseCsv(await analyticsService.exportStaffEarningsByShiftCsv(query, user));
+        const byCalendar = parseCsv(await analyticsService.exportStaffEarningsCsv(query, user));
+
+        // Tips column is last. The shift saw both tips; the calendar day saw only the first.
+        expect(byShift.rows[0][7]).toBe("150");
+        expect(byCalendar.rows[0][7]).toBe("100");
+        expect(byShift.rows[0][7]).not.toBe(byCalendar.rows[0][7]);
+
+        // And each file says which cut produced it — the first column, on every row.
+        expect(byShift.rows[0][0]).toBe("shift");
+        expect(byCalendar.rows[0][0]).toBe("calendar");
+      },
+    );
+
+    it(
+      "every staff-earnings row carries the period it covers — a file handed to a bookkeeper " +
+        "has no download context to fall back on",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+        const { transaction } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+        await placeLines(transaction.id, BEFORE_MIDNIGHT, shiftId);
+
+        const csv = await analyticsService.exportStaffEarningsCsv(
+          { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE },
+          userReaching(org.id),
+        );
+        const { header, rows } = parseCsv(csv);
+        expect(header).toEqual([
+          "dayBasis",
+          "from",
+          "to",
+          "membershipId",
+          "displayName",
+          "email",
+          "currency",
+          "tips",
+        ]);
+        expect(rows[0][1]).toBe(BUSINESS_DATE);
+        expect(rows[0][2]).toBe(BUSINESS_DATE);
+        expect(rows[0][6]).toBe("EUR");
+      },
+    );
+
+    it(
+      "says nothing about salary, withholding or tax — asserted as an absence, because the " +
+        "wording is the decision (Model B: the restaurant never receives the tip, ADR-053) and " +
+        "VMI has not answered on whether a tax figure is shown or withheld",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+        const { transaction } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+        await placeLines(transaction.id, BEFORE_MIDNIGHT, shiftId);
+
+        const query = { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE };
+        const csv = await analyticsService.exportStaffEarningsCsv(query, userReaching(org.id));
+        const header = csv.split("\n")[0].toLowerCase();
+
+        // A future column called `netPay` or `taxWithheld` would describe a money movement this
+        // product does not perform. This assertion is what makes adding one a deliberate act.
+        for (const forbidden of ["payroll", "salary", "wage", "withhold", "tax", "net pay"]) {
+          expect(header).not.toContain(forbidden);
+        }
+      },
+    );
+
+    it(
+      "quotes a display name containing a comma, and neutralises one that a spreadsheet would " +
+        "execute as a formula — the first export to carry text a human typed",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const { membership: comma, user: commaUser } = await seedMembership(
+          org.id,
+          restaurant.id,
+          "Waiter",
+        );
+        const { membership: formula, user: formulaUser } = await seedMembership(
+          org.id,
+          restaurant.id,
+          "Waiter",
+        );
+        await prisma.user.update({
+          where: { id: commaUser.id },
+          data: { displayName: "O'Brien, Jr." },
+        });
+        await prisma.user.update({
+          where: { id: formulaUser.id },
+          data: { displayName: '=HYPERLINK("http://attacker.example","Total")' },
+        });
+
+        const shiftId = await openShiftCrossingMidnight(restaurant.id);
+        const { transaction: a } = await capture(restaurant.id, 1000n, 200n, comma.id);
+        await placeLines(a.id, BEFORE_MIDNIGHT, shiftId);
+        const { transaction: b } = await capture(restaurant.id, 1000n, 100n, formula.id);
+        await placeLines(b.id, BEFORE_MIDNIGHT, shiftId);
+
+        const csv = await analyticsService.exportStaffEarningsCsv(
+          { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE },
+          userReaching(org.id),
+        );
+
+        // Quoted, so the comma cannot shift every following column by one. A naive join(",")
+        // produces nine fields on this row instead of eight, and fails here.
+        expect(csv).toContain('"O\'Brien, Jr."');
+        for (const line of csv.split("\n").slice(1)) {
+          expect(splitCsvLine(line)).toHaveLength(8);
+        }
+        // Neutralised: the cell is text a bookkeeper reads, not a formula their spreadsheet runs.
+        expect(csv).toContain("'=HYPERLINK");
+      },
+    );
+
+    it("the by-shift period summary names its own day basis, and the calendar one is untouched", async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+      const shiftId = await openShiftCrossingMidnight(restaurant.id);
+      const { transaction } = await capture(restaurant.id, 1000n, 100n, waiter.id);
+      await placeLines(transaction.id, AFTER_MIDNIGHT, shiftId);
+
+      const query = { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE };
+      const user = userReaching(org.id);
+
+      const shiftCsv = await analyticsService.exportReportByShiftCsv(
+        { ...query, type: "period-summary" as const },
+        user,
+      );
+      expect(shiftCsv.split("\n")[0].split(",")[0]).toBe("dayBasis");
+      expect(shiftCsv.split("\n")[1].split(",")[0]).toBe("shift");
+
+      // The calendar export keeps the exact header it had before ADR-067 — it is correct and the
+      // task's own boundary was that it must remain. A change to it fails here.
+      const calendarCsv = await analyticsService.exportReportCsv(
+        { ...query, type: "period-summary" as const },
+        user,
+      );
+      expect(calendarCsv.split("\n")[0]).toBe(
+        "restaurantId,from,to,type,revenue,tips,averageTipBasisPoints,transactionCount",
+      );
+    });
+
+    it(
+      "the new exports require data.export, not reports.view — checked independently, the same " +
+        "way ADR-027 Decision 4 already requires of every other export route",
+      async () => {
+        const { org, restaurant } = await seedOrgRestaurant();
+        const query = { restaurantId: restaurant.id, from: BUSINESS_DATE, to: BUSINESS_DATE };
+        const readOnly = userReaching(org.id, ["reports.view"]);
+
+        for (const call of [
+          () => analyticsService.exportRevenueByShiftCsv(query, readOnly),
+          () => analyticsService.exportTipsByShiftCsv(query, readOnly),
+          () => analyticsService.exportStaffEarningsCsv(query, readOnly),
+          () => analyticsService.exportStaffEarningsByShiftCsv(query, readOnly),
+        ]) {
+          await expect(call()).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+        }
+
+        // The discriminating half: the same caller holding data.export instead gets the files.
+        const exporter = userReaching(org.id, ["data.export"]);
+        await expect(analyticsService.exportRevenueByShiftCsv(query, exporter)).resolves.toContain(
+          "scope,businessDate",
+        );
+        await expect(analyticsService.exportStaffEarningsCsv(query, exporter)).resolves.toContain(
+          "dayBasis,from,to",
+        );
+      },
+    );
   });
 });
 
