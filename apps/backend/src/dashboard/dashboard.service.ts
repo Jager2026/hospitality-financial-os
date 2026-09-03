@@ -58,6 +58,20 @@ export interface DashboardSummary {
    * yet, and "0" would misrepresent "no data" as "a real 0% tip rate" (ADR-025's null-not-0
    * precedent). */
   averageTipBasisPoints: string | null;
+  /** UX_MAP: "Today's Transactions is a count, not a list." A count of SALES made today —
+   * PAYMENT_CAPTURED entries dated today — not of ledger activity. A refund posted today against
+   * an older sale moves `todayRevenue` (ADR-026, deliberately) but is not a transaction that
+   * happened today, so it must not move this. A plain number, not a minor-units string: it is a
+   * count, and typing it like money would invite someone to treat it as money. */
+  todayTransactions: number;
+  /** UX_MAP: Today's Revenue ÷ today's transaction count. Same ratio-of-sums discipline as
+   * `averageTipBasisPoints` (ADR-026 Decision 4) — divide the totals, never average each
+   * transaction's own figure. **`null`, never "0", when there were no transactions today**:
+   * "no data yet" and "an average of zero" are different statements (ADR-025's null-not-0
+   * precedent), and the divisor does not exist. It CAN be negative when today's refunds of older
+   * sales exceed today's takings — UX_MAP requires the screen to render that rather than clamp
+   * it, and this figure is not clamped here either. */
+  averageBill: string | null;
   revenueChart: DashboardRevenueChartPoint[];
   recentPayments: DashboardRecentPayment[];
   topStaff: DashboardTopStaffEntry[];
@@ -84,9 +98,11 @@ export class DashboardService {
     );
 
     const today = getLocalDayWindow(restaurant.timezone, 0);
-    const [todayRevenue, todayTips, revenueChart, recentPayments, topStaff] = await Promise.all([
+    const [todayRevenue, todayTips, todayTransactions, revenueChart, recentPayments, topStaff] =
+      await Promise.all([
       this.netBillRevenue(restaurantId, today.start, today.end),
       this.netTips(restaurantId, today.start, today.end),
+      this.todayTransactionCount(restaurantId, today.start, today.end),
       this.buildRevenueChart(restaurant),
       this.recentPayments(restaurantId),
       this.topStaff(restaurantId, today.start, today.end),
@@ -99,6 +115,8 @@ export class DashboardService {
       todayRevenueNote: TODAY_REVENUE_NOTE,
       todayTips: todayTips.toString(),
       averageTipBasisPoints: this.averageTipBasisPoints(todayTips, todayRevenue),
+      todayTransactions,
+      averageBill: this.averageBill(todayRevenue, todayTransactions),
       revenueChart,
       recentPayments,
       topStaff,
@@ -123,6 +141,45 @@ export class DashboardService {
    * leaving only the real, person-attributed tip total minus anything refunded today. */
   private async netTips(restaurantId: string, start: Date, end: Date): Promise<bigint> {
     return netForRestaurantWindow(this.prisma, restaurantId, ["TIP_PAYABLE"], start, end);
+  }
+
+  /** Count of SALES dated today: one per PAYMENT_CAPTURED JournalEntry on this Restaurant's
+   * Transactions inside the local-day window. Counted from the Ledger, like every other figure
+   * on this screen, rather than from Transaction.createdAt — a Transaction row's own timestamp
+   * and its capture entry's are written in the same request today, but the Ledger is the source
+   * of truth for when money moved (ADR-002), and the two must not be allowed to drift apart into
+   * two different answers to "how many sales today". */
+  private async todayTransactionCount(
+    restaurantId: string,
+    start: Date,
+    end: Date,
+  ): Promise<number> {
+    // Counted over LedgerLine.createdAt, NOT JournalEntry.createdAt. The two are written in the
+    // same request today and look interchangeable; they are not, and this test caught the
+    // difference: every other figure on this screen defines the day by LedgerLine.createdAt
+    // (ADR-026), so counting by the entry's own timestamp would give "how many sales today" a
+    // different day boundary from "today's revenue" — the exact drift the comment above claims
+    // to avoid. One PAYMENT_CAPTURED entry is one sale, so distinct entries are the count.
+    const entries = await this.prisma.ledgerLine.groupBy({
+      by: ["journalEntryId"],
+      where: {
+        restaurantId,
+        createdAt: { gte: start, lt: end },
+        journalEntry: { entryType: "PAYMENT_CAPTURED" },
+      },
+    });
+    return entries.length;
+  }
+
+  /** Today's Revenue ÷ today's transaction count, floored to minor units.
+   *
+   * **The zero case is the whole reason this is a named method.** With no transactions there is
+   * no divisor: a naive implementation either divides by zero or returns "0", and "0" is a lie —
+   * it says the average bill today was nothing, when the truth is that there were no bills. The
+   * test for this asserts `null`, and both naive versions fail it. */
+  private averageBill(todayRevenue: bigint, todayTransactions: number): string | null {
+    if (todayTransactions === 0) return null;
+    return (todayRevenue / BigInt(todayTransactions)).toString();
   }
 
   /** Ratio of the two SUMS already computed above, not an average of each transaction's own

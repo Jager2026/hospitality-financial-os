@@ -1,6 +1,6 @@
 ---
 title: ADR-062 — Refunds after the tip has left: what a reversal does when the waiter has already been paid
-version: 1.2.0
+version: 1.3.0
 status: Superseded in part — the withdrawal window is cancelled; tips are not reversed on refund; chargebacks stay open in THREAT_MODEL
 classification: Critical
 owner: Founder
@@ -172,6 +172,16 @@ The live experiment showed what a reversal looks like from the recipient's side:
 **ADR-023 reverses three accounts proportionally, and `TIP_PAYABLE` is one of them.** `handleChargeRefunded` (`webhooks.service.ts:292`) calls `splitProportionally` (`:483`) across `RESTAURANT_REVENUE_PAYABLE`, `PLATFORM_FEE_REVENUE` and `TIP_PAYABLE` at the waiter's own Membership (`:344`), and ADR-023's own worked example refunds 500 of tip out of a 2000 bill. **Under the rule above that is wrong: the tip share of a refund must be zero, and the refund must be sized to the bill, not the gross.**
 
 **This PR does not change ADR-023 or the code.** It records that the accepted decision and the running implementation now disagree, in a money path, and that the disagreement is to be resolved as its own change with its own tests — ADR-023's falsification suite asserts the proportional tip reversal and will have to be rewritten to assert its absence. One axis of risk: this is documentation; that is money.
+
+### REFUND_EXCEEDS_BILL stays a refusal — decided 2026-09-03, so nobody builds a handler for it later
+
+The implementation refuses a refund larger than the bill (`REFUND_EXCEEDS_BILL`, 422) before any write, leaving the event unprocessed for retry and alerting. **That is the final answer, not a placeholder**, and the reasoning is recorded here because a stuck event with an alert *looks* like an unfinished feature, and in six months someone will set out to "finish" it.
+
+**The Founder's basis, four years working in restaurants: a refund of the whole amount including the tip is never done.** A guest disputing a bill is refunded the bill. Nobody hands back the tip as part of it — and the two refunds observed in four years were both immediate, at the table, one for a mis-keyed amount.
+
+**An event that does not occur does not deserve a mechanism.** Building one would mean deciding who bears a returned tip — the venue, or the waiter in contradiction of this ADR's own rule — and encoding that decision in a money path, permanently, to serve a case nobody has seen. The refusal costs nothing while the case does not arise, and when it does arise it produces a person looking at an alert, which is the correct handler for a situation nobody has decided how to book.
+
+**Trigger for revisiting: the first real `REFUND_EXCEEDS_BILL` alert.** Not a count, not a rate — one is enough, because one means the assumption above is wrong.
 
 ### What stays open — the chargeback, which is not a refund
 
