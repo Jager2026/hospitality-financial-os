@@ -1,11 +1,17 @@
 import { Injectable } from "@nestjs/common";
 import type { Restaurant } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import { csvLine } from "../common/csv.util";
 import { getReachableReportingRestaurantOrThrow } from "../common/restaurant-reachability.util";
-import { enumerateDates, getDayWindowForDate } from "../common/timezone-day.util";
+import {
+  enumerateDates,
+  formatInstantInZone,
+  getDayWindowForDate,
+} from "../common/timezone-day.util";
 import {
   BILL_REVENUE_ACCOUNTS,
   netForRestaurantWindow,
+  netForRestaurantWindowWithoutShift,
   netTipsByMembershipForRestaurantWindow,
   netForRestaurantShifts,
   netTipsByMembershipForRestaurantShifts,
@@ -21,6 +27,18 @@ import type {
 
 export interface AnalyticsSeriesPoint {
   date: string;
+  amount: string;
+}
+
+/** One line of a by-shift accounting export (ADR-067). `scope` is the first column deliberately:
+ * it is the field that tells the reader whether the rest of the row describes a working day or the
+ * money that belongs to no working day at all. */
+export interface ShiftExportRow {
+  scope: "shift" | "unassigned";
+  businessDate: string;
+  shiftId: string;
+  openedAt: string;
+  closedAt: string;
   amount: string;
 }
 
@@ -140,6 +158,88 @@ export class AnalyticsService {
     const header = "date,amount";
     const lines = data.series.map((p) => `${p.date},${p.amount}`);
     return [header, ...lines].join("\n");
+  }
+
+  /**
+   * ACCOUNTING's OTHER list: Revenue by shift (ADR-065 §3, ADR-067).
+   *
+   * **A separate route, not a flag on the calendar one.** A boolean in a query string makes the
+   * call site ambiguous — the reader of `?byShift=true` has to know what the false branch does to
+   * know what the true one means — and the two files answer different questions to different
+   * readers. Two names that say what they are beat one name plus a parameter.
+   */
+  async exportRevenueByShiftCsv(
+    query: AnalyticsQueryDto,
+    user: AuthenticatedUser,
+  ): Promise<string> {
+    const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
+    const rows = await this.buildShiftExportRows(
+      restaurant,
+      query.from,
+      query.to,
+      BILL_REVENUE_ACCOUNTS,
+    );
+    return renderShiftExport(rows);
+  }
+
+  /** Tips by shift — `exportRevenueByShiftCsv`'s definition over `TIP_PAYABLE`. */
+  async exportTipsByShiftCsv(query: AnalyticsQueryDto, user: AuthenticatedUser): Promise<string> {
+    const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
+    const rows = await this.buildShiftExportRows(restaurant, query.from, query.to, ["TIP_PAYABLE"]);
+    return renderShiftExport(rows);
+  }
+
+  /**
+   * **Staff earnings for a period, for accounting (ADR-067).** Who received how much in tips, by
+   * Membership, over a date range, in a form that can be handed to a bookkeeper as-is.
+   *
+   * **What this is NOT, deliberately and by name.** It is not payroll. In Model B — the single
+   * target (ADR-053) — the restaurant never receives the tip and therefore cannot pay it out; a
+   * file called "payroll" would describe a money movement that does not happen in this product.
+   * There is no salary column, no withholding column, and no tax figure, because whether a tax
+   * figure is displayed or withheld is not known: VMI has not answered. A column added later is a
+   * change; a column that means the wrong thing today is a liability.
+   *
+   * The difference from `/analytics/staff/export` is form, not data: that file is three columns of
+   * identifiers, and out of its download context it does not say what period it covers or on whose
+   * day it is counted. Every row here carries both.
+   */
+  async exportStaffEarningsCsv(query: AnalyticsQueryDto, user: AuthenticatedUser): Promise<string> {
+    const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
+    const ranked = await this.rankedStaffForRange(restaurant, query.from, query.to);
+    return this.renderStaffEarnings(restaurant, query.from, query.to, "calendar", ranked);
+  }
+
+  /** `exportStaffEarningsCsv` counted on the venue's working day instead of the calendar one. */
+  async exportStaffEarningsByShiftCsv(
+    query: AnalyticsQueryDto,
+    user: AuthenticatedUser,
+  ): Promise<string> {
+    const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
+    const shiftIds = await this.shiftIdsForRange(restaurant.id, query.from, query.to);
+    const ranked = await this.rankStaffByShifts(restaurant.id, shiftIds);
+    return this.renderStaffEarnings(restaurant, query.from, query.to, "shift", ranked);
+  }
+
+  /** The period summary counted by shift — `computeReport`, which the JSON route already uses,
+   * rendered as the CSV its calendar twin already had. */
+  async exportReportByShiftCsv(query: ReportsQueryDto, user: AuthenticatedUser): Promise<string> {
+    const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
+    const report = await this.computeReport(restaurant, query.from, query.to);
+    const header =
+      "dayBasis,restaurantId,from,to,type,revenue,tips,averageTipBasisPoints,transactionCount";
+    const row = csvLine([
+      "shift",
+      report.restaurantId,
+      report.from,
+      report.to,
+      report.type,
+      report.revenue,
+      report.tips,
+      report.averageTipBasisPoints ?? "",
+      report.transactionCount,
+    ]);
+    return [header, row].join("\n");
   }
 
   /** Full list, ranked by net tips over the period — not capped to a top N the way Dashboard's
@@ -430,6 +530,115 @@ export class AnalyticsService {
     );
   }
 
+  /**
+   * The by-shift export's rows: one per Shift, plus one naming the money the shift cut cannot see.
+   *
+   * **Every row states which day it means, and a shift row states it twice** — `businessDate` is
+   * the day the venue CALLS this working day, `openedAt`/`closedAt` are the real calendar instants
+   * it actually spanned. That pair is the split ADR-065 requires to be legible: a shift of the 2nd
+   * that closed at 01:30 on the 3rd shows both facts on one line, and an accountant reconciling a
+   * Z-report against a calendar month can see exactly where the two cuts diverge.
+   *
+   * **The trailing `unassigned` row is not decoration.** Lines written before ADR-064 carry no
+   * `shiftId` and no honest backfill exists, so a by-shift export over a historical period omits
+   * real money. Omitting money from a financial file without saying so is the failure mode here;
+   * naming it costs one query.
+   */
+  private async buildShiftExportRows(
+    restaurant: Restaurant,
+    from: string,
+    to: string,
+    accounts: Parameters<typeof netForRestaurantWindow>[2],
+  ): Promise<ShiftExportRow[]> {
+    const shifts = await this.shifts.shiftsForBusinessDateRange(restaurant.id, from, to);
+    const shiftRows = await Promise.all(
+      shifts.map(async (shift) => {
+        const amount = await netForRestaurantShifts(this.prisma, restaurant.id, accounts, [
+          shift.id,
+        ]);
+        return {
+          scope: "shift" as const,
+          businessDate: shift.businessDate.toISOString().slice(0, 10),
+          shiftId: shift.id,
+          // The VENUE's local time, with offset — not UTC. A shift of the 15th closing at 02:00
+          // local on the 16th is 23:00Z on the 15th, whose date reads "the 15th": rendered in UTC
+          // the file agrees with the calendar cut at exactly the boundary where the two are meant
+          // to differ, and shows the accountant nothing to reconcile. Caught by a test, not by
+          // review — the first version of this code emitted `toISOString()` (ADR-067).
+          openedAt: formatInstantInZone(restaurant.timezone, shift.openedAt),
+          closedAt: shift.closedAt ? formatInstantInZone(restaurant.timezone, shift.closedAt) : "",
+          amount: amount.toString(),
+        };
+      }),
+    );
+
+    const unassigned = await netForRestaurantWindowWithoutShift(
+      this.prisma,
+      restaurant.id,
+      accounts,
+      getDayWindowForDate(restaurant.timezone, from).start,
+      getDayWindowForDate(restaurant.timezone, to).end,
+    );
+
+    return [
+      ...shiftRows,
+      {
+        scope: "unassigned" as const,
+        businessDate: "",
+        shiftId: "",
+        openedAt: "",
+        closedAt: "",
+        amount: unassigned.toString(),
+      },
+    ];
+  }
+
+  /** Both staff-earnings exports differ only in how `ranked` was counted, so the file they produce
+   * is built once — and `dayBasis` is what tells the reader which of the two they are holding. */
+  private async renderStaffEarnings(
+    restaurant: Restaurant,
+    from: string,
+    to: string,
+    dayBasis: "calendar" | "shift",
+    ranked: Array<[string, bigint]>,
+  ): Promise<string> {
+    const header = "dayBasis,from,to,membershipId,displayName,email,currency,tips";
+    const people = await this.identifyMemberships(ranked);
+    const lines = people.map((p) =>
+      csvLine([
+        dayBasis,
+        from,
+        to,
+        p.membershipId,
+        p.displayName,
+        p.email,
+        restaurant.currency,
+        p.tips,
+      ]),
+    );
+    return [header, ...lines].join("\n");
+  }
+
+  /** `attachEmails` plus the person's name. `User.displayName` did not exist when Dashboard's Top
+   * Staff was built (ADR-026 recorded the absence as a limitation); it does now, and a file for a
+   * human reader should carry a human name rather than an email address. */
+  private async identifyMemberships(
+    ranked: Array<[string, bigint]>,
+  ): Promise<Array<{ membershipId: string; displayName: string; email: string; tips: string }>> {
+    if (ranked.length === 0) return [];
+    const memberships = await this.prisma.membership.findMany({
+      where: { id: { in: ranked.map(([id]) => id) } },
+      include: { user: { select: { email: true, displayName: true } } },
+    });
+    const byId = new Map(memberships.map((m) => [m.id, m.user]));
+    return ranked.map(([membershipId, tips]) => ({
+      membershipId,
+      displayName: byId.get(membershipId)?.displayName ?? "",
+      email: byId.get(membershipId)?.email ?? "",
+      tips: tips.toString(),
+    }));
+  }
+
   /** Every Shift id in the range — the scope every shift-based total below is computed over. */
   private async shiftIdsForRange(
     restaurantId: string,
@@ -532,6 +741,16 @@ export class AnalyticsService {
     ]);
     return { from, to, revenue: revenue.toString(), tips: tips.toString(), transactionCount };
   }
+}
+
+/** The by-shift export file. Shared by Revenue and Tips: the two differ only in which accounts
+ * were summed, never in what a row means. */
+function renderShiftExport(rows: ShiftExportRow[]): string {
+  const header = "scope,businessDate,shiftId,openedAt,closedAt,amount";
+  const lines = rows.map((r) =>
+    csvLine([r.scope, r.businessDate, r.shiftId, r.openedAt, r.closedAt, r.amount]),
+  );
+  return [header, ...lines].join("\n");
 }
 
 /** Pure calendar-date arithmetic — no timezone involved (same reasoning as timezone-day.util.ts's

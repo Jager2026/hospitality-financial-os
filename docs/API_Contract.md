@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.19.0
+version: 2.20.0
 status: Active
 classification: Internal
 owner: Founder
@@ -349,22 +349,37 @@ Response: `{ restaurantId, shift, shiftRevenue, shiftRevenueNote, shiftTips, ave
 
 Every route below requires `restaurantId`, `from`, `to` (plain `"YYYY-MM-DD"`, interpreted in the Restaurant's own `timezone` — never UTC, same as Dashboard's own day-boundary rule, ADR-026 Decision 2) — `from` must not be after `to`, and the range must not exceed 366 days (a deliberate MVP-scale cap, `analytics-query.schema.ts`). Every money figure is the same live `SUM(CREDIT) - SUM(DEBIT)` `LedgerLine` aggregation Dashboard already uses (`restaurant-ledger-window.util.ts`, reused unmodified, not reimplemented — ADR-027 Decision 1), generalized from Dashboard's fixed "today"/"last 7 days" windows to the caller's own date range.
 
-Gated by `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — same as Dashboard), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant actually carries the permission. The five `/export` routes below require `data.export` instead, at both layers — a caller holding only `reports.view` can read every JSON route here but gets `403 PERMISSION_DENIED` from every export; a caller holding only `data.export` gets the reverse. Checked independently at the service layer, not by the export routes internally reusing the read routes' own permission check (ADR-027 Decision 4 — a real bug caught and fixed by self-review before this Sprint shipped).
+Gated by `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — same as Dashboard), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant actually carries the permission. The ten `/export` routes below require `data.export` instead, at both layers — a caller holding only `reports.view` can read every JSON route here but gets `403 PERMISSION_DENIED` from every export; a caller holding only `data.export` gets the reverse. Checked independently at the service layer, not by the export routes internally reusing the read routes' own permission check (ADR-027 Decision 4 — a real bug caught and fixed by self-review before this Sprint shipped).
 
 ### Revenue
 GET /analytics/revenue?restaurantId={id}&from={date}&to={date}
 
 Response: `{ restaurantId, from, to, total, totalNote, series }`. `total` is `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)` across the whole range — the identical bill-only definition as Dashboard's `shiftRevenue` (ADR-026 Decision 1), not `netRestaurantRevenue`. `totalNote` is always `"Before platform fee deduction"`, same fixed caption as Dashboard's `shiftRevenueNote`. `series` is one `{ date, amount }` point per calendar day in the range, oldest first.
 
-GET /analytics/revenue/export — same query, CSV. Columns: `date, amount`. No pagination — every day in the range.
+GET /analytics/revenue/export — same query, CSV. Columns: `date, amount`. No pagination — every day in the range. **By CALENDAR day** (ADR-065 §3: the accountant is bound by law to a calendar period). Unchanged by ADR-067.
 Requires: `data.export`
+
+GET /analytics/revenue/export/by-shift
+Requires: `data.export`
+
+Same query, CSV. **By SHIFT** — accounting's second list (ADR-065 §3, built in ADR-067). Columns: `scope, businessDate, shiftId, openedAt, closedAt, amount`. One row per Shift whose `businessDate` falls in the range, then one final `scope=unassigned` row.
+
+- `scope` — `shift` or `unassigned`.
+- `businessDate` — the day the venue CALLS this working day.
+- `openedAt`/`closedAt` — the calendar instants it ACTUALLY spanned, in the Restaurant's own local time WITH its UTC offset (`2026-06-16T02:00:00+03:00`), never UTC: in UTC a shift closing at 02:00 local reads as the previous date and hides the very split this file exists to show. `closedAt` is empty for a Shift still open.
+- `unassigned` — money in the same calendar window carrying NO `shiftId`. Rows written before ADR-064 have none and no backfill can honestly repair them (ADR-065's own Consequences), so a by-shift export over a historical period would otherwise omit real money silently. Its `businessDate`/`shiftId`/`openedAt`/`closedAt` are empty.
+
+**The two files are not expected to sum to the same total** — shift rows are cut by business date, the calendar file by calendar day, and at the range edges they genuinely differ. That divergence is why both lists exist; agreement would prove the second cut never happened.
 
 ### Tips
 GET /analytics/tips?restaurantId={id}&from={date}&to={date}
 
 Response: `{ restaurantId, from, to, total, series }`. `total` is `net(TIP_PAYABLE)` across the range, unfiltered by `membershipId` — same definition as Dashboard's `shiftTips`. `series` is one `{ date, amount }` point per day.
 
-GET /analytics/tips/export — same query, CSV. Columns: `date, amount`.
+GET /analytics/tips/export — same query, CSV. Columns: `date, amount`. By CALENDAR day. Unchanged by ADR-067.
+Requires: `data.export`
+
+GET /analytics/tips/export/by-shift — same query, CSV. By SHIFT. Identical row shape and semantics to `/analytics/revenue/export/by-shift` above, over `TIP_PAYABLE` instead of the bill-revenue accounts.
 Requires: `data.export`
 
 ### Staff
@@ -372,8 +387,26 @@ GET /analytics/staff?restaurantId={id}&from={date}&to={date}&page={n}&limit={n} 
 
 Response: `{ restaurantId, from, to, data, meta }`. `data` is `{ membershipId, email, tips }[]`, ranked by net `TIP_PAYABLE` descending (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of credits alone — same ADR-023 bug class Dashboard's own Top Staff already avoids). `meta` is `{ page, limit, total, pages }`, `total`/`pages` reflecting the full unpaginated ranked list.
 
-GET /analytics/staff/export — same query (restaurantId/from/to only — export ignores pagination), CSV. Columns: `membershipId, email, tips`. Every ranked Membership, one row each.
+GET /analytics/staff/export — same query (restaurantId/from/to only — export ignores pagination), CSV. Columns: `membershipId, email, tips`. Every ranked Membership, one row each. Unchanged by ADR-067.
 Requires: `data.export`
+
+### Staff earnings for a period (ADR-067)
+
+GET /analytics/staff-earnings/export
+Requires: `data.export`
+
+Same query, CSV. Who received how much in tips, by Membership, over the range, in a form that can be handed to a bookkeeper as-is. Columns: `dayBasis, from, to, membershipId, displayName, email, currency, tips`. One row per ranked Membership, `dayBasis` = `calendar`.
+
+GET /analytics/staff-earnings/export/by-shift
+Requires: `data.export`
+
+Identical columns, counted over the Shifts whose `businessDate` falls in the range instead of the calendar window. `dayBasis` = `shift`.
+
+**This is NOT payroll, and the name is a decision rather than a preference.** In Model B — the single target (ADR-053) — the restaurant never receives the tip and therefore cannot pay it out, so a file called payroll would describe a money movement this product does not perform. There is **no salary column, no withholding column and no tax figure**: whether a tax figure is displayed or withheld is not known, because VMI has not answered. A test asserts the absence of `payroll`/`salary`/`wage`/`withhold`/`tax`/`net pay` from the header, so adding one is a deliberate act.
+
+**What differs from `/analytics/staff/export` is form, not data** — that file is three columns of identifiers and, out of its download context, does not say what period it covers or on whose day it was counted. Every row here carries both, plus currency and the person's name.
+
+**CSV encoding.** `displayName` is the first free text any export emits, so fields are RFC 4180-quoted when they contain a comma, quote or newline, and a value beginning `=`, `+`, `-`, `@`, TAB or CR is prefixed with an apostrophe — a spreadsheet would otherwise execute it, and the person opening our export is an accountant who trusts it. This changes the bytes deliberately; the JSON routes are unaffected.
 
 ### Performance
 GET /analytics/performance?restaurantId={id}&from={date}&to={date} — trend/period-over-period comparison (`UX_MAP.md`'s "Growth" and "Time Analysis" made concrete as one thing, ADR-027 Decision 2 — not a fourth thing duplicating Staff).
@@ -388,7 +421,12 @@ GET /analytics/reports?restaurantId={id}&from={date}&to={date}&type={type} — a
 
 `period-summary` response: `{ restaurantId, from, to, type, revenue, revenueNote, tips, averageTipBasisPoints, transactionCount, topStaff }` — Revenue, Tips, Average Tip, transaction count, and Top Staff for the range, in one round trip. `revenue`/`revenueNote`/`tips`/`averageTipBasisPoints` reuse Dashboard's own definitions and ratio-of-sums formula (ADR-026 Decision 4) verbatim, computed over the whole range instead of just today. `topStaff` is up to 5 Memberships, same rank-and-cap shape as Dashboard's own Top Staff.
 
-GET /analytics/reports/export — same query, CSV. Columns: `restaurantId, from, to, type, revenue, tips, averageTipBasisPoints, transactionCount` — flat scalar fields only; `topStaff` is not a CSV column (nested lists get their own export, same precedent as Transaction export omitting `refunds`/`chargebacks` — use `/analytics/staff/export` instead).
+GET /analytics/reports/export — same query, CSV. Columns: `restaurantId, from, to, type, revenue, tips, averageTipBasisPoints, transactionCount` — flat scalar fields only; `topStaff` is not a CSV column (nested lists get their own export, same precedent as Transaction export omitting `refunds`/`chargebacks` — use `/analytics/staff/export` instead). By CALENDAR day. Unchanged by ADR-067.
+Requires: `data.export`
+
+GET /analytics/reports/export/by-shift — same query, CSV. The same summary counted by SHIFT. Columns: `dayBasis, restaurantId, from, to, type, revenue, tips, averageTipBasisPoints, transactionCount` — `dayBasis` is `shift`, and is first so the reader knows which file they are holding before reading a figure.
+
+`GET /analytics/performance/export` has **no** by-shift twin, deliberately: its rows are metrics rather than days, and defining "the previous period" in shifts (how many shifts back; what happens when the venue traded fewer) is a product decision, not an engineering one (ADR-067).
 Requires: `data.export`
 
 ---
