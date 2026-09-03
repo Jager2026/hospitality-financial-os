@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.17.0
+version: 2.18.0
 status: Active
 classification: Internal
 owner: Founder
@@ -295,6 +295,10 @@ POST /wallets/{id}/withdrawals — future (IMPLEMENTATION_PLAN.md Sprint 7: "Fut
 GET /transactions — **requires `reports.view`** (ADR-043; it previously required no permission at all, which was an omission — the Dashboard, Analytics and this data’s own CSV export all require one, and different formats of one question must not have different thresholds). Scoped to the Restaurants reached by a Membership that CARRIES that permission, not by any Membership at all. Reachability-scoped the same way `GET /payments` already is (ADR-005): every Restaurant the caller's Memberships reach. Filters: `restaurantId`, `status` (`COMPLETED`/`PARTIALLY_REFUNDED`/`REFUNDED`/`DISPUTED`), `membership` (a Waiter's own Transactions, via `Payment.waiter_membership_id` — `GET /transactions?membership=123`, already named in Filtering below). Paginated (`page`/`limit`, same shape as every other list endpoint). Sort fixed at `created_at desc` for MVP, matching Payment History's own precedent.
 Requires: `reports.view`
 
+Response: `{ data: [{ id, restaurantId, paymentId, grossAmount, currency, tip, status, createdAt }], meta: { page, limit, total, pages } }`.
+
+- `tip` — `net(TIP_PAYABLE)` for that Transaction, the **same definition** as Transaction Details' `netTip`, so the card and the detail screen can never show two different tips for one Transaction. Net of refund and chargeback activity, not the capture-time figure. `UX_MAP.md`'s Transaction Card promises Amount and Tip; until now the list returned only the amount, and unlike the card's missing Staff Member that gap was recorded nowhere (`UX_API_RECONCILIATION.md`, section B). Computed for a whole page in one aggregation, not per row.
+
 ## Transaction Details
 GET /transactions/{id} — **requires `reports.view`**, re-checked at the Transaction's own Restaurant (PR #109); the list and the export already carried it and this route did not. Includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
 
@@ -319,12 +323,16 @@ Requires: `reports.view`
 
 Every money figure is a live `SUM(CREDIT) - SUM(DEBIT)` aggregation over `LedgerLine`, scoped to the Restaurant and to "today" as a calendar day in the Restaurant's own `timezone` (ADR-026) — never a read of `Payment`/`Transaction` fields directly, and never UTC "today." The window is `LedgerLine.createdAt`-scoped, not `Transaction.createdAt`-scoped: a refund posted today against a payment from a prior day correctly reduces TODAY's totals, not the original sale's day (ADR-026, Decision 3) — each day's own already-posted Ledger activity stays fixed once that day has passed.
 
-Response: `{ restaurantId, date, todayRevenue, todayRevenueNote, todayTips, averageTipBasisPoints, revenueChart, recentPayments, topStaff }`.
+Response: `{ restaurantId, date, todayRevenue, todayRevenueNote, todayTips, averageTipBasisPoints, todayTransactions, averageBill, revenueChart, recentPayments, topStaff }`.
+
+**No Stripe account status here, deliberately (ADR-063).** The Dashboard banner (`UX_MAP.md`) needs `cardPaymentsStatus` / `payoutsStatus` / `requirementsDue`; it takes them from `GET /restaurants/{id}` in a second call. Every figure below is computed from our own Ledger and is exact as of the request; a capability status is a cached observation of Stripe's system, with its own freshness and its own failure mode. Folding them into one response would make the most-viewed screen in the product fail, or hang, on Stripe's availability.
 
 - `todayRevenue` — `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)`, today: the gross amount customers paid for their bills. Deliberately NOT the same quantity as Transaction Details' `netRestaurantRevenue` (ADR-025), which nets the platform fee out — Revenue is what the customer paid; the platform fee is a separate expense against it, not a deduction from revenue itself before revenue is even reported (ADR-026, Decision 1). Both figures are correct; they answer different questions ("how much business did we do" vs. "what does the restaurant keep").
 - `todayRevenueNote` — always the fixed string `"Before platform fee deduction"` (ADR-026) — since `todayRevenue` doesn't match `netRestaurantRevenue` shown elsewhere in the product, the difference must be explicit on screen wherever `todayRevenue` is rendered, not left to documentation alone.
 - `todayTips` — `net(TIP_PAYABLE)`, today, unfiltered by `membershipId` — the general `PAYMENT_CAPTURED` credit and `TIP_ALLOCATED`'s own reversal of it cancel to zero by construction (ADR-022/025), same as everywhere else this pattern appears.
 - `averageTipBasisPoints` — `(todayTips × 10000) / todayRevenue`, the ratio of the two sums above, never an average of individual transactions' own tip percentages (ADR-026, Decision 4 — the Founder's own explicit correction). A string of basis points (ADR-021's vocabulary — e.g. `"2500"` = 25.00%), `null` — never `"0"` — when `todayRevenue` is exactly zero.
+- `todayTransactions` — a **count** of sales made today: one per `PAYMENT_CAPTURED` entry inside the local-day window, counted over `LedgerLine.created_at` like every money figure on this screen (ADR-026), never over `Transaction.created_at`. A refund posted today against an older sale moves `todayRevenue` and does **not** move this — it is a count of sales, not of ledger activity. A plain number, not a minor-units string.
+- `averageBill` — `todayRevenue / todayTransactions`, floored to minor units: the ratio of the sums, the same discipline as `averageTipBasisPoints` (ADR-026, Decision 4). **`null` — never `"0"` — when `todayTransactions` is 0**: there is no divisor, and "no bills today" is not "a bill of zero" (ADR-025's null-not-0 precedent). Can be negative when today's refunds of older sales exceed today's takings; the screen renders that rather than clamping it (`UX_MAP.md`).
 - `revenueChart` — last 7 local calendar days including today, oldest first, each `{ date, revenue }` using the identical `todayRevenue` definition for that day.
 - `recentPayments` — the 10 most recent Transactions for this Restaurant, all-time (not "today"-scoped) — `{ id, grossAmount, currency, status, createdAt }`.
 - `topStaff` — up to 5 Memberships, ranked by today's net `TIP_PAYABLE` (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of `TIP_ALLOCATED` credits alone — ADR-026, Decision 6, avoiding ADR-023's own bug class from the start) — `{ membershipId, email, tips }`. `email` is the only identifier available: `User` has no display-name field anywhere in the schema (a known, flagged limitation, ADR-026).
@@ -402,6 +410,10 @@ GET /restaurants/{id}/settings/tips — PATCH /restaurants/{id}/settings/tips (S
 # PROFILE
 
 GET /profile — PATCH /profile
+
+`GET /profile` returns the caller's own identity: everything the access token already carried (`id`, `email`, `locale`, `memberships`) **plus `displayName`**, read from the `User` row. Additive — no field an existing caller reads was removed. Until now the logged-in person was the only one who could not read their own name, while the Dashboard has returned other people's since ADR-033 (`UX_API_RECONCILIATION.md`, section B).
+
+`PATCH /profile` updates `locale` and answers with the same identity shape, so a screen re-reading the response after saving does not lose the name it was showing.
 
 ---
 

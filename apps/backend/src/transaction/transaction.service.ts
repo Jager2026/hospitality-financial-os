@@ -55,6 +55,11 @@ export interface TransactionListEntry {
   paymentId: string;
   grossAmount: string;
   currency: string;
+  /** UX_MAP's Transaction Card promises Amount AND Tip; this list returned only the amount, and
+   * unlike the card's missing Staff Member that gap was recorded nowhere (UX_API_RECONCILIATION,
+   * section B). Same `net(TIP_PAYABLE)` definition as `TransactionDetails.netTip`, so the card
+   * and the detail screen can never show two different tips for one Transaction. */
+  tip: string;
   status: Transaction["status"];
   createdAt: Date;
 }
@@ -167,8 +172,10 @@ export class TransactionService {
       this.prisma.transaction.count({ where }),
     ]);
 
+    const tips = await this.netTipsByTransaction(rows.map((t) => t.id));
+
     return {
-      data: rows.map((t) => this.toListEntry(t)),
+      data: rows.map((t) => this.toListEntry(t, tips.get(t.id) ?? 0n)),
       meta: {
         page: filters.page,
         limit: filters.limit,
@@ -247,13 +254,49 @@ export class TransactionService {
     };
   }
 
-  private toListEntry(t: Transaction): TransactionListEntry {
+  /** `net(TIP_PAYABLE)` per Transaction for a whole page, in ONE groupBy.
+   *
+   * **Deliberately not a per-row `computeBreakdown` call**: that is the N+1 this screen would
+   * otherwise ship with, and UX_API_RECONCILIATION asked for the call count to be a decision
+   * rather than an accident. One extra query per page, whatever the page size. */
+  private async netTipsByTransaction(transactionIds: string[]): Promise<Map<string, bigint>> {
+    if (transactionIds.length === 0) return new Map();
+
+    const groups = await this.prisma.ledgerLine.groupBy({
+      by: ["journalEntryId", "direction"],
+      where: {
+        account: "TIP_PAYABLE",
+        journalEntry: { transactionId: { in: transactionIds } },
+      },
+      _sum: { amount: true },
+    });
+
+    // groupBy cannot group by a relation's column, so the entry -> transaction mapping is read
+    // back separately and folded in. Two queries, still not per row.
+    const entries = await this.prisma.journalEntry.findMany({
+      where: { transactionId: { in: transactionIds } },
+      select: { id: true, transactionId: true },
+    });
+    const entryToTransaction = new Map(entries.map((e) => [e.id, e.transactionId]));
+
+    const net = new Map<string, bigint>();
+    for (const g of groups) {
+      const transactionId = entryToTransaction.get(g.journalEntryId);
+      if (!transactionId) continue;
+      const delta = (g._sum.amount ?? 0n) * (g.direction === "CREDIT" ? 1n : -1n);
+      net.set(transactionId, (net.get(transactionId) ?? 0n) + delta);
+    }
+    return net;
+  }
+
+  private toListEntry(t: Transaction, tip: bigint): TransactionListEntry {
     return {
       id: t.id,
       restaurantId: t.restaurantId,
       paymentId: t.paymentId,
       grossAmount: t.grossAmount.toString(),
       currency: t.currency,
+      tip: tip.toString(),
       status: t.status,
       createdAt: t.createdAt,
     };

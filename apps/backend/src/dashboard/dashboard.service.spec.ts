@@ -343,6 +343,68 @@ describe("DashboardService (real database)", () => {
   });
 
   it(
+    'averageBill is null — never "0" — when there were no transactions today, and ' +
+      "todayTransactions is 0: the discriminating case against both naive implementations, one " +
+      "that divides by zero and one that reports an average of nothing as an average of zero",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+
+      // A division-by-zero implementation throws before reaching this line; a "return 0"
+      // implementation reaches it and fails on the value. Both are wrong for the same reason:
+      // there is no divisor, so there is no average — "no bills today" is not "a bill of zero".
+      expect(summary.averageBill).toBeNull();
+      expect(summary.todayTransactions).toBe(0);
+    },
+  );
+
+  it(
+    "todayTransactions counts today's SALES and averageBill divides today's revenue by them — " +
+      "discriminating: two sales of different sizes, so an implementation returning either sale's " +
+      "own amount, or the plain sum, disagrees with the ratio-of-sums answer",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+
+      // Bills of 1000 and 3000 (no tips, so revenue is the bill exactly): revenue 4000 over
+      // 2 sales = 2000. Neither 1000 nor 3000 nor 4000 — the ratio is its own number here.
+      await capture(restaurant.id, 1000n, 0n, waiter.id);
+      await capture(restaurant.id, 3000n, 0n, waiter.id);
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+
+      expect(summary.todayTransactions).toBe(2);
+      expect(BigInt(summary.todayRevenue)).toBe(4000n);
+      expect(summary.averageBill).toBe("2000");
+    },
+  );
+
+  it(
+    "a refund posted today against a PRIOR day's sale moves today's revenue but NOT " +
+      "todayTransactions — the count is of sales made today, not of ledger activity dated today",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+
+      const { transaction, piId } = await capture(restaurant.id, 2000n, 0n, waiter.id);
+      await backdateLedgerLines(transaction.id, 1); // the sale happened yesterday
+      await refundFull(piId, 2000n); // the refund is dated today
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+
+      // Today's revenue is negative — ADR-026's own rule, and UX_MAP requires the screen to
+      // render it rather than clamp it.
+      expect(BigInt(summary.todayRevenue)).toBe(-2000n);
+      // But no sale happened today, so there is nothing to average and nothing to count. An
+      // implementation counting REFUND_ISSUED entries, or any ledger activity, would say 1 here
+      // and hand the screen an "average bill" of -2000 for a day with no bills.
+      expect(summary.todayTransactions).toBe(0);
+      expect(summary.averageBill).toBeNull();
+    },
+  );
+
+  it(
     "Top Staff nets TIP_PAYABLE via SUM(CREDIT)-SUM(DEBIT), not a naive sum of TIP_ALLOCATED " +
       "credits alone — a same-day CHARGEBACK on a tip-bearing payment must not overstate the " +
       "waiter's collected tips (ADR-023's own bug class; since ADR-062 a refund cannot build " +

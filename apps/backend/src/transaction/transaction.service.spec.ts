@@ -303,6 +303,47 @@ describe("TransactionService (real database)", () => {
     expect(page.data.some((t) => t.grossAmount === "700")).toBe(false);
   });
 
+  it(
+    "findAllForUser returns each row's tip, and it is net of refund activity — discriminating: " +
+      "two rows with different tips in one page, so an implementation reading a single tip and " +
+      "reusing it, or reading Payment.tipAmount instead of the Ledger, disagrees on at least one",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const waiter = await seedWaiterMembership(org.id, restaurant.id);
+
+      const piA = `pi_${randomUUID()}`;
+      await seedPayment(restaurant.id, 2000n, 500n, waiter.id, piA);
+      const { rawBody: rawA, signature: sigA } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piA, amount: 2000, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawA, sigA);
+
+      const piB = `pi_${randomUUID()}`;
+      await seedPayment(restaurant.id, 1000n, 0n, waiter.id, piB);
+      const { rawBody: rawB, signature: sigB } = signEvent(
+        buildEvent("payment_intent.succeeded", { id: piB, amount: 1000, currency: "eur" }),
+      );
+      await webhooks.handleEvent(rawB, sigB);
+
+      const page = await transactionService.findAllForUser(ownerUserReaching(org.id), {
+        page: 1,
+        limit: 20,
+      });
+
+      const withTip = page.data.find((t) => t.grossAmount === "2000");
+      const withoutTip = page.data.find((t) => t.grossAmount === "1000");
+
+      // The tipped sale carries its tip; the untipped one carries "0" and not the other's 500.
+      expect(withTip?.tip).toBe("500");
+      expect(withoutTip?.tip).toBe("0");
+
+      // Same definition as the detail screen's netTip, asserted rather than assumed — the card
+      // and the details must never show two different tips for one Transaction.
+      const details = await transactionService.findOne(withTip!.id, ownerUserReaching(org.id));
+      expect(details.netTip).toBe(withTip?.tip);
+    },
+  );
+
   it("findOne throws NOT_FOUND for a Transaction outside the caller's reach", async () => {
     const { org, restaurant } = await seedOrgRestaurant();
     const waiter = await seedWaiterMembership(org.id, restaurant.id);

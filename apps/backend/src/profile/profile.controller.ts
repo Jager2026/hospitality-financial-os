@@ -12,9 +12,13 @@ import { ProfileService } from "./profile.service";
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 
+  /** Everything the token already carried, plus `displayName` from the User row — additive,
+   * so `memberships` and every other field an existing caller reads stay exactly as they were
+   * (UX_API_RECONCILIATION, section B: the logged-in person could not read their own name). */
   @Get()
-  get(@CurrentUser() user: AuthenticatedUser) {
-    return user;
+  async get(@CurrentUser() user: AuthenticatedUser) {
+    const identity = await this.profileService.getIdentity(user.id);
+    return { ...user, displayName: identity.displayName };
   }
 
   @Patch()
