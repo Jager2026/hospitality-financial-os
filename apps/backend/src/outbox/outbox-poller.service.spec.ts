@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { shiftServiceForTests } from "../../test/fixtures/shift-for-tests";
 import Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { LedgerService } from "../ledger/ledger.service";
@@ -92,7 +93,7 @@ describe("OutboxPollerService (real database)", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     );
-    const ledger = new LedgerService(prisma);
+    const ledger = new LedgerService(prisma, shiftServiceForTests(prisma));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeConfig = { getOrThrow: () => 100 } as any;
     const fakeRestaurantService = {} as RestaurantService;

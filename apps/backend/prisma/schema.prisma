@@ -216,6 +216,20 @@ model Restaurant {
   // display configuration only, never a validation rule on Payment.tip_amount.
   tipPresets Int[] @default([10, 15, 20]) @map("tip_presets")
 
+  /// ADR-064: minutes after local midnight at which an still-open Shift is closed automatically.
+  /// Per RESTAURANT, not per Organization — different venues keep different hours, and a chain
+  /// with a bar and a lunch cafe would otherwise have to pick one wrong answer for both.
+  ///
+  /// This is the SAFETY NET, never the main path: the button is (ADR-064 §2). A venue that presses
+  /// the button at 03:00 with this set to 05:00 has closed at 03:00, and this never fires for that
+  /// shift. It exists because a shift closed reliably at a fixed time is rare but real.
+  ///
+  /// Not nullable, and the default is deliberate rather than incidental: a safety net that can be
+  /// switched off is not a safety net, and a NULL here would let a shift run forever with nothing
+  /// to notice. **300 = 05:00 local is a placeholder chosen so the net is never absent — the
+  /// number itself is the Founder's to set** (ADR-064, open questions).
+  shiftAutoCloseMinutes Int @default(300) @map("shift_auto_close_minutes")
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
@@ -229,6 +243,8 @@ model Restaurant {
   transactions          Transaction[]
   ledgerLines           LedgerLine[]
   adjustments           Adjustment[]
+
+  shifts Shift[]
 
   @@index([organizationId])
   @@index([currency])
@@ -283,6 +299,7 @@ model User {
   refundsRequested     Refund[]               @relation("RefundRequestedBy")
   refundsApproved      Refund[]               @relation("RefundApprovedBy")
   adjustmentsCreated   Adjustment[]           @relation("AdjustmentCreatedBy")
+  shiftsClosed         Shift[]                @relation("ShiftClosedBy")
 
   @@map("user")
 }
@@ -555,17 +572,33 @@ model LedgerLine {
   currency       String          @db.Char(3)
   restaurantId   String?         @map("restaurant_id") @db.Uuid
   membershipId   String?         @map("membership_id") @db.Uuid
+  /// ADR-064: the SECOND label. `createdAt` is the calendar instant — kept, because accounting
+  /// and tax are calendar-bound and always will be. `shiftId` is the operational one: which of
+  /// the venue's own working days this money belongs to. A payment at 01:30 on a shift nobody has
+  /// closed yet belongs to THAT shift and to TODAY's calendar date, both at once, and neither
+  /// label is derivable from the other.
+  ///
+  /// On LedgerLine rather than on Transaction because this is where every figure is already
+  /// aggregated (ADR-026, ADR-024, ADR-025) — a shift-scoped total is then the same query with a
+  /// different filter, not a second way of counting. Resolved inside `postJournalEntry`, in the
+  /// posting transaction, so a shift closing concurrently cannot split one entry across two.
+  ///
+  /// Nullable: lines written before this existed have no shift, and a line with no
+  /// `restaurantId` has no shift to belong to.
+  shiftId        String?         @map("shift_id") @db.Uuid
   createdAt      DateTime        @default(now()) @map("created_at")
   // No updated_at: "Never edited or deleted" (ADR-002).
 
   journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id])
   restaurant   Restaurant?  @relation(fields: [restaurantId], references: [id])
+  shift        Shift?       @relation(fields: [shiftId], references: [id])
   membership   Membership?  @relation(fields: [membershipId], references: [id])
   currencyRef  Currency     @relation(fields: [currency], references: [code])
 
   @@index([journalEntryId]) // Index Strategy
   @@index([membershipId]) // Index Strategy
   @@index([restaurantId]) // Index Strategy
+  @@index([shiftId]) // ADR-064: every operational screen filters by it
   @@index([currency])
   @@map("ledger_line")
 }
@@ -763,4 +796,50 @@ enum AgreementType {
   STRIPE_CONNECTED_ACCOUNT @map("stripe_connected_account")
 
   @@map("agreement_type")
+}
+
+/// ADR-064 — how a Shift ends. The two are not equal and the column exists to keep them
+/// distinguishable forever: `BUTTON` is a person deciding, `SCHEDULED` is the safety net firing
+/// because nobody did. An owner reading a week of shifts should be able to see which nights ended
+/// with someone pressing the button and which ones simply timed out.
+enum ShiftCloseReason {
+  BUTTON    @map("button")
+  SCHEDULED @map("scheduled")
+
+  @@map("shift_close_reason")
+}
+
+/// ADR-064 — a restaurant's own working day, which is NOT the calendar day.
+///
+/// The venue closes its day with a Z-report, usually before midnight and regularly after it. A
+/// payment at 01:30 on a shift nobody has closed belongs to that shift. Counting it as the next
+/// day's — which is what a calendar-only model does — reproduces the exact discrepancy between
+/// "the system's today" and "the Z-report" that this product exists to remove.
+model Shift {
+  id           String    @id @default(uuid()) @db.Uuid
+  restaurantId String    @map("restaurant_id") @db.Uuid
+  openedAt     DateTime  @default(now()) @map("opened_at")
+  /// NULL means open. Exactly one open Shift per Restaurant at a time — enforced by a partial
+  /// unique index in the migration, which Prisma's schema language cannot express.
+  closedAt     DateTime? @map("closed_at")
+  /// Which of the two ways it ended (ADR-064 §2). NULL while open.
+  closeReason  ShiftCloseReason? @map("close_reason")
+  /// The User who pressed the button. NULL for a SCHEDULED close — nobody did — and NULL while
+  /// open. Deliberately not a "system user" placeholder: an actor that is not a person should be
+  /// absent, not invented, or every audit read has to know which id means "no one".
+  closedBy     String?   @db.Uuid @map("closed_by")
+  /// The venue's own local calendar date this working day is CALLED, taken at `openedAt`. The
+  /// label a human uses ("the shift of 2 September") — not a window: a shift that runs past
+  /// midnight keeps this date while its operations carry their own real calendar timestamps.
+  businessDate DateTime  @db.Date @map("business_date")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  restaurant  Restaurant   @relation(fields: [restaurantId], references: [id])
+  closedByUser User?       @relation("ShiftClosedBy", fields: [closedBy], references: [id])
+  ledgerLines LedgerLine[]
+
+  @@index([restaurantId, businessDate])
+  @@index([restaurantId, closedAt])
+  @@map("shift")
 }

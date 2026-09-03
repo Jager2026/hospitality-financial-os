@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { shiftServiceForTests } from "../../test/fixtures/shift-for-tests";
 import Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { LedgerService } from "../ledger/ledger.service";
@@ -70,7 +71,7 @@ describe("WebhooksService (real database, real signature verification)", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     );
-    ledger = new LedgerService(prisma);
+    ledger = new LedgerService(prisma, shiftServiceForTests(prisma));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeConfig = { getOrThrow: () => 100 } as any; // 1.00%, Founder decision
     service = new WebhooksService(
