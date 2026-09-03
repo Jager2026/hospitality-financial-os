@@ -48,6 +48,11 @@ const PERMISSIONS = [
 ] as const;
 
 const ALL_PERMISSIONS = PERMISSIONS.map((p) => p.name);
+// ADR-066: the accountant needs exactly two things — to read the figures and to take them out
+// of the building. Not a subset of Manager: Manager also invites staff, manages memberships and
+// configures tips, none of which an external bookkeeper should be able to do.
+const ACCOUNTANT_PERMISSIONS = ["reports.view", "data.export"];
+
 const MANAGER_PERMISSIONS = [
   "restaurant.edit",
   "membership.invite",
@@ -82,6 +87,14 @@ const ROLES: Array<{
     name: "Manager",
     description: "Day-to-day operational control of one Restaurant",
     permissions: MANAGER_PERMISSIONS,
+  },
+  // ADR-066: an external bookkeeper, not a reduced Manager. Two permissions and nothing else —
+  // read the figures, take them out of the building. Manager also invites staff, manages
+  // memberships and configures tips; none of that belongs to someone who keeps the books.
+  {
+    name: "Accountant",
+    description: "Reads reports and exports data; sees no individual payment and changes nothing",
+    permissions: ACCOUNTANT_PERMISSIONS,
   },
   // ADR-061: still zero, and now on purpose rather than by omission. Everything a waiter does
   // with their own money is reached by OWNERSHIP, not by a Permission: `GET /wallets` returns the

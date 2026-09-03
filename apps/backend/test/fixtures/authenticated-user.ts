@@ -21,7 +21,13 @@ import type { AuthenticatedUser } from "../../src/auth/guards/jwt-auth.guard";
  * runtime**, which puts the rule where someone will meet it rather than only in a review comment.
  */
 
-export const SEEDED_ROLE_NAMES = ["Owner", "Administrator", "Manager", "Waiter"] as const;
+export const SEEDED_ROLE_NAMES = [
+  "Owner",
+  "Administrator",
+  "Manager",
+  "Accountant",
+  "Waiter",
+] as const;
 export type SeededRoleName = (typeof SEEDED_ROLE_NAMES)[number];
 
 /** The Role exactly as seeded — id, name, and the Permission names actually granted to it. */

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getLocalDayWindow } from "../common/timezone-day.util";
 import { shiftServiceForTests } from "../../test/fixtures/shift-for-tests";
 import Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -243,9 +244,16 @@ describe("DashboardService (real database)", () => {
   ): Promise<string> {
     await backdateLedgerLines(transactionId, daysAgo);
     const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
-    const businessDate = new Date(
-      Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate()),
-    );
+    // The business date is the venue's LOCAL calendar date, not the UTC one (ADR-064).
+    //
+    // This helper computed it in UTC when it was written, and that was wrong in a way that only
+    // shows itself between local midnight and UTC midnight — a three-hour window in
+    // Europe/Vilnius. Inside it, `getLocalDayWindow(tz, 0).date` says the 4th while
+    // `Date.UTC(...)` says the 3rd, so a shift built here fell outside the very range the test
+    // was asking for. Caught by a full-suite run at 00:32 local; it had passed every earlier run.
+    // Same UTC-versus-local confusion as the shift-reporting fixture, in a second place.
+    const [y, m, d] = getLocalDayWindow(TIMEZONE, 0, when).date.split("-").map(Number);
+    const businessDate = new Date(Date.UTC(y, m - 1, d));
     const shift = await prisma.shift.create({
       data: {
         restaurantId,
