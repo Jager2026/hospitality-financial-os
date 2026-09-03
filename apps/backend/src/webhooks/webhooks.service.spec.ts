@@ -20,9 +20,11 @@ function signEvent(payload: object): { rawBody: Buffer; signature: string; event
   return { rawBody: Buffer.from(raw), signature: header, event: payload as { id: string } };
 }
 
-function buildEvent(type: string, dataObject: Record<string, unknown>) {
+function buildEvent(type: string, dataObject: Record<string, unknown>, id?: string) {
   return {
-    id: `evt_test_${randomUUID()}`,
+    // `id` is accepted so a test can assert on the idempotency row for THIS event — without it,
+    // a check like "the key was not written" passes vacuously against a key that never existed.
+    id: id ?? `evt_test_${randomUUID()}`,
     object: "event",
     type,
     data: { object: dataObject },
@@ -380,7 +382,7 @@ describe("WebhooksService (real database, real signature verification)", () => {
     expect(refundLines.some((l) => l.account === "TIP_PAYABLE")).toBe(false); // no tip on this Payment
   });
 
-  it("charge.refunded with a tip (ADR-023): two sequential partial refunds proportionally claw back RESTAURANT_REVENUE_PAYABLE, PLATFORM_FEE_REVENUE, and the waiter's own TIP_PAYABLE credit — discriminating: an implementation that only reverses RESTAURANT_REVENUE_PAYABLE (Sprint 5/6's original behavior) would leave the fee and the tip both fully standing after a full refund", async () => {
+  it("charge.refunded with a tip (ADR-062): two sequential partial refunds of the BILL reverse RESTAURANT_REVENUE_PAYABLE and PLATFORM_FEE_REVENUE proportionally over the bill and never touch the waiter's TIP_PAYABLE — discriminating: ADR-023's implementation, which split over the gross and debited the tip, fails every tip assertion here and both fee/revenue figures", async () => {
     const restaurant = await seedOrgRestaurant();
     const waiterMembership = await seedWaiterMembership(restaurant.organizationId, restaurant.id);
     const piId = `pi_${randomUUID()}`;
@@ -396,13 +398,13 @@ describe("WebhooksService (real database, real signature verification)", () => {
     await service.handleEvent(succeededRaw, succeededSig);
     const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
 
-    // First partial refund: 1000 of 2000 (cumulative fraction = 1/2).
+    // First partial refund: 750 of the 1500 BILL (fraction 1/2 of the bill, not of the gross).
     const chargeId = `ch_${randomUUID()}`;
     const { rawBody: firstRaw, signature: firstSig } = signEvent(
       buildEvent("charge.refunded", {
         id: chargeId,
         payment_intent: piId,
-        amount_refunded: 1000,
+        amount_refunded: 750,
         refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
       }),
     );
@@ -412,7 +414,7 @@ describe("WebhooksService (real database, real signature verification)", () => {
       where: { transactionId: transaction?.id },
       orderBy: { createdAt: "desc" },
     });
-    expect(firstRefund?.tipRefunded).toBe(true); // ADR-023: computed, not hardcoded false
+    expect(firstRefund?.tipRefunded).toBe(false); // ADR-062: a refund never reverses the tip
 
     const firstLines = await prisma.ledgerLine.findMany({
       where: {
@@ -424,21 +426,22 @@ describe("WebhooksService (real database, real signature verification)", () => {
         )?.id,
       },
     });
-    // Half refunded: half of each original share, revenue derived by subtraction.
-    // cumulativeTip = floor(500*1000/2000) = 250; cumulativeFee = floor(15*1000/2000) = 7;
-    // cumulativeRevenue = 1000 - 250 - 7 = 743.
+    // Half the bill refunded: cumulativeFee = floor(15*750/1500) = 7; cumulativeRevenue = 750 − 7 = 743.
+    // ADR-023's gross-based split would have given 250 to the tip and 743/7 only by coincidence
+    // of these numbers — so the tip assertions, not the fee/revenue ones, are the discriminators.
     expect(firstLines.find((l) => l.account === "RESTAURANT_REVENUE_PAYABLE")?.amount).toBe(743n);
     expect(firstLines.find((l) => l.account === "PLATFORM_FEE_REVENUE")?.amount).toBe(7n);
-    const firstTipLine = firstLines.find((l) => l.account === "TIP_PAYABLE");
-    expect(firstTipLine?.amount).toBe(250n);
-    expect(firstTipLine?.membershipId).toBe(waiterMembership.id); // never the null general line
+    expect(firstLines.some((l) => l.account === "TIP_PAYABLE")).toBe(false); // no tip line, ever
+    expect(firstLines).toHaveLength(3); // revenue + fee + REFUND_CONTRA, and nothing else
+    expect(firstLines.find((l) => l.account === "REFUND_CONTRA")?.amount).toBe(750n);
 
-    // Second partial refund: cumulative amount_refunded is now 2000 (a further 1000) — full refund.
+    // Second partial refund: cumulative 1500 (a further 750) — the FULL BILL. Not 2000: the tip
+    // is not part of what a refund can return (ADR-062), and 2000 is refused, see the next test.
     const { rawBody: secondRaw, signature: secondSig } = signEvent(
       buildEvent("charge.refunded", {
         id: chargeId,
         payment_intent: piId,
-        amount_refunded: 2000,
+        amount_refunded: 1500,
         refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
       }),
     );
@@ -447,12 +450,14 @@ describe("WebhooksService (real database, real signature verification)", () => {
     const updatedTransaction = await prisma.transaction.findUnique({
       where: { id: transaction?.id },
     });
-    expect(updatedTransaction?.status).toBe("REFUNDED"); // 2000 >= 2000 gross
+    // ADR-062: "fully refunded" measures the bill. Under ADR-023's gross comparison this would
+    // have stayed PARTIALLY_REFUNDED forever for every tip-bearing payment.
+    expect(updatedTransaction?.status).toBe("REFUNDED"); // 1500 >= 1500 bill
 
-    // Net across BOTH refunds must equal the full original capture-time credits exactly — this
-    // ADR's own worked example (1485/15/500), verified here via two partial deltas, not one
-    // single full-refund shot, so a naive per-event (not cumulative-then-delta) implementation
-    // that double-counts or under-counts the second event would fail these totals.
+    // Net across BOTH refunds equals the capture-time revenue and fee exactly, via two partial
+    // deltas rather than one shot, so a per-event (not cumulative-then-delta) implementation
+    // that double-counts or under-counts the second event fails these totals. The tip total is
+    // ZERO — the waiter's 500 credit is still standing in TIP_PAYABLE.
     const allRefundLines = await prisma.ledgerLine.findMany({
       where: { journalEntry: { transactionId: transaction?.id, entryType: "REFUND_ISSUED" } },
     });
@@ -460,11 +465,70 @@ describe("WebhooksService (real database, real signature verification)", () => {
       allRefundLines.filter((l) => l.account === account).reduce((sum, l) => sum + l.amount, 0n);
     expect(sumByAccount("RESTAURANT_REVENUE_PAYABLE")).toBe(1485n);
     expect(sumByAccount("PLATFORM_FEE_REVENUE")).toBe(15n);
-    expect(sumByAccount("TIP_PAYABLE")).toBe(500n);
-    expect(sumByAccount("REFUND_CONTRA")).toBe(2000n);
+    expect(sumByAccount("TIP_PAYABLE")).toBe(0n);
+    expect(sumByAccount("REFUND_CONTRA")).toBe(1500n);
+
+    // The waiter's own TIP_PAYABLE credit from allocation is intact: 500 credited, 0 debited.
+    const tipCredits = await prisma.ledgerLine.aggregate({
+      where: { account: "TIP_PAYABLE", membershipId: waiterMembership.id, direction: "CREDIT" },
+      _sum: { amount: true },
+    });
+    const tipDebits = await prisma.ledgerLine.aggregate({
+      where: { account: "TIP_PAYABLE", membershipId: waiterMembership.id, direction: "DEBIT" },
+      _sum: { amount: true },
+    });
+    expect(tipCredits._sum.amount).toBe(500n);
+    expect(tipDebits._sum.amount ?? 0n).toBe(0n);
 
     const refunds = await prisma.refund.findMany({ where: { transactionId: transaction?.id } });
-    expect(refunds.every((r) => r.tipRefunded)).toBe(true); // both events carried a nonzero tip share
+    expect(refunds.every((r) => !r.tipRefunded)).toBe(true);
+  });
+
+  it("charge.refunded for MORE than the bill (ADR-062): refused before any write — no Refund row, no REFUND_ISSUED entry, the event left unprocessed for retry — because the excess is the tip physically returned and the rule gives it no balanced side", async () => {
+    const restaurant = await seedOrgRestaurant();
+    const waiterMembership = await seedWaiterMembership(restaurant.organizationId, restaurant.id);
+    const piId = `pi_${randomUUID()}`;
+    const payment = await seedPayment(restaurant.id, 2000n, piId, {
+      tipAmount: 500n,
+      waiterMembershipId: waiterMembership.id,
+    });
+    const { rawBody: succeededRaw, signature: succeededSig } = signEvent(
+      buildEvent("payment_intent.succeeded", { id: piId, amount: 2000, currency: "eur" }),
+    );
+    await service.handleEvent(succeededRaw, succeededSig);
+    const transaction = await prisma.transaction.findUnique({ where: { paymentId: payment.id } });
+
+    // Stripe lets an operator refund the gross, tip included, from their own Dashboard. Under
+    // ADR-062 that money left the venue's account but the tip is not the venue's to return —
+    // who bears the 500 is undecided, and this handler refuses to decide it by booking.
+    const eventId = `evt_${randomUUID()}`;
+    const { rawBody, signature } = signEvent(
+      buildEvent(
+        "charge.refunded",
+        {
+          id: `ch_${randomUUID()}`,
+          payment_intent: piId,
+          amount_refunded: 2000,
+          refunds: { data: [{ id: `re_${randomUUID()}`, reason: "requested_by_customer" }] },
+        },
+        eventId,
+      ),
+    );
+    await expect(service.handleEvent(rawBody, signature)).rejects.toMatchObject({
+      code: "REFUND_EXCEEDS_BILL",
+    });
+
+    // Nothing was written, and the event is not marked processed — so Stripe's retry reaches a
+    // handler again rather than an idempotency short-circuit.
+    expect(await prisma.refund.count({ where: { transactionId: transaction?.id } })).toBe(0);
+    expect(
+      await prisma.journalEntry.count({
+        where: { transactionId: transaction?.id, entryType: "REFUND_ISSUED" },
+      }),
+    ).toBe(0);
+    expect(await prisma.idempotencyKey.findUnique({ where: { key: eventId } })).toBeNull();
+    const unchanged = await prisma.transaction.findUnique({ where: { id: transaction?.id } });
+    expect(unchanged?.status).toBe(transaction?.status);
   });
 
   it("charge.dispute.created then charge.dispute.closed (won): provisional loss is fully reversed", async () => {

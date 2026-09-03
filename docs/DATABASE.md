@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.14.0
+version: 2.15.0
 status: Active
 classification: Internal
 owner: Founder
@@ -265,7 +265,7 @@ Refund
 
 **Relationships:** Refund → Transaction · one-or-more JournalEntry reference this Refund back via `JournalEntry.refund_id` (ADR-017 — `JournalEntry` owns the FK, not this table; see JournalEntry's own entry for why).
 
-**Rules:** Always produces a new JournalEntry whose LedgerLines reverse the original `restaurant_revenue_payable`, `platform_fee_revenue`, and `tip_payable` (ADR-023) — each proportionally to the fraction of the original charge this refund covers, never the fee/tip left standing untouched — and post to `refund_contra`. Never edits the original JournalEntry. No self-service UI required for MVP — staff may act through Stripe's dashboard, but the resulting webhook must always write this row and its compensating entry automatically. A single Transaction may have more than one Refund — each partial refund is its own row, its own compensating JournalEntry, independent of any other Refund on the same Transaction. `tip_refunded` reflects whether *this specific* Refund event carried a nonzero tip share, not the cumulative total.
+**Rules:** Always produces a new JournalEntry whose LedgerLines reverse `restaurant_revenue_payable` and `platform_fee_revenue`, each proportionally over the **bill** (gross − tip) — **never `tip_payable`** (ADR-062: a refund returns the bill; the tip stays with the waiter, which is industry practice). `tax_payable` joins the reversal the day it has a writer. `refund_contra` is credited with the full amount Stripe actually returned. **A refund larger than the bill is refused before any row is written** (`REFUND_EXCEEDS_BILL`): the excess is the tip physically returned to the guest, and the rule gives it no balanced side, so the handler leaves the event for retry and alerting rather than booking a side nobody chose. `tip_refunded` is written `false` for every refund; rows from ADR-023's era carry `true` and are history. A Transaction is `refunded` when the bill is fully refunded, `partially_refunded` below that. **Chargebacks are not this rule** — a chargeback still reverses all three accounts proportionally over the gross (ADR-023), because the bank returns the whole charge and that question is open (`THREAT_MODEL.md`).
 
 ---
 

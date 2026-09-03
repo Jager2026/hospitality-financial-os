@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.46.0
+version: 1.47.0
 status: Active — ADR-001..056; ADR-057 onward in docs/adr/
 classification: Internal
 owner: Founder
@@ -363,7 +363,9 @@ A `Tip` row (`DATABASE.md`) is created only when `tipAmount > 0` — `Transactio
 ---
 
 ## ADR-023 — Refund Proportional Reversal: Fee and Tip Clawed Back with Restaurant Revenue, Not Left Standing
-**Status:** Accepted (Founder decision)
+**Status:** Accepted (Founder decision) — **superseded for REFUNDS by ADR-062 on 2026-09-02; still in force for CHARGEBACKS.**
+
+> **ADR-062 amendment — read this before the text below.** The decision that follows reverses **three** accounts on a refund, `TIP_PAYABLE` among them, proportionally over the **gross**. **For refunds that is no longer the rule.** ADR-062, on a fact from four years of practice — a refund returns the bill and the tip stays with the waiter — replaces it with: a refund reverses `RESTAURANT_REVENUE_PAYABLE` and `PLATFORM_FEE_REVENUE` proportionally over the **bill** (gross − tip), **never touches `TIP_PAYABLE`**, and adds `TAX_PAYABLE` the day it has a writer. `handleChargeRefunded` now uses `splitRefundOverBill`; `Refund.tipRefunded` is written `false`; a Transaction is `REFUNDED` when the **bill** is fully refunded. **A refund larger than the bill is refused before any write** (`REFUND_EXCEEDS_BILL`, event left for retry and alerting): the excess is the tip physically returned, and under the rule it has no balanced side — who bears it is undecided. **Chargebacks keep everything below unchanged** — `handleDisputeCreated` still calls `splitProportionally` over the gross with a tip share — because a chargeback is the bank reversing the whole charge, and that question is open (ADR-062, `THREAT_MODEL.md`). The original text is kept as written so the chargeback rule, and the reasoning behind the proportional split, can be re-examined rather than reconstructed.
 
 **Context:** ADR-021 already named this gap and explicitly deferred it — its own "Known follow-up" section: *"charge.refunded / charge.dispute.* compensating entries... still reverse the full refunded/disputed amount out of RESTAURANT_REVENUE_PAYABLE... the cumulative RESTAURANT_REVENUE_PAYABLE balance for a fully-refunded, fee-bearing Transaction can go negative for that Transaction specifically,"* and its "Founder's stated direction": *"the platform fee should be proportionally clawed back on refund... revisit... the first real refund against a fee-bearing payment."* ADR-022 (Tip Handling) did **not** itself flag this — it introduced `TIP_PAYABLE`'s per-membership credit without discussing what a refund against a tip-bearing Payment should do to it, a real gap in that ADR, not one it predicted.
 
