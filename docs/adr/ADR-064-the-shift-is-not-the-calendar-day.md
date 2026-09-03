@@ -1,7 +1,7 @@
 ---
 title: ADR-064 — The Shift is the restaurant's working day, and it is not the calendar day
-version: 1.0.0
-status: Accepted
+version: 1.1.0
+status: Accepted — the four open questions answered 2026-09-03; reporting split decided in ADR-065
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -63,7 +63,37 @@ Everything in this system counts by the calendar: `getLocalDayWindow` over `Ledg
 
 ---
 
-## Open questions — shown, not decided
+## The four questions — answered 2026-09-03 by the Founder
+
+**They were shown rather than decided when this ADR was accepted. They are decided now, and the reasoning is kept beside each because a decision whose argument is missing gets re-opened by whoever meets the problem next.** The options as originally written follow below, unchanged: an option whose text is deleted cannot be re-examined when the trigger fires.
+
+### A. A shift that closes by neither route — ALERT AND LEAVE IT OPEN
+
+Close-on-read was rejected because it makes a **read into a write**, and reporting that mutates is a property nobody expects and everybody eventually trips over. A hard cap at N hours was rejected because it introduces **an arbitrary number** that will one day cut a genuinely long night in half. A health check on the sweep fixes the real cause — but it is **machinery built for an event that has not happened**, and this project has a rule about mechanisms nobody has needed yet.
+
+**The cost is accepted exactly as it was named: this depends on somebody reading the alert.** It is not a fix; it is a decision to have a human in the loop rather than a rule that guesses. **Trigger to revisit: the first shift that actually hangs.**
+
+### B. No reopening — and an erroneous close is irreparable
+
+**Accepted with its cost.** A shift closed by mistake at 21:00 leaves the rest of the evening in the next shift, and nothing repairs it.
+
+The alternative is worse in a way that compounds: **an editable `closedAt` means two runs of the same report disagree with nothing in the data saying why**, in the one dimension that decides which day money belongs to. `ADR-002`'s discipline is that corrections are new rows, never edits to history, and reopening is an edit to history.
+
+**The "B continues A" shape is recorded as the thing to return to at the first real case** — additive, auditable, both original rows intact. **Not built**, because building it now would be designing for a mistake nobody has made.
+
+### C. A shift longer than a day — named explicitly on screen, when there is a screen
+
+`businessDate` does not move, so "the shift of 2 September" can legitimately contain most of the 3rd. **The screen says so in words** — not a footnote, and not left for the owner to infer from a total that looks too large. Nothing to build until a shift screen exists; recorded so the first one does not render a 40-hour total as an ordinary day.
+
+### D. The 05:00 default stands
+
+**Confirmed as the value, not left as a placeholder.** Shifts are closed before midnight and delays are regular; five in the morning covers the delay and does not cut a night shift in half. Still per restaurant, and still overridable.
+
+---
+
+## The options as they were written, kept for the record
+
+**Superseded by the section above — kept, not deleted.** Each of these was a real alternative with a real cost, and the triggers named above (a shift that actually hangs; the first erroneous close) are the moments someone will need to read them again. An option whose text has been erased cannot be re-examined.
 
 ### A. A shift that closes neither by button nor by schedule
 
