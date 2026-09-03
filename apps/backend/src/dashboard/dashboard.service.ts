@@ -2,17 +2,19 @@ import { Injectable } from "@nestjs/common";
 import type { Restaurant, Transaction } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { getReachableReportingRestaurantOrThrow } from "../common/restaurant-reachability.util";
-import { getLocalDayWindow } from "../common/timezone-day.util";
 import {
   BILL_REVENUE_ACCOUNTS,
-  netForRestaurantWindow,
-  netTipsByMembershipForRestaurantWindow,
+  countCapturesForRestaurantShifts,
+  netAfterMidnightForShift,
+  netForRestaurantShifts,
+  netTipsByMembershipForRestaurantShifts,
 } from "../ledger/restaurant-ledger-window.util";
+import { ShiftService } from "../shift/shift.service";
 import { PrismaService } from "../prisma/prisma.service";
 
 const RECENT_PAYMENTS_LIMIT = 10;
 const TOP_STAFF_LIMIT = 5;
-const REVENUE_CHART_DAYS = 7;
+const REVENUE_CHART_SHIFTS = 7;
 
 export interface DashboardRecentPayment {
   id: string;
@@ -33,7 +35,12 @@ export interface DashboardTopStaffEntry {
 }
 
 export interface DashboardRevenueChartPoint {
+  /** The shift's business date — its name, not a calendar bucket. Two shifts can share one when
+   * a venue trades twice in a day, and the chart shows both rather than summing them. */
   date: string;
+  /** Which shift this point is, so a screen can link to it and so two points sharing a business
+   * date are distinguishable. */
+  shiftId: string;
   revenue: string;
 }
 
@@ -45,33 +52,54 @@ export interface DashboardRevenueChartPoint {
 // renders as the field's caption/tooltip — fixed and versioned here, not invented client-side.
 const TODAY_REVENUE_NOTE = "Before platform fee deduction";
 
+export interface DashboardShift {
+  id: string;
+  /** The venue's own name for this working day, e.g. "2026-09-02" — not a window (ADR-064). */
+  businessDate: string;
+  openedAt: Date;
+  /** Null while the shift is open. */
+  closedAt: Date | null;
+  /** "button" | "scheduled", null while open — which of the two ways it ended (ADR-064 §2). */
+  closeReason: string | null;
+  /** True when the shift was still open past the midnight ending its business date.
+   * **Not a warning.** A shift closing at 01:30 is normal; this is information (ADR-065). */
+  closedAfterMidnight: boolean;
+  /**
+   * Money that arrived between that midnight and the close, in minor units.
+   *
+   * **ADR-065's central figure: the number that explains why a Z-report and a bank statement
+   * differ, instead of hiding it.** `"0"` for a shift that closed before midnight — a real zero,
+   * not absent data, which is why it is not nullable.
+   */
+  afterMidnightRevenue: string;
+}
+
 export interface DashboardSummary {
   restaurantId: string;
-  date: string;
-  todayRevenue: string;
-  /** Always this exact caption (ADR-026) — a constant, not computed, so a future frontend never
-   * has to invent or duplicate the explanation of what todayRevenue does and doesn't include. */
-  todayRevenueNote: string;
-  todayTips: string;
-  /** Basis points (e.g. "3333" = 33.33%), ADR-021's own vocabulary for percentage-as-integer —
-   * never a float. `null`, not "0", when todayRevenue is exactly 0: there is no meaningful ratio
-   * yet, and "0" would misrepresent "no data" as "a real 0% tip rate" (ADR-025's null-not-0
-   * precedent). */
+  /**
+   * The shift this summary is about (ADR-065): the open one, or the most recently closed when
+   * the venue has none open — so the screen is not blank at 06:00 before the first sale.
+   * Null only for a venue that has never traded, in which case every figure below is zero-shaped.
+   */
+  shift: DashboardShift | null;
+  /**
+   * **Every figure below is scoped to that shift, not to a calendar day** (ADR-065). The fields
+   * were named `today*` while this screen counted calendar days; they are named `shift*` now
+   * because ADR-065 requires a screen to state which day it means, and a field called "today" on
+   * a shift-scoped number would be the exact ambiguity that rule exists to remove.
+   */
+  shiftRevenue: string;
+  /** Always this exact caption (ADR-026) — a constant, not computed. */
+  shiftRevenueNote: string;
+  shiftTips: string;
+  /** Basis points, `null` (never "0") when shiftRevenue is exactly 0 — ADR-025's precedent. */
   averageTipBasisPoints: string | null;
-  /** UX_MAP: "Today's Transactions is a count, not a list." A count of SALES made today —
-   * PAYMENT_CAPTURED entries dated today — not of ledger activity. A refund posted today against
-   * an older sale moves `todayRevenue` (ADR-026, deliberately) but is not a transaction that
-   * happened today, so it must not move this. A plain number, not a minor-units string: it is a
-   * count, and typing it like money would invite someone to treat it as money. */
-  todayTransactions: number;
-  /** UX_MAP: Today's Revenue ÷ today's transaction count. Same ratio-of-sums discipline as
-   * `averageTipBasisPoints` (ADR-026 Decision 4) — divide the totals, never average each
-   * transaction's own figure. **`null`, never "0", when there were no transactions today**:
-   * "no data yet" and "an average of zero" are different statements (ADR-025's null-not-0
-   * precedent), and the divisor does not exist. It CAN be negative when today's refunds of older
-   * sales exceed today's takings — UX_MAP requires the screen to render that rather than clamp
-   * it, and this figure is not clamped here either. */
+  /** A count of sales on this shift, not of ledger activity. */
+  shiftTransactions: number;
+  /** shiftRevenue / shiftTransactions, `null` (never "0") when there were none. */
   averageBill: string | null;
+  /** The last 7 SHIFTS, oldest first — not the last 7 calendar days (ADR-065). Fewer than 7 for
+   * a venue that has not traded that long: a working day that never happened is not a zero. */
   revenueChart: DashboardRevenueChartPoint[];
   recentPayments: DashboardRecentPayment[];
   topStaff: DashboardTopStaffEntry[];
@@ -88,7 +116,10 @@ export interface DashboardSummary {
  * today"). */
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shifts: ShiftService,
+  ) {}
 
   async getSummary(restaurantId: string, user: AuthenticatedUser): Promise<DashboardSummary> {
     const restaurant = await getReachableReportingRestaurantOrThrow(
@@ -97,78 +128,69 @@ export class DashboardService {
       user,
     );
 
-    const today = getLocalDayWindow(restaurant.timezone, 0);
-    const [todayRevenue, todayTips, todayTransactions, revenueChart, recentPayments, topStaff] =
+    const shift = await this.shifts.currentShift(restaurantId);
+
+    // A venue that has never traded has no shift and therefore no figures. Zero-shaped rather
+    // than an error: an owner opening the Dashboard on day one is not a failure case.
+    if (!shift) {
+      return {
+        restaurantId,
+        shift: null,
+        shiftRevenue: "0",
+        shiftRevenueNote: TODAY_REVENUE_NOTE,
+        shiftTips: "0",
+        averageTipBasisPoints: null,
+        shiftTransactions: 0,
+        averageBill: null,
+        revenueChart: [],
+        recentPayments: await this.recentPayments(restaurantId),
+        topStaff: [],
+      };
+    }
+
+    const shiftIds = [shift.id];
+    const [shiftRevenue, shiftTips, shiftTransactions, revenueChart, recentPayments, topStaff] =
       await Promise.all([
-        this.netBillRevenue(restaurantId, today.start, today.end),
-        this.netTips(restaurantId, today.start, today.end),
-        this.todayTransactionCount(restaurantId, today.start, today.end),
+        netForRestaurantShifts(this.prisma, restaurantId, BILL_REVENUE_ACCOUNTS, shiftIds),
+        netForRestaurantShifts(this.prisma, restaurantId, ["TIP_PAYABLE"], shiftIds),
+        countCapturesForRestaurantShifts(this.prisma, restaurantId, shiftIds),
         this.buildRevenueChart(restaurant),
         this.recentPayments(restaurantId),
-        this.topStaff(restaurantId, today.start, today.end),
+        this.topStaff(restaurantId, shiftIds),
       ]);
+
+    const midnight = this.shifts.midnightEndingBusinessDate(
+      shift.businessDate,
+      restaurant.timezone,
+    );
+    const afterMidnightRevenue = await netAfterMidnightForShift(
+      this.prisma,
+      restaurantId,
+      shift.id,
+      midnight,
+    );
 
     return {
       restaurantId,
-      date: today.date,
-      todayRevenue: todayRevenue.toString(),
-      todayRevenueNote: TODAY_REVENUE_NOTE,
-      todayTips: todayTips.toString(),
-      averageTipBasisPoints: this.averageTipBasisPoints(todayTips, todayRevenue),
-      todayTransactions,
-      averageBill: this.averageBill(todayRevenue, todayTransactions),
+      shift: {
+        id: shift.id,
+        businessDate: shift.businessDate.toISOString().slice(0, 10),
+        openedAt: shift.openedAt,
+        closedAt: shift.closedAt,
+        closeReason: shift.closeReason,
+        closedAfterMidnight: this.shifts.closedAfterMidnight(shift, restaurant.timezone),
+        afterMidnightRevenue: afterMidnightRevenue.toString(),
+      },
+      shiftRevenue: shiftRevenue.toString(),
+      shiftRevenueNote: TODAY_REVENUE_NOTE,
+      shiftTips: shiftTips.toString(),
+      averageTipBasisPoints: this.averageTipBasisPoints(shiftTips, shiftRevenue),
+      shiftTransactions,
+      averageBill: this.averageBill(shiftRevenue, shiftTransactions),
       revenueChart,
       recentPayments,
       topStaff,
     };
-  }
-
-  /** "Today's Revenue" = bill-only sales, net of any refund/chargeback activity dated today,
-   * regardless of which day the original sale happened on (see ADR-026 for why this is correct,
-   * not a bug — a refund posted today correctly reduces today's total, not the original sale
-   * day's, matching how every other day's own already-posted LedgerLine activity stays fixed
-   * once that day has passed). Computed as net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_
-   * REVENUE) (`restaurant-ledger-window.util.ts`): together these always equal billAmount net of
-   * refunds — ADR-023's proportional reversal splits exactly along these two accounts for the
-   * non-tip share of any refund, so the sum is provably billAmount's own net effect, not an
-   * approximation. */
-  private async netBillRevenue(restaurantId: string, start: Date, end: Date): Promise<bigint> {
-    return netForRestaurantWindow(this.prisma, restaurantId, BILL_REVENUE_ACCOUNTS, start, end);
-  }
-
-  /** net(TIP_PAYABLE), unfiltered by membershipId — PAYMENT_CAPTURED's general, not-yet-attributed
-   * credit and TIP_ALLOCATED's own reversal of it cancel to zero by construction (ADR-022/025),
-   * leaving only the real, person-attributed tip total minus anything refunded today. */
-  private async netTips(restaurantId: string, start: Date, end: Date): Promise<bigint> {
-    return netForRestaurantWindow(this.prisma, restaurantId, ["TIP_PAYABLE"], start, end);
-  }
-
-  /** Count of SALES dated today: one per PAYMENT_CAPTURED JournalEntry on this Restaurant's
-   * Transactions inside the local-day window. Counted from the Ledger, like every other figure
-   * on this screen, rather than from Transaction.createdAt — a Transaction row's own timestamp
-   * and its capture entry's are written in the same request today, but the Ledger is the source
-   * of truth for when money moved (ADR-002), and the two must not be allowed to drift apart into
-   * two different answers to "how many sales today". */
-  private async todayTransactionCount(
-    restaurantId: string,
-    start: Date,
-    end: Date,
-  ): Promise<number> {
-    // Counted over LedgerLine.createdAt, NOT JournalEntry.createdAt. The two are written in the
-    // same request today and look interchangeable; they are not, and this test caught the
-    // difference: every other figure on this screen defines the day by LedgerLine.createdAt
-    // (ADR-026), so counting by the entry's own timestamp would give "how many sales today" a
-    // different day boundary from "today's revenue" — the exact drift the comment above claims
-    // to avoid. One PAYMENT_CAPTURED entry is one sale, so distinct entries are the count.
-    const entries = await this.prisma.ledgerLine.groupBy({
-      by: ["journalEntryId"],
-      where: {
-        restaurantId,
-        createdAt: { gte: start, lt: end },
-        journalEntry: { entryType: "PAYMENT_CAPTURED" },
-      },
-    });
-    return entries.length;
   }
 
   /** Today's Revenue ÷ today's transaction count, floored to minor units.
@@ -195,12 +217,24 @@ export class DashboardService {
    * as the single Today's Revenue figure, one call per day (7 is small and fixed; no raw SQL
    * date_trunc needed for this scale — same "explicit over implicit, O(n) is fine at this size"
    * reasoning as WalletProjectionService's full recompute, ADR-024). */
+  /** The last 7 SHIFTS, oldest first (ADR-065) — not the last 7 calendar days. A venue that
+   * traded on five of the last seven days gets five points, not seven with two zeros: a working
+   * day that never happened is not a day with no revenue. */
   private async buildRevenueChart(restaurant: Restaurant): Promise<DashboardRevenueChartPoint[]> {
+    const shifts = await this.shifts.recentShifts(restaurant.id, REVENUE_CHART_SHIFTS);
     const points: DashboardRevenueChartPoint[] = [];
-    for (let daysAgo = REVENUE_CHART_DAYS - 1; daysAgo >= 0; daysAgo--) {
-      const window = getLocalDayWindow(restaurant.timezone, daysAgo);
-      const revenue = await this.netBillRevenue(restaurant.id, window.start, window.end);
-      points.push({ date: window.date, revenue: revenue.toString() });
+    for (const shift of shifts) {
+      const revenue = await netForRestaurantShifts(
+        this.prisma,
+        restaurant.id,
+        BILL_REVENUE_ACCOUNTS,
+        [shift.id],
+      );
+      points.push({
+        date: shift.businessDate.toISOString().slice(0, 10),
+        shiftId: shift.id,
+        revenue: revenue.toString(),
+      });
     }
     return points;
   }
@@ -234,14 +268,12 @@ export class DashboardService {
    * share a display name while addresses are unique. */
   private async topStaff(
     restaurantId: string,
-    start: Date,
-    end: Date,
+    shiftIds: string[],
   ): Promise<DashboardTopStaffEntry[]> {
-    const netByMembership = await netTipsByMembershipForRestaurantWindow(
+    const netByMembership = await netTipsByMembershipForRestaurantShifts(
       this.prisma,
       restaurantId,
-      start,
-      end,
+      shiftIds,
     );
 
     const ranked = [...netByMembership.entries()]

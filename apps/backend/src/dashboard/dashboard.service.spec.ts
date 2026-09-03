@@ -80,7 +80,7 @@ describe("DashboardService (real database)", () => {
       fakeConfig,
       new IndividualTipAllocationStrategy(),
     );
-    dashboardService = new DashboardService(prisma);
+    dashboardService = new DashboardService(prisma, shiftServiceForTests(prisma));
   });
 
   afterAll(async () => {
@@ -228,6 +228,40 @@ describe("DashboardService (real database)", () => {
     );
   }
 
+  /**
+   * ADR-065 migration: give a back-dated Transaction its own closed Shift, dated to the same day.
+   *
+   * `backdateLedgerLines` moves `createdAt` and deliberately does not touch `shiftId` — the two
+   * labels are independent (ADR-064), which is exactly what makes that helper useless on its own
+   * for a shift-scoped screen. A past day in this system is a past SHIFT, so the fixture has to
+   * build one.
+   */
+  async function backdateToOwnShift(
+    restaurantId: string,
+    transactionId: string,
+    daysAgo: number,
+  ): Promise<string> {
+    await backdateLedgerLines(transactionId, daysAgo);
+    const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    const businessDate = new Date(
+      Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate()),
+    );
+    const shift = await prisma.shift.create({
+      data: {
+        restaurantId,
+        openedAt: when,
+        closedAt: new Date(when.getTime() + 6 * 60 * 60 * 1000),
+        closeReason: "BUTTON",
+        businessDate,
+      },
+    });
+    await prisma.ledgerLine.updateMany({
+      where: { journalEntry: { transactionId } },
+      data: { shiftId: shift.id },
+    });
+    return shift.id;
+  }
+
   function userReaching(
     organizationId: string,
     role: "Owner" | "Waiter" = "Owner",
@@ -252,25 +286,28 @@ describe("DashboardService (real database)", () => {
   }
 
   it(
-    "DoD (IMPLEMENTATION_PLAN.md, Sprint 9): today's figures match a manual SUM(CREDIT)-SUM(DEBIT) " +
-      "over LedgerLine, and correctly EXCLUDE a payment backdated to yesterday",
+    "DoD (IMPLEMENTATION_PLAN.md, Sprint 9): the CURRENT SHIFT's figures match a manual " +
+      "SUM(CREDIT)-SUM(DEBIT) " +
+      "over LedgerLine, and correctly EXCLUDE a payment belonging to an earlier shift",
     async () => {
       const { org, restaurant } = await seedOrgRestaurant();
       const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
 
       // amount=2000, tipAmount=500 -> billAmount=1500 -> fee=15 (1%), revenue=1485.
       const { transaction: todayTx } = await capture(restaurant.id, 2000n, 500n, waiter.id);
-      // A second payment, backdated to yesterday — must NOT appear in today's totals at all.
+      // A second payment on an EARLIER SHIFT — must not appear in the current shift at all.
+      // Its own shift, not merely an earlier timestamp: ADR-064 keeps the two labels independent,
+      // so back-dating createdAt alone would leave this sale in the same shift and prove nothing.
       const { transaction: yesterdayTx } = await capture(restaurant.id, 9000n, 0n, waiter.id);
-      await backdateLedgerLines(yesterdayTx.id, 1);
+      await backdateToOwnShift(restaurant.id, yesterdayTx.id, 1);
 
       const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
 
-      expect(summary.todayRevenue).toBe("1500"); // 1485 + 15, from todayTx only
-      expect(summary.todayTips).toBe("500");
-      // ADR-026: todayRevenue is gross sales, not netRestaurantRevenue (ADR-025) — the difference
+      expect(summary.shiftRevenue).toBe("1500"); // 1485 + 15, from todayTx only
+      expect(summary.shiftTips).toBe("500");
+      // ADR-026: shiftRevenue is gross sales, not netRestaurantRevenue (ADR-025) — the difference
       // must be explicit on screen, not only in documentation.
-      expect(summary.todayRevenueNote).toBe("Before platform fee deduction");
+      expect(summary.shiftRevenueNote).toBe("Before platform fee deduction");
 
       // Manual recomputation directly from LedgerLine, independent of the service's own code
       // path — DoD's own wording ("matches a manual sum over LedgerLine"), scoped to just
@@ -290,27 +327,29 @@ describe("DashboardService (real database)", () => {
         net("RESTAURANT_REVENUE_PAYABLE", "CREDIT") -
         net("RESTAURANT_REVENUE_PAYABLE", "DEBIT") +
         (net("PLATFORM_FEE_REVENUE", "CREDIT") - net("PLATFORM_FEE_REVENUE", "DEBIT"));
-      expect(manualRevenue.toString()).toBe(summary.todayRevenue);
+      expect(manualRevenue.toString()).toBe(summary.shiftRevenue);
     },
   );
 
   it(
-    "a refund posted TODAY against a payment from a PRIOR day reduces TODAY's totals, not the " +
-      "prior day's — the discriminating case for day-boundary-by-LedgerLine.createdAt, not by " +
-      "Transaction.createdAt",
+    "a refund posted during the CURRENT shift against a sale from an earlier shift reduces the " +
+      "current shift's totals — the shift-scoped twin of ADR-026's day-boundary rule, and the " +
+      "reason a shift figure can be negative (ADR-065)",
     async () => {
       const { org, restaurant } = await seedOrgRestaurant();
       const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
 
       const { transaction, piId } = await capture(restaurant.id, 2000n, 0n, waiter.id);
-      await backdateLedgerLines(transaction.id, 1); // the sale "happened yesterday"
+      await backdateToOwnShift(restaurant.id, transaction.id, 1); // the sale was an earlier shift
 
-      // Refund happens now (today) — its own LedgerLine rows are NOT backdated.
+      // The refund posts now, into whatever shift is open — a new one, since the sale's shift
+      // was closed above.
       await refundFull(piId, 2000n);
 
       const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
-      // Today has no sale of its own, but does have a refund dated today: net effect is negative.
-      expect(BigInt(summary.todayRevenue)).toBe(-2000n);
+      // The current shift made no sale of its own but carries today's refund: net negative, and
+      // rendered rather than clamped (UX_MAP).
+      expect(BigInt(summary.shiftRevenue)).toBe(-2000n);
     },
   );
 
@@ -326,10 +365,10 @@ describe("DashboardService (real database)", () => {
       await capture(restaurant.id, 1050n, 50n, waiter.id); // billAmount=1000, tip=50
 
       const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
-      expect(summary.todayTips).toBe("100");
-      // todayRevenue = SUM(billAmount) net of fee-inclusive accounts = 100+1000 = 1100 (fee stays
+      expect(summary.shiftTips).toBe("100");
+      // shiftRevenue = SUM(billAmount) net of fee-inclusive accounts = 100+1000 = 1100 (fee stays
       // inside RESTAURANT_REVENUE_PAYABLE+PLATFORM_FEE_REVENUE regardless of rate).
-      expect(summary.todayRevenue).toBe("1100");
+      expect(summary.shiftRevenue).toBe("1100");
       const basisPoints = BigInt(summary.averageTipBasisPoints!);
       expect(basisPoints).toBe((100n * 10_000n) / 1100n); // 909, i.e. 9.09% — not 2750 (27.5%)
       expect(basisPoints).not.toBe(2750n);
@@ -339,13 +378,13 @@ describe("DashboardService (real database)", () => {
   it('Average Tip is null, never "0", when today has no revenue at all', async () => {
     const { org, restaurant } = await seedOrgRestaurant();
     const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
-    expect(summary.todayRevenue).toBe("0");
+    expect(summary.shiftRevenue).toBe("0");
     expect(summary.averageTipBasisPoints).toBeNull();
   });
 
   it(
     'averageBill is null — never "0" — when there were no transactions today, and ' +
-      "todayTransactions is 0: the discriminating case against both naive implementations, one " +
+      "shiftTransactions is 0: the discriminating case against both naive implementations, one " +
       "that divides by zero and one that reports an average of nothing as an average of zero",
     async () => {
       const { org, restaurant } = await seedOrgRestaurant();
@@ -356,12 +395,12 @@ describe("DashboardService (real database)", () => {
       // implementation reaches it and fails on the value. Both are wrong for the same reason:
       // there is no divisor, so there is no average — "no bills today" is not "a bill of zero".
       expect(summary.averageBill).toBeNull();
-      expect(summary.todayTransactions).toBe(0);
+      expect(summary.shiftTransactions).toBe(0);
     },
   );
 
   it(
-    "todayTransactions counts today's SALES and averageBill divides today's revenue by them — " +
+    "shiftTransactions counts today's SALES and averageBill divides today's revenue by them — " +
       "discriminating: two sales of different sizes, so an implementation returning either sale's " +
       "own amount, or the plain sum, disagrees with the ratio-of-sums answer",
     async () => {
@@ -375,32 +414,29 @@ describe("DashboardService (real database)", () => {
 
       const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
 
-      expect(summary.todayTransactions).toBe(2);
-      expect(BigInt(summary.todayRevenue)).toBe(4000n);
+      expect(summary.shiftTransactions).toBe(2);
+      expect(BigInt(summary.shiftRevenue)).toBe(4000n);
       expect(summary.averageBill).toBe("2000");
     },
   );
 
   it(
-    "a refund posted today against a PRIOR day's sale moves today's revenue but NOT " +
-      "todayTransactions — the count is of sales made today, not of ledger activity dated today",
+    "a refund posted into the current shift moves its revenue but NOT shiftTransactions — the " +
+      "count is of sales made on this shift, not of ledger activity carried by it",
     async () => {
       const { org, restaurant } = await seedOrgRestaurant();
       const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
 
       const { transaction, piId } = await capture(restaurant.id, 2000n, 0n, waiter.id);
-      await backdateLedgerLines(transaction.id, 1); // the sale happened yesterday
-      await refundFull(piId, 2000n); // the refund is dated today
+      await backdateToOwnShift(restaurant.id, transaction.id, 1);
+      await refundFull(piId, 2000n);
 
       const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
 
-      // Today's revenue is negative — ADR-026's own rule, and UX_MAP requires the screen to
-      // render it rather than clamp it.
-      expect(BigInt(summary.todayRevenue)).toBe(-2000n);
-      // But no sale happened today, so there is nothing to average and nothing to count. An
-      // implementation counting REFUND_ISSUED entries, or any ledger activity, would say 1 here
-      // and hand the screen an "average bill" of -2000 for a day with no bills.
-      expect(summary.todayTransactions).toBe(0);
+      expect(BigInt(summary.shiftRevenue)).toBe(-2000n);
+      // No sale happened on this shift. An implementation counting any ledger activity would say
+      // 1 here and hand the screen an "average bill" of -2000 for a shift with no bills.
+      expect(summary.shiftTransactions).toBe(0);
       expect(summary.averageBill).toBeNull();
     },
   );
@@ -460,19 +496,28 @@ describe("DashboardService (real database)", () => {
     expect(entry!.displayName).not.toBe(entry!.email);
   });
 
-  it("Revenue Chart buckets a 3-days-ago payment into the correct day, not today's", async () => {
-    const { org, restaurant } = await seedOrgRestaurant();
-    const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
-    const { transaction } = await capture(restaurant.id, 3000n, 0n, waiter.id);
-    await backdateLedgerLines(transaction.id, 3);
+  it(
+    "the Revenue Chart is the last SHIFTS, oldest first — a payment from three days ago sits in " +
+      "its own shift's point, not in the current one (ADR-065)",
+    async () => {
+      const { org, restaurant } = await seedOrgRestaurant();
+      const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
+      const { transaction } = await capture(restaurant.id, 3000n, 0n, waiter.id);
+      await backdateToOwnShift(restaurant.id, transaction.id, 3);
 
-    const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
-    expect(summary.revenueChart).toHaveLength(7);
-    expect(summary.revenueChart[6].revenue).toBe(summary.todayRevenue); // last point == today
-    expect(summary.revenueChart[6].revenue).toBe("0"); // today itself had no sale
-    const threeDaysAgoPoint = summary.revenueChart[3]; // index 6-3
-    expect(threeDaysAgoPoint.revenue).toBe("3000");
-  });
+      // A second, current sale so there is an open shift to be "now".
+      await capture(restaurant.id, 100n, 0n, waiter.id);
+
+      const summary = await dashboardService.getSummary(restaurant.id, userReaching(org.id));
+
+      // Two shifts existed, so two points — not seven. A calendar chart pads with days the venue
+      // never worked; a shift chart does not invent working days that did not happen.
+      expect(summary.revenueChart).toHaveLength(2);
+      expect(summary.revenueChart[0].revenue).toBe("3000"); // the older shift, oldest first
+      expect(summary.revenueChart[1].revenue).toBe(summary.shiftRevenue); // last point is current
+      expect(summary.shiftRevenue).toBe("100");
+    },
+  );
 
   it("throws PERMISSION_DENIED for a Waiter (no reports.view), not a silent empty dashboard", async () => {
     const { org, restaurant } = await seedOrgRestaurant();

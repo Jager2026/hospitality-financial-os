@@ -63,3 +63,116 @@ export async function netTipsByMembershipForRestaurantWindow(
   }
   return netByMembership;
 }
+
+// ============================================================================
+// ADR-065: the same two aggregations, scoped by SHIFT instead of by calendar window.
+//
+// Deliberately new functions rather than an extra optional argument on the calendar ones. The
+// caller of a figure must state which day it means (ADR-065's own rule), and a boolean or a
+// nullable `shiftIds` parameter would let a call site be ambiguous about it — which is the defect
+// this whole line of work exists to remove. Two names, each unambiguous at the call site.
+//
+// The aggregation itself is unchanged: SUM(CREDIT) - SUM(DEBIT), same as everywhere else in this
+// system. What changes is which rows are selected.
+// ============================================================================
+
+/** `netForRestaurantWindow`'s definition, over a set of Shifts instead of a time range. */
+export async function netForRestaurantShifts(
+  prisma: PrismaService,
+  restaurantId: string,
+  accounts: LedgerAccount[],
+  shiftIds: string[],
+): Promise<bigint> {
+  if (shiftIds.length === 0) return 0n;
+
+  const groups = await prisma.ledgerLine.groupBy({
+    by: ["direction"],
+    where: { restaurantId, account: { in: accounts }, shiftId: { in: shiftIds } },
+    _sum: { amount: true },
+  });
+  const credit = groups.find((g) => g.direction === "CREDIT")?._sum.amount ?? 0n;
+  const debit = groups.find((g) => g.direction === "DEBIT")?._sum.amount ?? 0n;
+  return credit - debit;
+}
+
+/** `netTipsByMembershipForRestaurantWindow`'s definition, over a set of Shifts. */
+export async function netTipsByMembershipForRestaurantShifts(
+  prisma: PrismaService,
+  restaurantId: string,
+  shiftIds: string[],
+): Promise<Map<string, bigint>> {
+  if (shiftIds.length === 0) return new Map();
+
+  const groups = await prisma.ledgerLine.groupBy({
+    by: ["membershipId", "direction"],
+    where: {
+      restaurantId,
+      account: "TIP_PAYABLE",
+      membershipId: { not: null },
+      shiftId: { in: shiftIds },
+    },
+    _sum: { amount: true },
+  });
+
+  const netByMembership = new Map<string, bigint>();
+  for (const g of groups) {
+    const membershipId = g.membershipId as string;
+    const signed = g.direction === "CREDIT" ? (g._sum.amount ?? 0n) : -(g._sum.amount ?? 0n);
+    netByMembership.set(membershipId, (netByMembership.get(membershipId) ?? 0n) + signed);
+  }
+  return netByMembership;
+}
+
+/** Sales on a set of Shifts: one per PAYMENT_CAPTURED entry, counted over the lines' own shift
+ * label rather than a date window. The shift-scoped twin of Dashboard's `todayTransactionCount`. */
+export async function countCapturesForRestaurantShifts(
+  prisma: PrismaService,
+  restaurantId: string,
+  shiftIds: string[],
+): Promise<number> {
+  if (shiftIds.length === 0) return 0;
+
+  const entries = await prisma.ledgerLine.groupBy({
+    by: ["journalEntryId"],
+    where: {
+      restaurantId,
+      shiftId: { in: shiftIds },
+      journalEntry: { entryType: "PAYMENT_CAPTURED" },
+    },
+  });
+  return entries.length;
+}
+
+/**
+ * Money on ONE shift that arrived after the midnight ending its business date — ADR-065's
+ * "how much came in between midnight and the close".
+ *
+ * **The ADR's own wording needed correcting to be implementable, and the correction is recorded
+ * rather than silently applied.** It said "after local midnight of the shift's own
+ * `businessDate`", which is the midnight that *starts* that date and would include the entire
+ * evening. What the owner is being told is what arrived after the midnight that *ends* it —
+ * `businessDate + 1 day`, local. That is the figure that explains a Z-report differing from a
+ * bank statement.
+ *
+ * Zero for a shift that closed before midnight, which is the common case and not an error.
+ */
+export async function netAfterMidnightForShift(
+  prisma: PrismaService,
+  restaurantId: string,
+  shiftId: string,
+  midnightEndingBusinessDate: Date,
+): Promise<bigint> {
+  const groups = await prisma.ledgerLine.groupBy({
+    by: ["direction"],
+    where: {
+      restaurantId,
+      account: { in: BILL_REVENUE_ACCOUNTS },
+      shiftId,
+      createdAt: { gte: midnightEndingBusinessDate },
+    },
+    _sum: { amount: true },
+  });
+  const credit = groups.find((g) => g.direction === "CREDIT")?._sum.amount ?? 0n;
+  const debit = groups.find((g) => g.direction === "DEBIT")?._sum.amount ?? 0n;
+  return credit - debit;
+}
