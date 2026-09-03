@@ -343,7 +343,7 @@ describe("DashboardService (real database)", () => {
   });
 
   it(
-    "averageBill is null — never \"0\" — when there were no transactions today, and " +
+    'averageBill is null — never "0" — when there were no transactions today, and ' +
       "todayTransactions is 0: the discriminating case against both naive implementations, one " +
       "that divides by zero and one that reports an average of nothing as an average of zero",
     async () => {

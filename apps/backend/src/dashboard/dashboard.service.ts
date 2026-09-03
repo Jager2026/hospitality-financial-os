@@ -100,13 +100,13 @@ export class DashboardService {
     const today = getLocalDayWindow(restaurant.timezone, 0);
     const [todayRevenue, todayTips, todayTransactions, revenueChart, recentPayments, topStaff] =
       await Promise.all([
-      this.netBillRevenue(restaurantId, today.start, today.end),
-      this.netTips(restaurantId, today.start, today.end),
-      this.todayTransactionCount(restaurantId, today.start, today.end),
-      this.buildRevenueChart(restaurant),
-      this.recentPayments(restaurantId),
-      this.topStaff(restaurantId, today.start, today.end),
-    ]);
+        this.netBillRevenue(restaurantId, today.start, today.end),
+        this.netTips(restaurantId, today.start, today.end),
+        this.todayTransactionCount(restaurantId, today.start, today.end),
+        this.buildRevenueChart(restaurant),
+        this.recentPayments(restaurantId),
+        this.topStaff(restaurantId, today.start, today.end),
+      ]);
 
     return {
       restaurantId,
