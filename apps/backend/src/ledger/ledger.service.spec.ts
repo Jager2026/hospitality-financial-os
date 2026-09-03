@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { shiftServiceForTests } from "../../test/fixtures/shift-for-tests";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaService } from "../prisma/prisma.service";
 import { LedgerService } from "./ledger.service";
@@ -9,7 +10,7 @@ import { LedgerService } from "./ledger.service";
 // trigger. Sprint 5 is the first real caller, so this closes that gap before relying on it.
 describe("LedgerService (real database)", () => {
   const prisma = new PrismaService();
-  const service = new LedgerService(prisma);
+  const service = new LedgerService(prisma, shiftServiceForTests(prisma));
 
   beforeAll(async () => {
     await prisma.$connect();

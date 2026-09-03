@@ -39,7 +39,7 @@ Every table that records a financial fact is immutable. Corrections are new rows
 
 Twenty-two entities. Ten existed in v1.0. Ten were added directly by `ARCHITECTURE_DECISIONS.md` to close gaps the Sprint 0 review found — this is the schema catching up with already-agreed architecture, not scope creep. `MembershipInvitation` (ADR-020) is the twenty-first, added while starting Sprint 4 to close a gap between `MASTERPLAN.md`'s own user journey and the Sprint 0 schema. `AgreementAcceptance` (ADR-049) is the twenty-second, added in Sprint 14: until then a User could exist with no record of having agreed to anything.
 
-`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog` · `AgreementAcceptance`
+`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog` · `AgreementAcceptance` · `Shift`
 
 ---
 
@@ -63,7 +63,9 @@ Restaurant
 ############################################################
 **Purpose:** One hospitality business location — the legal and tax entity.
 
-**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, tip_presets, created_at, updated_at
+**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, tip_presets, created_at, updated_at, shift_auto_close_minutes
+
+**Shift auto-close (ADR-064).** `shift_auto_close_minutes` is the minute of the venue's own local day at which a still-open Shift closes automatically — the **safety net**, never the main path, which is the button. Per Restaurant rather than per Organization: different venues keep different hours. Not nullable, with a CHECK holding it inside `0..1439`, because a net that can be switched off is not a net and a value outside the day is the net silently absent. The default of `300` (05:00) is a placeholder so it is never missing; the number is the Founder's to set.
 
 **Relationships:** Restaurant → Organization (parent) · Restaurant → many Membership · Restaurant → many Payment / Transaction
 
@@ -233,7 +235,9 @@ LedgerLine
 ############################################################
 **Purpose:** One debit or credit inside a JournalEntry — the actual money movement (ADR-002).
 
-**Fields:** id, journal_entry_id, account (`processor_clearing` / `restaurant_revenue_payable` / `tip_payable` / `platform_fee_revenue` / `tax_payable` / `refund_contra`), direction (`debit` / `credit`), amount (BIGINT, minor units), currency, restaurant_id (nullable), membership_id (nullable), created_at
+**Fields:** id, journal_entry_id, account (`processor_clearing` / `restaurant_revenue_payable` / `tip_payable` / `platform_fee_revenue` / `tax_payable` / `refund_contra`), direction (`debit` / `credit`), amount (BIGINT, minor units), currency, restaurant_id (nullable), membership_id (nullable), shift_id (nullable), created_at
+
+**Two labels, and neither derives the other (ADR-064).** `created_at` is the **calendar instant** — unchanged, because accounting and tax are calendar-bound. `shift_id` is the **operational** label: which of the venue's own working days this money belongs to. A payment at 01:30 on a shift nobody has closed carries that shift *and* today's calendar timestamp, both at once. On LedgerLine rather than Transaction because this is where every figure is already aggregated (ADR-024, ADR-025, ADR-026), so a shift-scoped total is the same query with a different filter rather than a second way of counting. Nullable: rows written before ADR-064 have no shift, and a line with no `restaurant_id` has none to belong to.
 
 **Relationships:** LedgerLine → JournalEntry · LedgerLine → Restaurant (nullable) · LedgerLine → Membership (nullable)
 
@@ -468,3 +472,24 @@ This exists because manual verification during development (live HTTP + SQL chec
 # Final Principle
 
 The database is the company's memory. The Ledger is the part of that memory that is never allowed to be wrong. Everything else in this document — Wallet, Restaurant balance, Analytics — is a view onto it, and every view can be thrown away and rebuilt. Protect the Ledger accordingly.
+
+
+############################################################
+# ENTITY
+Shift
+############################################################
+**Purpose:** A restaurant's own working day, which is **not** the calendar day (ADR-064). The venue closes its day with a Z-report — usually before midnight, regularly after it — and a payment at 01:30 on a shift nobody has closed belongs to that shift.
+
+**Fields:** id, restaurant_id, opened_at, closed_at, close_reason (`button` / `scheduled`), closed_by (nullable), business_date, created_at, updated_at
+
+**Relationships:** Shift → Restaurant (parent) · Shift → many LedgerLine · Shift → User (`closed_by`, nullable)
+
+**Rules.** `closed_at IS NULL` means open, and **exactly one Shift per Restaurant may be open at a time** — enforced by a partial unique index, not by the service, because `resolveOpenShift` reads-then-creates and two concurrent first payments would otherwise both insert.
+
+**Two ways to close, and they are not equal.** `close_reason = 'button'` is a person deciding; `'scheduled'` is the safety net firing because nobody did. The button wins **by construction**: once `closed_at` is set the shift is not open, and the sweep only selects open shifts — no rule anywhere compares the two times. A CHECK keeps `closed_at` and `close_reason` consistent: both set, or both null.
+
+`closed_by` is NULL for a scheduled close — an actor that is not a person is absent rather than invented — and is set to NULL by the FK if that User is later deleted, so a historical row never blocks a deletion.
+
+`business_date` is the venue's local calendar date **at `opened_at`**: the name a human gives this working day ("the shift of 2 September"), not a window. A shift running past midnight keeps it while its operations carry their own real timestamps.
+
+**Shifts open lazily**, on the first operation at a venue with none, so no operation is ever shift-less.

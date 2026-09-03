@@ -19,6 +19,9 @@ export type ErrorCode =
   // tip is never reversed. Raised inside the webhook handler, before any write, so the event is
   // retried and alerted rather than booked wrong. Not a client-facing code.
   | "REFUND_EXCEEDS_BILL"
+  // ADR-064: closing a shift when none is open. Not a validation failure — the caller asked for
+  // a real action against a state that does not exist.
+  | "SHIFT_NOT_OPEN"
   | "IDEMPOTENCY_KEY_CONFLICT"
   | "PERMISSION_DENIED"
   | "PASSWORD_BREACHED"

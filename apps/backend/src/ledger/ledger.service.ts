@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { ShiftService } from "../shift/shift.service";
 import type { JournalEntry, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { assertBalanced, assertCompensatingEntityMatchesType } from "./ledger-balance.util";
@@ -17,7 +18,10 @@ type LedgerTransactionClient = Prisma.TransactionClient;
  */
 @Injectable()
 export class LedgerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shifts: ShiftService,
+  ) {}
 
   /** `tx`, if given, composes this write into a transaction the CALLER already opened (Sprint 5:
    * a webhook handler needs Payment.update + Transaction.create + this Ledger write to be one
@@ -33,6 +37,19 @@ export class LedgerService {
     assertCompensatingEntityMatchesType(input);
 
     const run = async (client: LedgerTransactionClient): Promise<JournalEntry> => {
+      // ADR-064: one lookup per distinct Restaurant in this entry, not one per line. In practice
+      // every line of an entry shares a restaurant, so this is a single query — but the entry
+      // shape permits more than one, and resolving per restaurant rather than per line keeps that
+      // case correct instead of merely unlikely.
+      const restaurantIds = [
+        ...new Set(input.lines.map((l) => l.restaurantId).filter((id): id is string => !!id)),
+      ];
+      const shiftByRestaurant = new Map<string, string>();
+      for (const restaurantId of restaurantIds) {
+        const shift = await this.shifts.resolveOpenShift(restaurantId, client);
+        shiftByRestaurant.set(restaurantId, shift.id);
+      }
+
       const entry = await client.journalEntry.create({
         data: {
           entryType: input.entryType,
@@ -49,6 +66,9 @@ export class LedgerService {
               currency: line.currency,
               restaurantId: line.restaurantId,
               membershipId: line.membershipId,
+              // ADR-064's second label. Resolved here, in the posting transaction, so an entry
+              // can never be split across two shifts by one closing mid-write.
+              shiftId: line.restaurantId ? shiftByRestaurant.get(line.restaurantId) : null,
             })),
           },
         },

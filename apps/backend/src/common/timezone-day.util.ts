@@ -71,7 +71,7 @@ export function getDayWindowForDate(timezone: string, dateStr: string): DayWindo
   return { date: dateStr, start, end };
 }
 
-interface DateParts {
+export interface DateParts {
   year: number;
   month: number; // 1-12
   day: number;
@@ -88,7 +88,7 @@ function addCalendarDays(parts: DateParts, n: number): DateParts {
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 }
 
-function getLocalDateParts(timezone: string, instant: Date): DateParts {
+export function getLocalDateParts(timezone: string, instant: Date): DateParts {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     year: "numeric",
