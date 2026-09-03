@@ -67,6 +67,94 @@ export class ShiftService {
   }
 
   /**
+   * The Shift an operational screen means by "now" (ADR-065): the open one, or — if the venue has
+   * none open — the one most recently closed.
+   *
+   * **The fallback is the whole reason this is not just `findFirst({ closedAt: null })`.** At
+   * 06:00, after the safety net has closed last night, there is no open shift and there will not
+   * be one until the first sale of the day. A Dashboard that showed nothing until then would be
+   * blank exactly when an owner opens it to see how last night went.
+   *
+   * Returns null only for a venue that has never traded.
+   */
+  async currentShift(restaurantId: string): Promise<Shift | null> {
+    const open = await this.prisma.shift.findFirst({
+      where: { restaurantId, closedAt: null },
+    });
+    if (open) return open;
+
+    return this.prisma.shift.findFirst({
+      where: { restaurantId },
+      orderBy: { openedAt: "desc" },
+    });
+  }
+
+  /** The last `count` Shifts, oldest first — the shift-scoped replacement for Dashboard's
+   * "last 7 calendar days" chart. Fewer than `count` for a venue that has not traded that long,
+   * which the chart renders as it is rather than padding with empty calendar days that never
+   * existed as working days. */
+  async recentShifts(restaurantId: string, count: number): Promise<Shift[]> {
+    const shifts = await this.prisma.shift.findMany({
+      where: { restaurantId },
+      orderBy: { openedAt: "desc" },
+      take: count,
+    });
+    return shifts.reverse();
+  }
+
+  /**
+   * Shifts whose **business date** falls inside a calendar range, oldest first.
+   *
+   * **This is the join between the two vocabularies, and it is deliberately by business date.**
+   * An owner asking for "1–7 September" means the seven working days the venue calls by those
+   * names — so a shift opened on the 7th and closed at 02:00 on the 8th belongs to the range, in
+   * full, including its after-midnight takings. Selecting by `openedAt` instead would give the
+   * same answer here but a different one for a shift opened before midnight of the 1st, and
+   * selecting by `closedAt` would push every late-closing night into the following day — which
+   * is the calendar behaviour this replaces.
+   */
+  async shiftsForBusinessDateRange(
+    restaurantId: string,
+    from: string,
+    to: string,
+  ): Promise<Shift[]> {
+    return this.prisma.shift.findMany({
+      where: {
+        restaurantId,
+        businessDate: {
+          gte: new Date(`${from}T00:00:00.000Z`),
+          lte: new Date(`${to}T00:00:00.000Z`),
+        },
+      },
+      orderBy: { businessDate: "asc" },
+    });
+  }
+
+  /**
+   * The UTC instant of the local midnight that ENDS a shift's business date — the boundary
+   * ADR-065's after-midnight figure is measured from.
+   *
+   * Public because both Dashboard and Analytics need it and neither should re-derive a timezone
+   * calculation; `localMinuteUtc` stays private because it is the mechanism, not the concept.
+   */
+  midnightEndingBusinessDate(businessDate: Date, timezone: string): Date {
+    const next = new Date(businessDate.getTime() + 24 * 60 * 60 * 1000);
+    return this.localMinuteUtc(
+      timezone,
+      { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() },
+      0,
+    );
+  }
+
+  /** True when the shift was still open past the midnight ending its own business date — the
+   * fact ADR-065 requires the owner to be told, alongside the amount. A shift still open has not
+   * closed after midnight yet; it may. */
+  closedAfterMidnight(shift: Shift, timezone: string): boolean {
+    if (!shift.closedAt) return false;
+    return shift.closedAt >= this.midnightEndingBusinessDate(shift.businessDate, timezone);
+  }
+
+  /**
    * **The main path (ADR-064 §2): a person pressed the button.**
    *
    * Takes precedence over the schedule by construction rather than by comparison — once

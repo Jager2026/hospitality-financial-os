@@ -293,7 +293,7 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
       .set("Authorization", `Bearer ${ownerAccessToken}`);
     expect(dashboardRes.status).toBe(200);
     const dashboard = dashboardRes.body.data;
-    expect(dashboard.todayRevenue).toBe("1500"); // billAmount = amount(2000) - tipAmount(500)
-    expect(dashboard.todayTips).toBe("500");
+    expect(dashboard.shiftRevenue).toBe("1500"); // billAmount = amount(2000) - tipAmount(500)
+    expect(dashboard.shiftTips).toBe("500");
   }, 20_000);
 });

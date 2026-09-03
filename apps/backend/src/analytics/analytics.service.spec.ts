@@ -92,7 +92,7 @@ describe("AnalyticsService (real database)", () => {
       fakeConfig,
       new IndividualTipAllocationStrategy(),
     );
-    analyticsService = new AnalyticsService(prisma);
+    analyticsService = new AnalyticsService(prisma, shiftServiceForTests(prisma));
   });
 
   afterAll(async () => {
@@ -211,6 +211,40 @@ describe("AnalyticsService (real database)", () => {
     );
   }
 
+  /**
+   * ADR-065 migration: give a back-dated Transaction its own closed Shift, dated to the same day.
+   *
+   * `backdateLedgerLines` moves `createdAt` and deliberately does not touch `shiftId` — the two
+   * labels are independent (ADR-064), which is exactly what makes that helper useless on its own
+   * for a shift-scoped screen. A past day in this system is a past SHIFT, so the fixture has to
+   * build one.
+   */
+  async function backdateToOwnShift(
+    restaurantId: string,
+    transactionId: string,
+    daysAgo: number,
+  ): Promise<string> {
+    await backdateLedgerLines(transactionId, daysAgo);
+    const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    const businessDate = new Date(
+      Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate()),
+    );
+    const shift = await prisma.shift.create({
+      data: {
+        restaurantId,
+        openedAt: when,
+        closedAt: new Date(when.getTime() + 6 * 60 * 60 * 1000),
+        closeReason: "BUTTON",
+        businessDate,
+      },
+    });
+    await prisma.ledgerLine.updateMany({
+      where: { journalEntry: { transactionId } },
+      data: { shiftId: shift.id },
+    });
+    return shift.id;
+  }
+
   function userReaching(
     organizationId: string,
     permissions: string[] = ["reports.view", "data.export"],
@@ -239,10 +273,13 @@ describe("AnalyticsService (real database)", () => {
         const { membership: waiter } = await seedMembership(org.id, restaurant.id, "Waiter");
 
         // billAmount=300/tip=30, billAmount=700/tip=70, billAmount=1100/tip=110 — three days apart.
+        // ADR-065: the analytics SCREEN buckets by shift, so a past day must be a past shift.
+        // The property this test protects is unchanged — three captures, three buckets, in order,
+        // not merged and not shifted to the wrong one.
         const { transaction: twoDaysAgoTx } = await capture(restaurant.id, 330n, 30n, waiter.id);
-        await backdateLedgerLines(twoDaysAgoTx.id, 2);
+        await backdateToOwnShift(restaurant.id, twoDaysAgoTx.id, 2);
         const { transaction: oneDayAgoTx } = await capture(restaurant.id, 770n, 70n, waiter.id);
-        await backdateLedgerLines(oneDayAgoTx.id, 1);
+        await backdateToOwnShift(restaurant.id, oneDayAgoTx.id, 1);
         await capture(restaurant.id, 1210n, 110n, waiter.id); // today, not backdated
 
         const from = dateNDaysAgo(2);

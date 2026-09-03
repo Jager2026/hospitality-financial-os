@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.18.0
+version: 2.19.0
 status: Active
 classification: Internal
 owner: Founder
@@ -317,23 +317,31 @@ Requires: `data.export`
 
 # ANALYTICS
 
+**Two vocabularies, on purpose (ADR-065).** The JSON endpoints below are **operational screens and count SHIFTS**: a range like `from=2026-09-01&to=2026-09-07` means the seven working days the venue calls by those names, so a shift opened on the 7th and closed at 02:00 on the 8th is included in full, after-midnight takings and all. The `/export` CSVs are **accounting output and stay CALENDAR**, because the accountant is bound by law to a calendar period — the same shift is split across two dated rows there. **Both come from the same LedgerLine rows, so the two can never disagree about the money, only about how it is grouped.**
+
 ## Dashboard
 GET /dashboard?restaurantId={id} — `restaurantId` required (Sprint 9, ADR-026): a Dashboard is always exactly one Restaurant's view (an org-wide Owner lands on the Restaurants list instead, `UX_MAP.md`), and a restaurant-scoped Manager can hold Memberships at more than one Restaurant, so a bare call would be ambiguous about which one is meant. Requires `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — the Waiter Portal's own navigation has no Dashboard item at all), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant carries the permission (same shape as every other fine-grained permission check in this document).
 Requires: `reports.view`
 
 Every money figure is a live `SUM(CREDIT) - SUM(DEBIT)` aggregation over `LedgerLine`, scoped to the Restaurant and to "today" as a calendar day in the Restaurant's own `timezone` (ADR-026) — never a read of `Payment`/`Transaction` fields directly, and never UTC "today." The window is `LedgerLine.createdAt`-scoped, not `Transaction.createdAt`-scoped: a refund posted today against a payment from a prior day correctly reduces TODAY's totals, not the original sale's day (ADR-026, Decision 3) — each day's own already-posted Ledger activity stays fixed once that day has passed.
 
-Response: `{ restaurantId, date, todayRevenue, todayRevenueNote, todayTips, averageTipBasisPoints, todayTransactions, averageBill, revenueChart, recentPayments, topStaff }`.
+Response: `{ restaurantId, shift, shiftRevenue, shiftRevenueNote, shiftTips, averageTipBasisPoints, shiftTransactions, averageBill, revenueChart, recentPayments, topStaff }`.
+
+**Every figure is scoped to a SHIFT, not a calendar day (ADR-065).** The fields were `today*` while this screen counted calendar days; they are `shift*` now because ADR-065 requires a screen to state which day it means, and a field called "today" on a shift-scoped number is exactly the ambiguity that rule removes. **A breaking rename, made deliberately while there is no frontend consumer.**
+
+`shift` is the working day this summary is about — the open one, or the most recently closed when the venue has none open, so the screen is not blank at 06:00 before the first sale. `null` only for a venue that has never traded, in which case every figure is zero-shaped. It carries `{ id, businessDate, openedAt, closedAt, closeReason, closedAfterMidnight, afterMidnightRevenue }`.
+
+- `closedAfterMidnight` / `afterMidnightRevenue` — **ADR-065's central pair: the number that explains why a Z-report and a bank statement differ, instead of hiding it.** `afterMidnightRevenue` is money that arrived between the midnight ending the shift's business date and its close; `"0"` — a real zero, not absent data — for a shift that closed before midnight. **Not a warning:** a shift closing at 01:30 is normal, and the copy must not imply otherwise.
 
 **No Stripe account status here, deliberately (ADR-063).** The Dashboard banner (`UX_MAP.md`) needs `cardPaymentsStatus` / `payoutsStatus` / `requirementsDue`; it takes them from `GET /restaurants/{id}` in a second call. Every figure below is computed from our own Ledger and is exact as of the request; a capability status is a cached observation of Stripe's system, with its own freshness and its own failure mode. Folding them into one response would make the most-viewed screen in the product fail, or hang, on Stripe's availability.
 
-- `todayRevenue` — `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)`, today: the gross amount customers paid for their bills. Deliberately NOT the same quantity as Transaction Details' `netRestaurantRevenue` (ADR-025), which nets the platform fee out — Revenue is what the customer paid; the platform fee is a separate expense against it, not a deduction from revenue itself before revenue is even reported (ADR-026, Decision 1). Both figures are correct; they answer different questions ("how much business did we do" vs. "what does the restaurant keep").
-- `todayRevenueNote` — always the fixed string `"Before platform fee deduction"` (ADR-026) — since `todayRevenue` doesn't match `netRestaurantRevenue` shown elsewhere in the product, the difference must be explicit on screen wherever `todayRevenue` is rendered, not left to documentation alone.
-- `todayTips` — `net(TIP_PAYABLE)`, today, unfiltered by `membershipId` — the general `PAYMENT_CAPTURED` credit and `TIP_ALLOCATED`'s own reversal of it cancel to zero by construction (ADR-022/025), same as everywhere else this pattern appears.
-- `averageTipBasisPoints` — `(todayTips × 10000) / todayRevenue`, the ratio of the two sums above, never an average of individual transactions' own tip percentages (ADR-026, Decision 4 — the Founder's own explicit correction). A string of basis points (ADR-021's vocabulary — e.g. `"2500"` = 25.00%), `null` — never `"0"` — when `todayRevenue` is exactly zero.
-- `todayTransactions` — a **count** of sales made today: one per `PAYMENT_CAPTURED` entry inside the local-day window, counted over `LedgerLine.created_at` like every money figure on this screen (ADR-026), never over `Transaction.created_at`. A refund posted today against an older sale moves `todayRevenue` and does **not** move this — it is a count of sales, not of ledger activity. A plain number, not a minor-units string.
-- `averageBill` — `todayRevenue / todayTransactions`, floored to minor units: the ratio of the sums, the same discipline as `averageTipBasisPoints` (ADR-026, Decision 4). **`null` — never `"0"` — when `todayTransactions` is 0**: there is no divisor, and "no bills today" is not "a bill of zero" (ADR-025's null-not-0 precedent). Can be negative when today's refunds of older sales exceed today's takings; the screen renders that rather than clamping it (`UX_MAP.md`).
-- `revenueChart` — last 7 local calendar days including today, oldest first, each `{ date, revenue }` using the identical `todayRevenue` definition for that day.
+- `shiftRevenue` — `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)`, today: the gross amount customers paid for their bills. Deliberately NOT the same quantity as Transaction Details' `netRestaurantRevenue` (ADR-025), which nets the platform fee out — Revenue is what the customer paid; the platform fee is a separate expense against it, not a deduction from revenue itself before revenue is even reported (ADR-026, Decision 1). Both figures are correct; they answer different questions ("how much business did we do" vs. "what does the restaurant keep").
+- `shiftRevenueNote` — always the fixed string `"Before platform fee deduction"` (ADR-026) — since `shiftRevenue` doesn't match `netRestaurantRevenue` shown elsewhere in the product, the difference must be explicit on screen wherever `shiftRevenue` is rendered, not left to documentation alone.
+- `shiftTips` — `net(TIP_PAYABLE)`, today, unfiltered by `membershipId` — the general `PAYMENT_CAPTURED` credit and `TIP_ALLOCATED`'s own reversal of it cancel to zero by construction (ADR-022/025), same as everywhere else this pattern appears.
+- `averageTipBasisPoints` — `(todayTips × 10000) / todayRevenue`, the ratio of the two sums above, never an average of individual transactions' own tip percentages (ADR-026, Decision 4 — the Founder's own explicit correction). A string of basis points (ADR-021's vocabulary — e.g. `"2500"` = 25.00%), `null` — never `"0"` — when `shiftRevenue` is exactly zero.
+- `shiftTransactions` — a **count** of sales made today: one per `PAYMENT_CAPTURED` entry inside the local-day window, counted over `LedgerLine.created_at` like every money figure on this screen (ADR-026), never over `Transaction.created_at`. A refund posted today against an older sale moves `shiftRevenue` and does **not** move this — it is a count of sales, not of ledger activity. A plain number, not a minor-units string.
+- `averageBill` — `todayRevenue / todayTransactions`, floored to minor units: the ratio of the sums, the same discipline as `averageTipBasisPoints` (ADR-026, Decision 4). **`null` — never `"0"` — when `shiftTransactions` is 0**: there is no divisor, and "no bills today" is not "a bill of zero" (ADR-025's null-not-0 precedent). Can be negative when today's refunds of older sales exceed today's takings; the screen renders that rather than clamping it (`UX_MAP.md`).
+- `revenueChart` — the last **7 SHIFTS**, oldest first, each `{ date, shiftId, revenue }`, using the identical `shiftRevenue` definition for that shift. `date` is the shift's business date — its name, not a bucket: **two shifts on one business date appear as two points**, because they were two working days. Fewer than 7 points for a venue that has not traded that long; a working day that never happened is not a day with no revenue.
 - `recentPayments` — the 10 most recent Transactions for this Restaurant, all-time (not "today"-scoped) — `{ id, grossAmount, currency, status, createdAt }`.
 - `topStaff` — up to 5 Memberships, ranked by today's net `TIP_PAYABLE` (`SUM(CREDIT) - SUM(DEBIT)`, never a naive sum of `TIP_ALLOCATED` credits alone — ADR-026, Decision 6, avoiding ADR-023's own bug class from the start) — `{ membershipId, email, tips }`. `email` is the only identifier available: `User` has no display-name field anywhere in the schema (a known, flagged limitation, ADR-026).
 
@@ -346,7 +354,7 @@ Gated by `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — sam
 ### Revenue
 GET /analytics/revenue?restaurantId={id}&from={date}&to={date}
 
-Response: `{ restaurantId, from, to, total, totalNote, series }`. `total` is `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)` across the whole range — the identical bill-only definition as Dashboard's `todayRevenue` (ADR-026 Decision 1), not `netRestaurantRevenue`. `totalNote` is always `"Before platform fee deduction"`, same fixed caption as Dashboard's `todayRevenueNote`. `series` is one `{ date, amount }` point per calendar day in the range, oldest first.
+Response: `{ restaurantId, from, to, total, totalNote, series }`. `total` is `net(RESTAURANT_REVENUE_PAYABLE) + net(PLATFORM_FEE_REVENUE)` across the whole range — the identical bill-only definition as Dashboard's `shiftRevenue` (ADR-026 Decision 1), not `netRestaurantRevenue`. `totalNote` is always `"Before platform fee deduction"`, same fixed caption as Dashboard's `shiftRevenueNote`. `series` is one `{ date, amount }` point per calendar day in the range, oldest first.
 
 GET /analytics/revenue/export — same query, CSV. Columns: `date, amount`. No pagination — every day in the range.
 Requires: `data.export`
@@ -354,7 +362,7 @@ Requires: `data.export`
 ### Tips
 GET /analytics/tips?restaurantId={id}&from={date}&to={date}
 
-Response: `{ restaurantId, from, to, total, series }`. `total` is `net(TIP_PAYABLE)` across the range, unfiltered by `membershipId` — same definition as Dashboard's `todayTips`. `series` is one `{ date, amount }` point per day.
+Response: `{ restaurantId, from, to, total, series }`. `total` is `net(TIP_PAYABLE)` across the range, unfiltered by `membershipId` — same definition as Dashboard's `shiftTips`. `series` is one `{ date, amount }` point per day.
 
 GET /analytics/tips/export — same query, CSV. Columns: `date, amount`.
 Requires: `data.export`

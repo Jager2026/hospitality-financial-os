@@ -7,7 +7,11 @@ import {
   BILL_REVENUE_ACCOUNTS,
   netForRestaurantWindow,
   netTipsByMembershipForRestaurantWindow,
+  netForRestaurantShifts,
+  netTipsByMembershipForRestaurantShifts,
+  countCapturesForRestaurantShifts,
 } from "../ledger/restaurant-ledger-window.util";
+import { ShiftService } from "../shift/shift.service";
 import { PrismaService } from "../prisma/prisma.service";
 import type {
   AnalyticsQueryDto,
@@ -107,16 +111,19 @@ const EXPORT_PERMISSION = "data.export";
  * both the JSON and CSV path for the same resource, taking an already-resolved Restaurant. */
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shifts: ShiftService,
+  ) {}
 
   async getRevenue(query: AnalyticsQueryDto, user: AuthenticatedUser): Promise<RevenueAnalytics> {
     const restaurant = await this.reachable(query.restaurantId, user, VIEW_PERMISSION);
-    return this.computeRevenue(restaurant, query.from, query.to);
+    return this.computeRevenueByShift(restaurant, query.from, query.to);
   }
 
   async exportRevenueCsv(query: AnalyticsQueryDto, user: AuthenticatedUser): Promise<string> {
     const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
-    const data = await this.computeRevenue(restaurant, query.from, query.to);
+    const data = await this.computeRevenueByCalendarDay(restaurant, query.from, query.to);
     const header = "date,amount";
     const lines = data.series.map((p) => `${p.date},${p.amount}`);
     return [header, ...lines].join("\n");
@@ -124,12 +131,12 @@ export class AnalyticsService {
 
   async getTips(query: AnalyticsQueryDto, user: AuthenticatedUser): Promise<TipsAnalytics> {
     const restaurant = await this.reachable(query.restaurantId, user, VIEW_PERMISSION);
-    return this.computeTips(restaurant, query.from, query.to);
+    return this.computeTipsByShift(restaurant, query.from, query.to);
   }
 
   async exportTipsCsv(query: AnalyticsQueryDto, user: AuthenticatedUser): Promise<string> {
     const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
-    const data = await this.computeTips(restaurant, query.from, query.to);
+    const data = await this.computeTipsByCalendarDay(restaurant, query.from, query.to);
     const header = "date,amount";
     const lines = data.series.map((p) => `${p.date},${p.amount}`);
     return [header, ...lines].join("\n");
@@ -224,7 +231,7 @@ export class AnalyticsService {
    * precedent: nested lists get their own export, never an awkward multi-section CSV). */
   async exportReportCsv(query: ReportsQueryDto, user: AuthenticatedUser): Promise<string> {
     const restaurant = await this.reachable(query.restaurantId, user, EXPORT_PERMISSION);
-    const report = await this.computeReport(restaurant, query.from, query.to);
+    const report = await this.computeReportByCalendarDay(restaurant, query.from, query.to);
     const header = "restaurantId,from,to,type,revenue,tips,averageTipBasisPoints,transactionCount";
     const row = [
       report.restaurantId,
@@ -247,7 +254,24 @@ export class AnalyticsService {
     return getReachableReportingRestaurantOrThrow(this.prisma, restaurantId, user, permission);
   }
 
-  private async computeRevenue(
+  private async computeRevenueByShift(
+    restaurant: Restaurant,
+    from: string,
+    to: string,
+  ): Promise<RevenueAnalytics> {
+    const series = await this.buildShiftSeries(restaurant, from, to, BILL_REVENUE_ACCOUNTS);
+    const total = series.reduce((acc, p) => acc + BigInt(p.amount), 0n);
+    return {
+      restaurantId: restaurant.id,
+      from,
+      to,
+      total: total.toString(),
+      totalNote: TOTAL_NOTE,
+      series,
+    };
+  }
+
+  private async computeRevenueByCalendarDay(
     restaurant: Restaurant,
     from: string,
     to: string,
@@ -264,7 +288,17 @@ export class AnalyticsService {
     };
   }
 
-  private async computeTips(
+  private async computeTipsByShift(
+    restaurant: Restaurant,
+    from: string,
+    to: string,
+  ): Promise<TipsAnalytics> {
+    const series = await this.buildShiftSeries(restaurant, from, to, ["TIP_PAYABLE"]);
+    const total = series.reduce((acc, p) => acc + BigInt(p.amount), 0n);
+    return { restaurantId: restaurant.id, from, to, total: total.toString(), series };
+  }
+
+  private async computeTipsByCalendarDay(
     restaurant: Restaurant,
     from: string,
     to: string,
@@ -308,6 +342,38 @@ export class AnalyticsService {
     from: string,
     to: string,
   ): Promise<PeriodSummaryReport> {
+    // ADR-065: the report screen counts SHIFTS. Its CSV twin stays calendar — see exportReportCsv.
+    const shiftIds = await this.shiftIdsForRange(restaurant.id, from, to);
+
+    const [revenue, tips, transactionCount, ranked] = await Promise.all([
+      netForRestaurantShifts(this.prisma, restaurant.id, BILL_REVENUE_ACCOUNTS, shiftIds),
+      netForRestaurantShifts(this.prisma, restaurant.id, ["TIP_PAYABLE"], shiftIds),
+      countCapturesForRestaurantShifts(this.prisma, restaurant.id, shiftIds),
+      this.rankStaffByShifts(restaurant.id, shiftIds),
+    ]);
+    const topStaff = await this.attachEmails(ranked.slice(0, REPORT_TOP_STAFF_LIMIT));
+
+    return {
+      restaurantId: restaurant.id,
+      from,
+      to,
+      type: "period-summary",
+      revenue: revenue.toString(),
+      revenueNote: TOTAL_NOTE,
+      tips: tips.toString(),
+      averageTipBasisPoints: changeRatioBasisPoints(tips, revenue),
+      transactionCount,
+      topStaff,
+    };
+  }
+
+  private async computeReportByCalendarDay(
+    restaurant: Restaurant,
+    from: string,
+    to: string,
+  ): Promise<PeriodSummaryReport> {
+    // ACCOUNTING's twin (ADR-065): calendar days, because the accountant is bound by law to a
+    // calendar period. Deliberately NOT switched to shifts, and its own test asserts that.
     const start = getDayWindowForDate(restaurant.timezone, from).start;
     const end = getDayWindowForDate(restaurant.timezone, to).end;
 
@@ -335,6 +401,48 @@ export class AnalyticsService {
     };
   }
 
+  /**
+   * The SCREEN's series: one point per SHIFT whose business date falls in the range (ADR-065).
+   *
+   * **Deliberately a second method rather than a flag on `buildSeries`.** The JSON screens and
+   * the CSV exports now answer two different questions about the same money — the venue's working
+   * days and the state's calendar days — and a boolean would let a call site be ambiguous about
+   * which it meant. Two names, each unambiguous where it is called. `buildSeries` below is
+   * unchanged and stays calendar: it is what the accounting exports use.
+   *
+   * A shift opened on the 7th and closed at 02:00 on the 8th appears once, on the 7th, with its
+   * after-midnight takings included — which is the whole point.
+   */
+  private async buildShiftSeries(
+    restaurant: { id: string; timezone: string },
+    from: string,
+    to: string,
+    accounts: Parameters<typeof netForRestaurantWindow>[2],
+  ): Promise<AnalyticsSeriesPoint[]> {
+    const shifts = await this.shifts.shiftsForBusinessDateRange(restaurant.id, from, to);
+    return Promise.all(
+      shifts.map(async (shift) => {
+        const amount = await netForRestaurantShifts(this.prisma, restaurant.id, accounts, [
+          shift.id,
+        ]);
+        return { date: shift.businessDate.toISOString().slice(0, 10), amount: amount.toString() };
+      }),
+    );
+  }
+
+  /** Every Shift id in the range — the scope every shift-based total below is computed over. */
+  private async shiftIdsForRange(
+    restaurantId: string,
+    from: string,
+    to: string,
+  ): Promise<string[]> {
+    const shifts = await this.shifts.shiftsForBusinessDateRange(restaurantId, from, to);
+    return shifts.map((shift) => shift.id);
+  }
+
+  /** ACCOUNTING's series: one point per calendar day. Unchanged, and it must stay that way —
+   * ADR-065 keeps the exports calendar-scoped because the accountant is bound by law to a
+   * calendar period. Its own test asserts this, and fails if it is switched to shifts. */
   private async buildSeries(
     restaurant: { id: string; timezone: string },
     from: string,
@@ -355,6 +463,19 @@ export class AnalyticsService {
         return { date, amount: amount.toString() };
       }),
     );
+  }
+
+  /** `rankStaffByTips`'s definition, scoped by shift (ADR-065). */
+  private async rankStaffByShifts(
+    restaurantId: string,
+    shiftIds: string[],
+  ): Promise<Array<[string, bigint]>> {
+    const netByMembership = await netTipsByMembershipForRestaurantShifts(
+      this.prisma,
+      restaurantId,
+      shiftIds,
+    );
+    return [...netByMembership.entries()].sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0));
   }
 
   private async rankedStaffForRange(
