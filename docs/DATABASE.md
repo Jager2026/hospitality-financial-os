@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.17.0
+version: 2.18.0
 status: Active
 classification: Internal
 owner: Founder
@@ -39,7 +39,7 @@ Every table that records a financial fact is immutable. Corrections are new rows
 
 Twenty-two entities. Ten existed in v1.0. Ten were added directly by `ARCHITECTURE_DECISIONS.md` to close gaps the Sprint 0 review found — this is the schema catching up with already-agreed architecture, not scope creep. `MembershipInvitation` (ADR-020) is the twenty-first, added while starting Sprint 4 to close a gap between `MASTERPLAN.md`'s own user journey and the Sprint 0 schema. `AgreementAcceptance` (ADR-049) is the twenty-second, added in Sprint 14: until then a User could exist with no record of having agreed to anything.
 
-`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog` · `AgreementAcceptance` · `Shift`
+`Organization` · `Restaurant` · `User` · `Membership` · `MembershipInvitation` · `Role` · `Permission` · `RolePermission` · `Currency` · `Wallet` · `Payment` · `Transaction` · `JournalEntry` · `LedgerLine` · `Tip` · `Refund` · `Chargeback` · `Adjustment` · `OutboxEvent` · `IdempotencyKey` · `AuditLog` · `AgreementAcceptance` · `Shift` · `EmailDelivery`
 
 ---
 
@@ -306,11 +306,31 @@ Adjustment
 
 ############################################################
 # ENTITY
+EmailDelivery
+############################################################
+**Purpose (ADR-069):** The audit record for one outbound email, and the reason a double dispatch cannot become a double send.
+
+**Fields:** id, outbox_event_id (UNIQUE), to, subject, provider_message_id (nullable), status, last_error (nullable), created_at, updated_at
+
+**Rules:** Written in the same transaction as the `OutboxEvent` that requests the send, **before** anything is attempted — sending an invitation is a disclosure event, so "we decided to send" and "there is a record of the send" are one fact rather than two that can disagree.
+
+`outbox_event_id` is UNIQUE, and that is load-bearing rather than bookkeeping: `OutboxPollerService` has no claim step (`IMPLEMENTATION_PLAN.md`, Deferred), so two backend instances would both dispatch the same row. The constraint makes the second attempt fail against the database instead of against the recipient's inbox.
+
+**The body is deliberately not stored.** It carries the invitation token, which ADR-020 keeps unpersisted on purpose; storing the rendered body here would silently undo that.
+
+`status` is `pending` | `sent` | `failed`. **`sent` means Resend ACCEPTED it, which is not delivery** — the name says so. There is deliberately no `delivered` or `bounced`: those are facts only Resend's webhooks can supply, no webhook endpoint exists yet, and an enum value nothing can ever set is a promise the system does not keep. `provider_message_id` is stored now precisely so a webhook can be correlated back when that work happens.
+
+---
+
+############################################################
+# ENTITY
 OutboxEvent
 ############################################################
 **Purpose:** Guarantees every Ledger write reliably reaches its projections (ADR-003).
 
 **Fields:** id, aggregate_type, aggregate_id, event_type, payload, created_at, published_at (nullable), attempts
+
+**Rules (ADR-069 amendment):** `event_type` now decides the consumer. Every row is still inserted in the same transaction as the fact it describes — but that fact is no longer always a Ledger write: `email.send_requested` is inserted alongside an `EmailDelivery` row instead, and its `payload.text` is replaced with a marker once the message has gone, because an email body is the one payload that can hold a credential.
 
 **Rules:** Inserted in the same database transaction as the JournalEntry/LedgerLine it describes. This is an operational table, not permanent financial history — rows may be purged a fixed time after `published_at` is set.
 

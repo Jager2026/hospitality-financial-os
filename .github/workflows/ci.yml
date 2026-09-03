@@ -104,7 +104,7 @@ jobs:
       # mistaken for real, and a fresh random value each run cannot quietly become a real credential
       # someone pasted "just for now". These never reach Stripe — no test in this suite makes a live
       # network call, and the boot-time credential probe is production-only.
-      - name: Compose Stripe CI placeholders
+      - name: Compose Stripe and Resend CI placeholders
         run: |
           RAND_KEY=$(head -c 400 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 99)
           RAND_WHSEC=$(head -c 200 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
@@ -115,6 +115,13 @@ jobs:
           echo "::add-mask::whsec_${RAND_WHSEC}"
           echo "STRIPE_SECRET_KEY=sk_test_${RAND_KEY}" >> "$GITHUB_ENV"
           echo "STRIPE_WEBHOOK_SECRET=whsec_${RAND_WHSEC}" >> "$GITHUB_ENV"
+          # ADR-069: same reasoning, for Resend. The underscore in the middle is not decoration —
+          # it mirrors the real key shape (re_<id>_<secret>), so this placeholder exercises the
+          # actual regex rather than a simplified one that would pass a rule real keys fail.
+          RAND_RESEND_ID=$(head -c 100 /dev/urandom | base64 | tr -dc "A-Za-z0-9" | head -c 8)
+          RAND_RESEND_SECRET=$(head -c 200 /dev/urandom | base64 | tr -dc "A-Za-z0-9" | head -c 24)
+          echo "::add-mask::re_${RAND_RESEND_ID}_${RAND_RESEND_SECRET}"
+          echo "RESEND_API_KEY=re_${RAND_RESEND_ID}_${RAND_RESEND_SECRET}" >> "$GITHUB_ENV"
 
       # No `version:` here, deliberately: pnpm/action-setup@v4 reads the version from
       # package.json's "packageManager" field on its own. Specifying both made every CI run

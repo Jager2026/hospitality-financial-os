@@ -1,6 +1,6 @@
 ---
 title: EVENT_CATALOG
-version: 1.3.0
+version: 1.4.0
 status: Active
 classification: Internal
 owner: Founder
@@ -84,8 +84,13 @@ The payload is intentionally minimal — an id and the entry's own type, not a d
 - Restaurant Module → updates the affected Restaurant's cached balance (not yet built)
 - Analytics Module → updates its read models (Sprint 9/10, not yet built)
 - Notification Module (future) → sends alerts (not yet built)
+- **Email (`EmailOutboxService`) → hands one message to Resend (ADR-069, Sprint 15, shipped)**
 
-— Wallet is the only one wired in so far. `dispatch()` handles the projection and marks `published_at` in one atomic transaction, and only increments `attempts` on an actual failure — a change from the old skeleton, which incremented it unconditionally, even on a no-op.
+— Wallet and Email are wired in. **Email is the SECOND consumer, and the project recorded in advance what that means**: `IMPLEMENTATION_PLAN.md` (Deferred) notes that this poller has no claim step, and that a second consumer is the trigger that *"does not announce itself — it arrives through ordinary feature work"*. It has arrived. The claim step is still missing; a double dispatch is made harmless for email specifically by a UNIQUE constraint on `email_delivery.outbox_event_id` and by Resend's own `Idempotency-Key` (24-hour window), neither of which protects a third consumer.
+
+`dispatch()` now routes on `event_type`: `email.send_requested` goes to `EmailOutboxService.handle`, everything else takes the path it took before, unchanged. Not a handler registry yet — that and the claim step share one threshold, and it is the third consumer.
+
+ `dispatch()` handles the projection and marks `published_at` in one atomic transaction, and only increments `attempts` on an actual failure — a change from the old skeleton, which incremented it unconditionally, even on a no-op.
 
 A row whose `attempts` reaches 5 without `published_at` being set still logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag), and — as of Sprint 13, ADR-031 — also sends one outbound webhook POST to `ALERT_WEBHOOK_URL`, if configured (fired exactly once per event, on the poll that crosses the threshold, not repeated on every later retry). This is no longer the expected steady state it was between Sprint 5 and Sprint 7: a `payment_captured`/`tip_allocated`/`refund_issued`/`chargeback` row now gets `published_at` set within one poll cycle under normal operation, the same run of live verification that closed Sprint 7 confirmed this directly. A row that keeps failing past Sprint 7 is a real signal again, not the expected gap it briefly was — with one known, permanent exception: `ledger.service.spec.ts`'s own atomicity test seeds an `OutboxEvent` with no `journalEntryId` on purpose (proving the write lands in the same transaction as the Ledger write, nothing to do with Wallet), which `dispatch()` now rejects immediately rather than silently matching every Membership in the database — expected local test noise, not an alert to chase.
 
@@ -93,7 +98,9 @@ A row whose `attempts` reaches 5 without `published_at` being set still logs an 
 
 # Not Yet Cataloged
 
-No event types beyond the six above are defined anywhere in code. Per the Founder's explicit instruction: this document does not invent event shapes for future functionality that doesn't exist yet — a `TipAllocated`-driven Wallet-projection event, a `RestaurantCreated` event, or anything else no current code path writes. `SYSTEM_ARCHITECTURE.md` names some of these in passing as historical color ("Previous versions of this document referenced domain events (RestaurantCreated, PaymentCompleted, TipCreated, WalletUpdated, TransactionRecorded) without specifying how they were delivered") — none of those are real `event_type` strings today, and none should be treated as planned ones until real code writes them. When Sprint 6 (Tips) or any later sprint adds a real writer with a new shape, extend this table then, from the code that exists at that point — not now, from a guess.
+`email.send_requested` (ADR-069) is the seventh, and the only one not produced by `LedgerService`: `aggregate_type` `EmailDelivery`, `aggregate_id` the delivery row's own id, payload `{ to, subject, text }`. **`text` is replaced with a marker once the message has gone** — an email body is the one payload that can hold a credential, and a published row is kept forever. It has no production producer yet.
+
+No event types beyond those are defined anywhere in code. Per the Founder's explicit instruction: this document does not invent event shapes for future functionality that doesn't exist yet — a `TipAllocated`-driven Wallet-projection event, a `RestaurantCreated` event, or anything else no current code path writes. `SYSTEM_ARCHITECTURE.md` names some of these in passing as historical color ("Previous versions of this document referenced domain events (RestaurantCreated, PaymentCompleted, TipCreated, WalletUpdated, TransactionRecorded) without specifying how they were delivered") — none of those are real `event_type` strings today, and none should be treated as planned ones until real code writes them. When Sprint 6 (Tips) or any later sprint adds a real writer with a new shape, extend this table then, from the code that exists at that point — not now, from a guess.
 
 ---
 

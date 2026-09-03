@@ -719,6 +719,56 @@ model OutboxEvent {
   @@map("outbox_event")
 }
 
+/// ADR-069. The audit record for one outbound email, and the reason a double dispatch cannot
+/// become a double send.
+///
+/// Sending an invitation is a DISCLOSURE EVENT — a token that grants access to an Organization
+/// leaves the system — so it is recorded before it is attempted, never only after it succeeds.
+/// The row is written in the same transaction as the OutboxEvent that requests it, which is what
+/// makes "we decided to send" and "there is a record of the send" the same fact rather than two.
+///
+/// `outboxEventId` is UNIQUE, and that is the load-bearing part. OutboxPollerService has no claim
+/// step (IMPLEMENTATION_PLAN.md, Deferred): two backend instances would both dispatch the same row,
+/// and its own comment names email as the case that turns a double dispatch into a double effect.
+/// This constraint makes the second attempt fail at the database rather than at the recipient.
+model EmailDelivery {
+  id            String              @id @default(uuid()) @db.Uuid
+  /// The OutboxEvent that asked for this send. UNIQUE: one request, at most one delivery record.
+  outboxEventId String              @unique @map("outbox_event_id") @db.Uuid
+  /// Recipient and subject are kept for the audit trail — a bounce is meaningless without knowing
+  /// who it was to. The BODY is deliberately not stored: it carries the invitation token, and a
+  /// token at rest in a second place is a second place it can leak from (ADR-020 keeps the token
+  /// unpersisted; storing the email body would silently undo that).
+  to            String
+  subject       String
+  /// Resend's own id for the message, once it has accepted it. NULL until then, and NULL forever
+  /// if it never accepted — which is exactly the trace a failure has to leave.
+  providerMessageId String?         @map("provider_message_id")
+  status        EmailDeliveryStatus @default(PENDING)
+  /// The provider's own error text on the last failed attempt. NULL when nothing has failed.
+  lastError     String?             @map("last_error")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("email_delivery")
+}
+
+/// PENDING: recorded, not yet attempted. SENT: Resend accepted it and returned an id — which is
+/// NOT the same as delivered, and the name says so. FAILED: the provider refused or the attempt
+/// errored, and `lastError` says why.
+///
+/// There is deliberately no DELIVERED or BOUNCED value yet: those are facts only Resend's webhooks
+/// can supply, no webhook endpoint exists in this change, and an enum value nothing can ever set is
+/// a promise the system does not keep (ADR-069 lists the webhook events and does not act on them).
+enum EmailDeliveryStatus {
+  PENDING @map("pending")
+  SENT    @map("sent")
+  FAILED  @map("failed")
+
+  @@map("email_delivery_status")
+}
+
 model IdempotencyKey {
   key                String               @id
   endpointScope      String               @map("endpoint_scope")

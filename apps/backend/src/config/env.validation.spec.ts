@@ -14,6 +14,9 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
       107,
     );
   const GOOD_WHSEC = "whsec_ShapeSpecNotARealSecretAbc123";
+  // ADR-069. Shaped like a REAL Resend key — `re_<id>_<secret>` — because the underscore in the
+  // middle is the whole reason this constant is written out rather than reusing a Stripe-ish one.
+  const GOOD_RESEND_KEY = "re_ExampleId_ThisIsNotARealResendKey0123";
 
   function envWith(overrides: Record<string, string>) {
     return {
@@ -28,6 +31,7 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
       STRIPE_WEBHOOK_SECRET: GOOD_WHSEC,
       DEFAULT_PLATFORM_FEE_BASIS_POINTS: "100",
       CORS_ORIGIN: "http://localhost:3000",
+      RESEND_API_KEY: GOOD_RESEND_KEY,
       ...overrides,
     };
   }
@@ -194,5 +198,78 @@ describe("env.validation — Stripe secret shape (ADR-038)", () => {
       expect(() => validateEnv(envWith({ NODE_ENV: "development" }))).not.toThrow();
       expect(() => validateEnv(envWith({ NODE_ENV: "test" }))).not.toThrow();
     });
+  });
+
+  // ADR-069 — the Resend key shape.
+  //
+  // THE FIRST TEST HERE IS THE ONE THAT MATTERS, and it is a discriminating test in the strict
+  // sense: the obvious implementation of this rule is to copy the Stripe regex above and change
+  // the prefix, giving /^re_[A-Za-z0-9]+$/. That version REJECTS every real Resend key, because a
+  // real key is re_<id>_<secret> and carries an underscore in its body. It would have passed every
+  // other assertion in this block and refused to boot production on the first deploy.
+  describe("Resend key shape (ADR-069)", () => {
+    it(
+      "accepts a real-shaped key, WITH the underscore inside the body — the Stripe regex with a " +
+        "swapped prefix fails this and nothing else, which is why it is written first",
+      () => {
+        const parsed = validateEnv(envWith({}));
+        expect(parsed.RESEND_API_KEY).toBe(GOOD_RESEND_KEY);
+        // Stated explicitly so the reason survives someone tidying the constant later.
+        expect(GOOD_RESEND_KEY.slice(3)).toContain("_");
+      },
+    );
+
+    it("rejects the wrong prefix, the missing prefix, and a truncated one", () => {
+      expect(() => validateEnv(envWith({ RESEND_API_KEY: "sk_test_" + "a".repeat(40) }))).toThrow(
+        /RESEND_API_KEY is malformed/,
+      );
+      expect(() => validateEnv(envWith({ RESEND_API_KEY: "a".repeat(40) }))).toThrow(
+        /RESEND_API_KEY is malformed/,
+      );
+      expect(() => validateEnv(envWith({ RESEND_API_KEY: "re" + "a".repeat(40) }))).toThrow(
+        /RESEND_API_KEY is malformed/,
+      );
+    });
+
+    it("rejects the shapes a copy-paste actually produces — quotes, angle brackets, whitespace", () => {
+      expect(() => validateEnv(envWith({ RESEND_API_KEY: `<${GOOD_RESEND_KEY}>` }))).toThrow(
+        /RESEND_API_KEY is malformed/,
+      );
+      expect(() => validateEnv(envWith({ RESEND_API_KEY: `"${GOOD_RESEND_KEY}"` }))).toThrow(
+        /RESEND_API_KEY is malformed/,
+      );
+      expect(() => validateEnv(envWith({ RESEND_API_KEY: `${GOOD_RESEND_KEY} ` }))).toThrow(
+        /RESEND_API_KEY is malformed/,
+      );
+      expect(() =>
+        validateEnv(
+          envWith({
+            RESEND_API_KEY: `${GOOD_RESEND_KEY}
+`,
+          }),
+        ),
+      ).toThrow(/RESEND_API_KEY is malformed/);
+    });
+
+    it(
+      "rejects absent and rejects EMPTY — the two are different states, and this project has been " +
+        "bitten three times by code that only checked one of them",
+      () => {
+        const { RESEND_API_KEY: _omitted, ...withoutKey } = envWith({});
+        expect(() => validateEnv(withoutKey)).toThrow(/RESEND_API_KEY/);
+        expect(() => validateEnv(envWith({ RESEND_API_KEY: "" }))).toThrow(/RESEND_API_KEY/);
+      },
+    );
+
+    it(
+      "is required in EVERY environment, not only production — it is the gate the whole email " +
+        "path hangs from, and ADR-045 says a gate cannot itself be conditional",
+      () => {
+        for (const NODE_ENV of ["development", "test", "production"]) {
+          const { RESEND_API_KEY: _omitted, ...withoutKey } = envWith({ NODE_ENV });
+          expect(() => validateEnv({ ...withoutKey, NODE_ENV })).toThrow(/RESEND_API_KEY/);
+        }
+      },
+    );
   });
 });
