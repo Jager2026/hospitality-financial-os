@@ -21,7 +21,12 @@ function serviceWithFetch(impl: typeof fetch) {
     warn: () => undefined,
     error: () => undefined,
   };
-  const config = { getOrThrow: () => API_KEY };
+  // NODE_ENV=production, because the transport refuses to touch the network anywhere else and
+  // this file is precisely about what it would put on the wire. fetch is stubbed, so nothing
+  // leaves the process.
+  const config = {
+    getOrThrow: (key: string) => (key === "NODE_ENV" ? "production" : API_KEY),
+  };
   const service = new EmailService(
     config as unknown as ConstructorParameters<typeof EmailService>[0],
     logger as unknown as ConstructorParameters<typeof EmailService>[1],
@@ -120,6 +125,37 @@ describe("EmailService — the Resend transport (ADR-069)", () => {
       // The discriminating half: something WAS logged, so the assertion above is not passing
       // simply because nothing is ever recorded.
       expect(serialised).toContain("a@b.invalid");
+    },
+  );
+
+  it(
+    "refuses to touch the network outside production, and says so — a silent no-op would write " +
+      "SENT into an audit record for a message nobody was handed",
+    async () => {
+      let called = false;
+      vi.stubGlobal("fetch", (async () => {
+        called = true;
+        return jsonResponse(200, { id: "msg_1" });
+      }) as unknown as typeof fetch);
+      const logger = {
+        setContext: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      };
+      const service = new EmailService(
+        {
+          getOrThrow: (key: string) => (key === "NODE_ENV" ? "test" : API_KEY),
+        } as unknown as ConstructorParameters<typeof EmailService>[0],
+        logger as unknown as ConstructorParameters<typeof EmailService>[1],
+      );
+
+      await expect(
+        service.send({ to: "a@b.invalid", subject: "s", text: "t", idempotencyKey: "k" }),
+      ).rejects.toThrow(/Refusing to send outside production/);
+      // The discriminating half: nothing reached the wire. An implementation that logged a warning
+      // and sent anyway would satisfy nothing above and fail here.
+      expect(called).toBe(false);
     },
   );
 });

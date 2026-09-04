@@ -62,6 +62,7 @@ export class EmailSendError extends Error {
 @Injectable()
 export class EmailService {
   private readonly apiKey: string;
+  private readonly nodeEnv: string;
 
   constructor(
     config: ConfigService,
@@ -70,6 +71,7 @@ export class EmailService {
     // getOrThrow, not get: env.validation has already refused to boot without a well-shaped key,
     // so a miss here would mean the config module and the schema disagree — which should be loud.
     this.apiKey = config.getOrThrow<string>("RESEND_API_KEY");
+    this.nodeEnv = config.getOrThrow<string>("NODE_ENV");
     this.logger.setContext(EmailService.name);
   }
 
@@ -83,6 +85,28 @@ export class EmailService {
    * consume them — see ADR-069, which lists them and says what each would mean.
    */
   async send(input: SendEmailInput): Promise<SendEmailResult> {
+    // PRODUCTION ONLY — and this is not a bypass flag. It is the same gate ADR-038 put on the
+    // Stripe boot probe, on NODE_ENV rather than on a dedicated switch, for the same stated
+    // reason: a variable that already exists, is already load-bearing, and cannot be flipped by
+    // accident beats a new one whose only purpose is to be turned off.
+    //
+    // Without it the e2e suite — which boots the real AppModule and therefore the real Outbox
+    // poller — would make live HTTPS calls to Resend with a placeholder key on every CI run: a
+    // network dependency inside the test gate, and outbound traffic carrying a fake credential.
+    //
+    // It REFUSES rather than quietly succeeding. A silent no-op would write SENT into an audit
+    // record for a message nobody was ever handed, and a delivery record that lies is worse than
+    // no delivery record at all. This refusal lands in `EmailDelivery.lastError`, visible and true.
+    //
+    // The consequence, stated rather than left to be discovered: the wire itself is exercised in
+    // production and nowhere else. That is exactly what the single live verification is for.
+    if (this.nodeEnv !== "production") {
+      throw new EmailSendError(
+        `Refusing to send outside production (NODE_ENV=${this.nodeEnv}). ` +
+          `The message was recorded but never handed to Resend.`,
+      );
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
