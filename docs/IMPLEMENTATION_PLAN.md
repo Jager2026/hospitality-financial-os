@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.26.0
+version: 2.27.0
 status: Active
 classification: Critical
 priority: Highest
@@ -449,18 +449,18 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
 
   **What would be worth ~20 lines, if we want a mechanism here at all:** an inventory test that pins the *set* of optional/defaulted variables, failing when that set changes rather than judging whether any member is safe. No semantics, no allowlist, and it puts a human decision at the moment optionality is declared. Its honest limit is that it catches the declaration side only — not the case that actually bit us three times, where the variable was already optional and a dependency arrived later. That case may simply not be mechanisable, which is why the rule went into `CLAUDE.md` as a question to ask when *adding a dependency*, rather than as a check.
 
-- **The dependency-audit step runs before Typecheck, Test and Build, so an external outage hides our own checks. Options recorded, no decision taken.**
+- **The dependency-audit step now runs LAST (Founder decision, option A, 2026-09-04). Option B — a separate parallel job — is DEFERRED with an explicit trigger: when the merge queue is not blocked.**
 
-  Established on 2026-09-04, by measurement rather than inference: `pnpm audit` posts to `registry.npmjs.org/-/npm/v1/security/audits` and gets **`ERR_SOCKET_TIMEOUT` after 252 seconds**, while a plain registry GET answers in 0.9s and the neighbouring `advisories/bulk` endpoint answers 200 in 10.8s. **The registry is up; the one endpoint `pnpm audit` uses is not.** Raising our 120s cap would change nothing — pnpm's own socket timeout fires around 250s regardless.
+  Established by measurement rather than inference: `pnpm audit` posts to `registry.npmjs.org/-/npm/v1/security/audits` and gets **`ERR_SOCKET_TIMEOUT` after 252 seconds**, while a plain registry GET answers in 0.9s and the neighbouring `advisories/bulk` endpoint answers 200 in 10.8s. **The registry is up; the one endpoint `pnpm audit` uses is not.** Raising our 120s cap would change nothing — pnpm's own socket timeout fires around 250s regardless.
 
-  The gate fails closed, which is correct (`a gate that cannot run its check must not report success`). The problem is only its **position**: because every step is in one job, a failure at step 4 leaves Typecheck, Test and Build reported as `skipped`, so a green local run is the only evidence anyone has.
+  **What A fixes and what it does not, stated plainly because the distinction is the whole point: it fixes VISIBILITY, not passability.** A dead endpoint still fails the step and still blocks the merge — the gate fails closed on purpose, since an audit that could not run is not an audit that found nothing. What changes is that the other seven checks have already reported by then, so *"is our code green?"* stops depending on a third party being up. **Neither A nor B unblocks a merge while the endpoint is down.** Visibility was the question asked; passability was never on offer.
 
-  - **A — move the audit step last.** One line. An external outage then hides nothing: our own checks have already run and reported. The job still fails, so strictness is unchanged. The mirror cost is that a broken build hides the audit result — but a broken build is ours to fix and must be fixed anyway, whereas a registry outage is not ours at all. Cheapest, and a large improvement.
-  - **B — a separate parallel job.** Neither result can hide the other; both report independently and both become required checks. Costs a second checkout plus install (~1 min per run) and a branch-protection change. Strictest signal.
+  **Why B was deferred, and it is a reason of timing rather than merit:** B requires a branch-protection change (a second required check), and **branch-protection rules must not be edited while the queue is actively blocked** — that is the moment when loosening them is most tempting and least examinable. Trigger: revisit when the queue is not blocked.
+
+  Still on the table, recorded so they are decisions rather than rediscoveries:
+  - **B — a separate parallel job.** Neither result can hide the other; both report independently. Costs a second checkout plus install (~1 min per run) and the branch-protection change above. Strictest signal. **Deferred, not rejected.**
   - **C — retry with backoff inside `check-audit.js`.** Addresses the transient directly and changes no ordering. Risks turning a sustained outage into a very slow red build, and pnpm's own 250s socket timeout bounds what a retry can buy.
   - **D — report "could not check" as non-blocking.** Named only to record that it is refused: the gate's own comment already says an audit that did not run is not an audit that found nothing.
-
-  **If asked for one: B, falling back to A.** They are not exclusive — A alone removes the hiding, and B additionally makes the two signals independent.
 
 - **Accepting an invitation records no `AgreementAcceptance`. Founder decision (ADR-070): fix it, and the trigger is explicit — BEFORE the first venue onboards staff.**
 
