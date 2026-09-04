@@ -61,7 +61,9 @@ Without it the e2e suite, which boots the real `AppModule` and therefore the rea
 
 ---
 
-## Shown, not decided
+## Raised here, decided by the Founder, fixed elsewhere
+
+Both of the following were surfaced by this change rather than caused by it. Both were put to the Founder as findings, and both came back as decisions on the same day; the decisions are recorded here and carried out where they belong.
 
 ### The consent gap gets materially worse, and that is the point of raising it now
 
@@ -74,15 +76,17 @@ Without it the e2e suite, which boots the real `AppModule` and therefore the rea
 - **The asymmetry grows with adoption:** owners who self-register have recorded consent; the staff whose personal data and earnings we process do not. That difference widens with every venue onboarded.
 - **Consent cannot be backfilled.** A record written later says someone agreed at a moment when they were not asked. Every day this runs adds accounts that can never be made correct retroactively.
 
-**Not fixed here — a different axis, as instructed.** But the honest reading is that it should be fixed *before* the first real venue onboards staff, not after, because the cost is strictly increasing and the repair is not available later. The invitation screen does not exist either, which is the natural place for the agreement checkbox to live.
+**Founder decision: fix it, and not in this change — the trigger is an event rather than a sprint.** It must be closed **before the first venue onboards staff**, and the reason the deadline is phrased that way is that the cost is strictly increasing while the repair is not available later: nothing is lost by fixing it while zero staff accounts exist, and everything created before the fix is permanently uncorrectable. Recorded in `IMPLEMENTATION_PLAN.md` with that trigger.
+
+Its own axis, deliberately: this change is onboarding delivery, that one is consent capture, and a legal record should not land as a side effect of a mail feature. The natural home is the invitation accept screen, which does not exist yet — doing it earlier would mean recording a consent nobody was shown.
 
 ### The invitation rate limit now protects something different
 
-`POST /memberships` is throttled at 20/min. That comment's own condition — *"revisit this number once a real delivery provider exists and email-spam becomes the actual risk"* — **has now been met.**
+Sprint 11's own comment set the condition — *"revisit this number once a real delivery provider exists and email-spam becomes the actual risk"* (ADR-028) — and ADR-069 met it.
 
-20/min is 1,200 messages an hour to arbitrary recipients from a verified domain. The cost of abuse is no longer rows in a table we own; it is **domain reputation**, which every future message shares and which is slow to repair.
+**Founder decision: 20/min becomes 5/min.** What the limit protects has changed, and that is why the number moved rather than merely being re-examined: it used to bound rows in a table we own, and it now bounds real mail leaving a verified domain to any address a caller names, so the worst case is **domain reputation** — shared by every future message and slow to repair. A restaurant onboards staff in batches a few times a year, not continuously, so 5/min covers the real workflow with room to spare. 20/min was 1,200 messages an hour; 5/min is 300, and no venue has needed either.
 
-**The number is deliberately unchanged.** How many staff a venue may onboard per minute is a product decision about onboarding throughput; lowering it unilaterally would silently narrow a real workflow. The mechanism is right; only the value is open, and it is the Founder's.
+**Asserted by an integration test, not only declared on the decorator** — a rate limit nobody exercises is a comment.
 
 ---
 
@@ -92,4 +96,4 @@ Without it the e2e suite, which boots the real `AppModule` and therefore the rea
 
 **The accept screen still does not exist.** The link points at `/invitations/accept`, which the API serves and the frontend does not yet render. The email is correct; the page it leads to is the next piece of onboarding work.
 
-**Not in this change:** webhook consumption, Lithuanian copy, HTML mail, templates, the consent gap, the rate-limit value, and anything touching `TAX_PAYABLE` (ADR-029).
+**Not in this change:** webhook consumption, Lithuanian copy, HTML mail, templates, the consent fix itself, and anything touching `TAX_PAYABLE` (ADR-029).

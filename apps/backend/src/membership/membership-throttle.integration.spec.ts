@@ -84,7 +84,8 @@ describe("MembershipController — accept-invitation throttle (integration)", ()
 });
 
 // Sprint 11 (ADR-028): same precedent as the accept-invitation block above, for the invite-
-// creation route's own new 20/min override. This route IS behind JwtAuthGuard + PermissionsGuard
+// creation route's own override — 20/min then, 5/min since ADR-070, when the thing the limit
+// protects changed from rows in our own table to mail leaving a verified domain. This route IS behind JwtAuthGuard + PermissionsGuard
 // (unlike accept), so both guards run for real against a fake, injected AuthenticatedUser rather
 // than being faked out entirely — proves the real @RequirePermission("membership.invite") check
 // and the real @Throttle decorator compose correctly, not just that the decorator exists in
@@ -144,19 +145,21 @@ describe("MembershipController — invite throttle (integration)", () => {
     await app.close();
   });
 
-  it("allows exactly 20/min and rejects the 21st with 429", async () => {
+  // ADR-070, Founder decision: 5/min, down from 20. The number is asserted here rather than only
+  // declared on the decorator, because a rate limit nobody exercises is a comment.
+  it("allows exactly 5/min and rejects the 6th with 429", async () => {
     const roleId = randomUUID();
 
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 5; i++) {
       const res = await request(app.getHttpServer())
         .post("/memberships")
         .send({ email: `staff-${i}@example.com`, roleId });
       expect(res.status).not.toBe(429);
     }
 
-    const twentyFirst = await request(app.getHttpServer())
+    const sixth = await request(app.getHttpServer())
       .post("/memberships")
-      .send({ email: "staff-21@example.com", roleId });
-    expect(twentyFirst.status).toBe(429);
+      .send({ email: "staff-6@example.com", roleId });
+    expect(sixth.status).toBe(429);
   });
 });
