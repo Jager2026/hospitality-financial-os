@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import Redis from "ioredis";
@@ -159,7 +160,7 @@ describe("A disabled Membership (E2E, real HTTP, real database)", () => {
 
     const accept = await request(app.getHttpServer())
       .post("/api/v1/memberships/invitations/accept")
-      .send({ email: staffEmail, token: invite.body.data.token });
+      .send({ email: staffEmail, token: (await readInvitationEmail(prisma, staffEmail)).token });
     expect(accept.status, JSON.stringify(accept.body)).toBe(200);
     staffMembershipId = accept.body.data.id as string;
 

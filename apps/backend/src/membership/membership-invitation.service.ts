@@ -2,7 +2,10 @@ import { Injectable } from "@nestjs/common";
 import type { Membership, MembershipInvitation } from "@prisma/client";
 import { isPasswordBreached } from "../auth/hibp.util";
 import { hashPassword } from "../auth/password.util";
+import { ConfigService } from "@nestjs/config";
 import { AppException } from "../common/exceptions/app.exception";
+import { EmailOutboxService } from "../email/email-outbox.service";
+import { DEFAULT_EMAIL_LOCALE, invitationEmail } from "../email/email-copy";
 import { PrismaService } from "../prisma/prisma.service";
 import type { AcceptInvitationDto } from "./dto/accept-invitation.schema";
 import type { InviteMembershipDto } from "./dto/invite-membership.schema";
@@ -19,14 +22,15 @@ const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export interface InvitationCreated {
   id: string;
   email: string;
-  /** Exists exactly once, here — never persisted (ADR-020). The caller is responsible for
-   * relaying it (email, Slack, whatever) until a real delivery provider exists with its own ADR. */
-  token: string;
 }
 
 @Injectable()
 export class MembershipInvitationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly emailOutbox: EmailOutboxService,
+    private readonly config: ConfigService,
+  ) {}
 
   /** ADR-020: creates a MembershipInvitation, never a Membership directly — true even when
    * `email` already belongs to an existing User. `organizationId` is the caller's own org
@@ -65,20 +69,87 @@ export class MembershipInvitationService {
 
     const token = generateInvitationToken();
     const tokenHash = hashInvitationToken(token);
+    const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
 
-    const invitation = await this.prisma.membershipInvitation.create({
-      data: {
-        email: dto.email,
-        organizationId,
-        restaurantId: dto.restaurantId ?? null,
-        roleId: dto.roleId,
-        invitedBy: invitedByUserId,
-        tokenHash,
-        expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
-      },
+    const [inviter, place] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({
+        where: { id: invitedByUserId },
+        select: { displayName: true },
+      }),
+      this.placeName(organizationId, dto.restaurantId ?? null),
+    ]);
+
+    const { subject, text } = invitationEmail(DEFAULT_EMAIL_LOCALE, {
+      inviterName: inviter.displayName,
+      placeName: place,
+      roleName: role.name,
+      acceptUrl: this.acceptUrl(dto.email, token),
+      expiresInDays: INVITATION_TTL_MS / (24 * 60 * 60 * 1000),
     });
 
-    return { id: invitation.id, email: invitation.email, token };
+    // ONE TRANSACTION, and that is the whole point of routing this through the Outbox. An
+    // invitation that exists without a queued email is a person waiting for a message nobody will
+    // ever send; a queued email without an invitation is a link that cannot be accepted. Neither
+    // half can commit alone.
+    const invitation = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.membershipInvitation.create({
+        data: {
+          email: dto.email,
+          organizationId,
+          restaurantId: dto.restaurantId ?? null,
+          roleId: dto.roleId,
+          invitedBy: invitedByUserId,
+          tokenHash,
+          expiresAt,
+        },
+      });
+      await this.emailOutbox.enqueue(tx, { to: dto.email, subject, text });
+      return created;
+    });
+
+    // THE TOKEN IS NOT RETURNED, and its absence is asserted by a test.
+    //
+    // It used to be, because there was nowhere else for it to go (ADR-020). Now there is. Leaving
+    // it in both places would mean the email path is never the one anybody exercises: the console
+    // would keep working, the message could stop arriving, and nothing would say so. A path that
+    // is not the only path is a path that is not really tested.
+    return { id: invitation.id, email: invitation.email };
+  }
+
+  /**
+   * Where the invitee is being invited: the Restaurant when the invitation is scoped to one, the
+   * Organization when it is org-wide. **A name, not an id** — the recipient has no account and no
+   * way to look one up, and "you have been invited to 3fa85f64-…" is not an invitation.
+   */
+  private async placeName(organizationId: string, restaurantId: string | null): Promise<string> {
+    if (restaurantId) {
+      const restaurant = await this.prisma.restaurant.findUnique({
+        where: { id: restaurantId },
+        select: { name: true },
+      });
+      if (restaurant) return restaurant.name;
+    }
+    const org = await this.prisma.organization.findUniqueOrThrow({
+      where: { id: organizationId },
+      select: { name: true },
+    });
+    return org.name;
+  }
+
+  /**
+   * The link in the email.
+   *
+   * `FRONTEND_URL` is validated at boot and is refused in production when it points at a loopback
+   * address (ADR-045) — a rule written for Stripe's onboarding return_url, and now load-bearing for
+   * a second reason: a localhost link in an invitation is a link that works for nobody.
+   *
+   * The email is carried alongside the token because `accept` looks candidates up by email and
+   * hash-verifies the token against each (ADR-020), rather than keying a lookup on the secret.
+   */
+  private acceptUrl(email: string, token: string): string {
+    const base = this.config.getOrThrow<string>("FRONTEND_URL").replace(/\/+$/, "");
+    const params = new URLSearchParams({ email, token });
+    return `${base}/invitations/accept?${params.toString()}`;
   }
 
   /** ADR-020: looks up candidates by email (non-secret), hash-verifies the token against each —

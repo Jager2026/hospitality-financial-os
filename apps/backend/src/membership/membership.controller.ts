@@ -36,12 +36,19 @@ export class MembershipController {
     private readonly prisma: PrismaService,
   ) {}
 
-  // Sprint 11 (ADR-028): 20/min. No real email delivery exists yet (invite() just creates a
-  // MembershipInvitation row and hands the raw token back to the caller — the caller relays it),
-  // so this isn't yet an email-spam vector; it's a resource-exhaustion one — an authenticated,
-  // permissioned-but-possibly-compromised account could otherwise flood the table with rows. 20/
-  // min still comfortably covers onboarding a whole shift's worth of staff in one sitting. Revisit
-  // this number once a real delivery provider exists and email-spam becomes the actual risk.
+  // Sprint 11 (ADR-028): 20/min. THE CONDITION THIS COMMENT SET HAS NOW BEEN MET, and it is
+  // recorded here rather than quietly left behind: a real delivery provider exists (ADR-069), so
+  // this endpoint is no longer only a resource-exhaustion vector against our own table — it now
+  // sends real mail from a verified domain to any address the caller names.
+  //
+  // What that changes: 20/min is 1,200 messages an hour to arbitrary recipients, from
+  // plaintabs.com. The cost of abuse is no longer rows in a table we own; it is our domain
+  // reputation, which is shared by every future message and is slow to repair.
+  //
+  // THE NUMBER IS DELIBERATELY UNCHANGED HERE. How many staff a venue may onboard per minute is a
+  // product decision about onboarding throughput, not an engineering one, and lowering it
+  // unilaterally would silently narrow a real workflow. Flagged for the Founder in ADR-070; the
+  // mechanism is right, only the value is open.
   @Post("memberships")
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission("membership.invite")

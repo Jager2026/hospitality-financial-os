@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppException } from "../common/exceptions/app.exception";
+import { EmailOutboxService } from "../email/email-outbox.service";
 import { MembershipInvitationService } from "../membership/membership-invitation.service";
 import { MembershipService } from "../membership/membership.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -22,7 +23,27 @@ import { callerWithSeededRole } from "../../test/fixtures/authenticated-user";
 
 const prisma = new PrismaService();
 const roleService = new RoleService(prisma);
-const invitations = new MembershipInvitationService(prisma);
+// ADR-070: invite() now enqueues an email in the same transaction. This file is about ADR-044's
+// platform-only Role refusal, which happens BEFORE any of that is reached — the transport is
+// therefore never called, and a stub that would throw on contact is the honest shape.
+const noopEmailLogger = {
+  setContext: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+} as any;
+const invitations = new MembershipInvitationService(
+  prisma,
+  new EmailOutboxService(
+    prisma,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { send: async () => ({ providerMessageId: "unused" }) } as any,
+    noopEmailLogger,
+  ),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  { getOrThrow: () => "https://app.example" } as any,
+);
 const memberships = new MembershipService(prisma);
 
 let administrator: { id: string };
@@ -114,7 +135,12 @@ describe("the enforcing doors — a filtered list over an open endpoint would be
       organization.id,
       inviter.id,
     );
-    expect(ok.token).toBeTruthy();
+    // ADR-070: the token is no longer returned. The discriminating property this line carries is
+    // unchanged — the invite path works for an assignable Role, so the refusal above is about the
+    // Role rather than about the path being broken — it is just asserted on the row that was
+    // created instead of on a field that no longer exists.
+    expect(ok.id).toBeTruthy();
+    expect(await prisma.membershipInvitation.findUnique({ where: { id: ok.id } })).not.toBeNull();
   });
 
   it("door 3: PROMOTING an existing Membership to a platform-only Role is refused", async () => {

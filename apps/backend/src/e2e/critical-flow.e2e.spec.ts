@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import Stripe from "stripe";
@@ -189,7 +190,11 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
       .set("Authorization", `Bearer ${ownerAccessToken}`)
       .send({ email: managerEmail, restaurantId, roleId: managerRole.id });
     expect(inviteRes.status).toBe(201);
-    const invitationToken: string = inviteRes.body.data.token;
+    // ADR-070: the token is no longer in the API response. The test now reads it where the
+    // recipient does — out of the queued email — which also proves the message was enqueued and
+    // carries a working link, rather than asserting a field that costs nothing to be right.
+    expect(JSON.stringify(inviteRes.body)).not.toContain("token");
+    const invitationToken: string = (await readInvitationEmail(prisma, managerEmail)).token;
     expect(invitationToken).toBeTruthy();
 
     // 5. Manager accepts the invitation (creates User + password + Membership)
