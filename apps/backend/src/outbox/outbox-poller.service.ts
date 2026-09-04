@@ -3,6 +3,7 @@ import type { OutboxEvent } from "@prisma/client";
 import { Interval } from "@nestjs/schedule";
 import { PinoLogger } from "nestjs-pino";
 import { AlertService } from "../common/alerting/alert.service";
+import { EMAIL_OUTBOX_EVENT_TYPE, EmailOutboxService } from "../email/email-outbox.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 
@@ -26,6 +27,7 @@ export class OutboxPollerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletProjection: WalletProjectionService,
+    private readonly emailOutbox: EmailOutboxService,
     private readonly logger: PinoLogger,
     private readonly alertService: AlertService,
   ) {
@@ -72,6 +74,23 @@ export class OutboxPollerService {
   // half-applied state visible to a reader in between.
   private async dispatch(event: OutboxEvent): Promise<void> {
     try {
+      // ADR-069 — the SECOND consumer, and the first time this poller has had to ask what an event
+      // is before handling it. The branch is deliberately the only change to this method: every
+      // event that is not an email request takes the identical path it took before, byte for byte,
+      // and a test asserts that a journal-entry event still reaches WalletProjectionService and
+      // that a malformed payload still throws.
+      //
+      // NOT a handler registry yet. The comment above says a second consumer is what earns that
+      // abstraction; a registry for two entries is a lookup table with ceremony. The third one is
+      // when this becomes a registry — and by then the claim step should be fixed too, because
+      // that is the same threshold.
+      if (event.eventType === EMAIL_OUTBOX_EVENT_TYPE) {
+        // Marking published happens inside the handler, not here: the send must not run inside a
+        // database transaction, so the handler owns both its own transaction and its own ordering.
+        await this.emailOutbox.handle(event);
+        return;
+      }
+
       // EVENT_CATALOG.md: the only payload shape any real writer produces. Validated explicitly,
       // not just cast — Prisma silently treats `where: { journalEntryId: undefined }` as "omit
       // this filter" rather than erroring, so a malformed payload (missing journalEntryId) would

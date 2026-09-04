@@ -9,7 +9,19 @@ import { StripeService } from "../stripe/stripe.service";
 import { IndividualTipAllocationStrategy } from "../tip/individual-tip-allocation.strategy";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 import { WebhooksService } from "../webhooks/webhooks.service";
+import { EMAIL_OUTBOX_EVENT_TYPE, type EmailOutboxService } from "../email/email-outbox.service";
 import { OutboxPollerService } from "./outbox-poller.service";
+
+/** ADR-069. The poller gained a second dispatch target; this file is about the FIRST one. A handler
+ * that throws on contact is the honest stub here — if the money path ever routes an event into the
+ * email branch, these tests must fail loudly rather than pass with nothing having happened. */
+function emailOutboxThatMustNotBeCalled(): EmailOutboxService {
+  return {
+    handle: async () => {
+      throw new Error("the email handler must not be reached by a money-path event");
+    },
+  } as unknown as EmailOutboxService;
+}
 
 // Real database, real WalletProjectionService — ADR-024: this is the first test this file has
 // ever had, because before Sprint 7 there was no real handler to dispatch to (EVENT_CATALOG.md).
@@ -106,7 +118,16 @@ describe("OutboxPollerService (real database)", () => {
       new IndividualTipAllocationStrategy(),
     );
     walletProjection = new WalletProjectionService(prisma);
-    poller = new OutboxPollerService(prisma, walletProjection, fakeLogger, fakeAlertServiceNoop);
+    poller = new OutboxPollerService(
+      prisma,
+      walletProjection,
+      // ADR-069: the second consumer. Throwing here is deliberate — every test in this file is
+      // about the MONEY path, so an email handler being reached at all would be a defect, and a
+      // stub that silently succeeded would hide it.
+      emailOutboxThatMustNotBeCalled(),
+      fakeLogger,
+      fakeAlertServiceNoop,
+    );
 
     // This local dev/test database has never had a real consumer before Sprint 7 — every
     // webhook-driven test run all session left its OutboxEvent rows unpublished, since nothing
@@ -474,6 +495,7 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
       const poller = new OutboxPollerService(
         prisma,
         walletProjection,
+        emailOutboxThatMustNotBeCalled(),
         fakeLogger,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { sendAlert } as any,
@@ -503,6 +525,7 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
       const poller = new OutboxPollerService(
         prisma,
         walletProjection,
+        emailOutboxThatMustNotBeCalled(),
         fakeLogger,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { sendAlert } as any,
@@ -515,6 +538,135 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
 
       const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
       expect(after.attempts).toBeGreaterThanOrEqual(5);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+});
+
+// ADR-069 — the poller now routes by eventType, and this block is the proof that the routing is
+// additive: the money path is unchanged, and only an email event reaches the email handler.
+//
+// Own PrismaService and own poller per test, for the same reason the alerting block above has
+// them: the shared `poller` at the top is deliberately built with a handler that throws on contact.
+describe("OutboxPollerService routing by eventType (ADR-069)", () => {
+  const prisma = new PrismaService();
+
+  beforeAll(async () => {
+    await prisma.$connect();
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  const fakeLoggerLocal = {
+    setContext: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+
+  /** Reaches into the private dispatch path the only way a test honestly can: through poll(), by
+   * seeding exactly one unpublished row and giving the poller handlers that record contact. */
+  function pollerRecording() {
+    // walletArgs, not just a count: poll() dispatches EVERY unpublished row in this shared dev
+    // database, not only the row a test seeded — this file's own pollUntilSettled comments already
+    // record that. A global counter therefore cannot say anything about one event, and an
+    // assertion that it is zero is an assertion about whatever else the suite happened to leave
+    // behind. What the arguments CAN prove is that nothing malformed ever reached the projection.
+    const seen = { wallet: 0, email: 0, walletArgs: [] as unknown[] };
+    const walletStub = {
+      handleJournalEntryEvent: async (journalEntryId: unknown) => {
+        seen.wallet += 1;
+        seen.walletArgs.push(journalEntryId);
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const emailStub = {
+      handle: async (event: { id: string }) => {
+        seen.email += 1;
+        await prisma.outboxEvent.update({
+          where: { id: event.id },
+          data: { publishedAt: new Date() },
+        });
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const poller = new OutboxPollerService(prisma, walletStub, emailStub, fakeLoggerLocal, {
+      sendAlert: async () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    return { poller, seen };
+  }
+
+  it(
+    "an email request reaches the EMAIL handler and never the wallet projection — and a " +
+      "journal-entry event reaches the WALLET projection and never the email handler: two rows, " +
+      "two destinations, neither implementation passing if the branch were dropped",
+    async () => {
+      const { poller, seen } = pollerRecording();
+
+      const emailEvent = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "EmailDelivery",
+          aggregateId: randomUUID(),
+          eventType: EMAIL_OUTBOX_EVENT_TYPE,
+          payload: { to: "a@b.invalid", subject: "s", text: "t" },
+        },
+      });
+      const moneyEvent = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "JournalEntry",
+          aggregateId: randomUUID(),
+          eventType: "journal_entry.payment_captured",
+          payload: { journalEntryId: randomUUID() },
+        },
+      });
+
+      await poller.poll();
+
+      // The email row went to the email handler.
+      expect(seen.email).toBeGreaterThanOrEqual(1);
+      expect(
+        (await prisma.outboxEvent.findUniqueOrThrow({ where: { id: emailEvent.id } })).publishedAt,
+      ).not.toBeNull();
+
+      // The money row went to the wallet projection and was published by the poller's own
+      // transaction — the path that existed before this change, byte for byte.
+      expect(seen.wallet).toBeGreaterThanOrEqual(1);
+      expect(
+        (await prisma.outboxEvent.findUniqueOrThrow({ where: { id: moneyEvent.id } })).publishedAt,
+      ).not.toBeNull();
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a malformed money event still fails fast — the guard that stops WalletProjectionService " +
+      "recomputing every Membership in the database is untouched by the new branch",
+    async () => {
+      const { poller, seen } = pollerRecording();
+      const malformed = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "JournalEntry",
+          aggregateId: randomUUID(),
+          eventType: "journal_entry.payment_captured",
+          payload: {},
+        },
+      });
+
+      await poller.poll();
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: malformed.id } });
+      expect(after.publishedAt).toBeNull();
+      expect(after.attempts).toBeGreaterThanOrEqual(1);
+      // The property the guard actually protects, stated in a way other rows cannot disturb:
+      // WalletProjectionService is never handed anything but a real journal entry id. Without the
+      // guard the poller passes this event's missing journalEntryId straight through as
+      // `undefined`, and Prisma reads that as "omit this filter" — recomputing EVERY Membership's
+      // balance in the database. That is the failure this asserts against.
+      expect(seen.walletArgs.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     },
     BACKLOG_SAFE_TIMEOUT_MS,
   );

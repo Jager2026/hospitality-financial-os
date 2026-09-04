@@ -41,6 +41,28 @@ const envSchema = z
     // clears any honest minimum. That case is closed by StripeService's own boot-time liveness
     // probe (ADR-038 Decision 2), not here.
     //
+    // ADR-069 — Resend, the email provider. Same shape-check-at-boot discipline as the Stripe keys
+    // below (ADR-038): a malformed key must stop the process at startup, where a human is watching,
+    // rather than at the first send, where nobody is.
+    //
+    // THE UNDERSCORE IS THE POINT, and copying Stripe's regex would have been a production outage.
+    // A real Resend key has the shape `re_<publicId>_<secret>` — `re_`, then an id, then
+    // an underscore, then the secret. Stripe's own pattern here is `[A-Za-z0-9]+` after the prefix,
+    // and reusing it unchanged would have REJECTED every valid Resend key and refused to boot
+    // production. Established by reading Resend's own documented key format, not by pattern-matching
+    // on the neighbouring rule.
+    //
+    // Required, with no `.optional()` and no `.default()`: this is the gate the whole email path
+    // hangs from, and ADR-045's rule is that a gate other behaviour is conditional on cannot itself
+    // be conditional. A default would make its absence unobservable.
+    RESEND_API_KEY: z
+      .string()
+      .min(32, "RESEND_API_KEY is too short to be a real Resend key")
+      .regex(
+        /^re_[A-Za-z0-9_]+$/,
+        "RESEND_API_KEY is malformed — expected re_ followed by alphanumerics and underscores. " +
+          "Angle brackets, quotes, whitespace or a truncated prefix all fail here.",
+      ),
     // The 32-character floor is a real historical floor, not a guess: Stripe's older key format was
     // `sk_test_` + 24 characters. Current keys are far longer (107), but pinning to today's length
     // would break the day Stripe issues a different one — this catches gross truncation and empty-ish
