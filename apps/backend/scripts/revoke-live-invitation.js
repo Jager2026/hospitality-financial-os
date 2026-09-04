@@ -2,6 +2,16 @@
 /**
  * Revokes the invitation created by a LIVE production verification, and nothing else.
  *
+ * ═══ NOTHING TO REVOKE YET (ADR-071) ═══
+ *
+ * Founder decision, 2026-09-04: the live check waits for the first real venue, so no verification
+ * invitation exists and this script has no work to do. It is kept because it is exactly what that
+ * first real invitation will need. Its companion is `live-invitation-check.js`, which carries the
+ * same marker and must not be run before then either.
+ *
+ * Run against production today and it refuses on its own terms — zero matches for any address is
+ * one of the five conditions it declines to guess past.
+ *
  * WHY THIS EXISTS, and it is not tidiness. A live check of the invitation email (ADR-070) creates
  * a real, working credential: a token that grants membership of a real Organization, valid for
  * seven days, sitting in a mailbox. Leaving it there after the check is the actual risk — bigger

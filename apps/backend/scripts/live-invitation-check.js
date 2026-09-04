@@ -3,6 +3,22 @@
  * The live verification of ADR-070: send ONE real invitation through the production API and report
  * exactly what to look for in the mailbox.
  *
+ * ═══ DO NOT RUN THIS UNTIL A REAL RESTAURANT EXISTS IN PRODUCTION (ADR-071) ═══
+ *
+ * Founder decision, 2026-09-04: the live check WAITS for the first real venue. Nothing is created
+ * in production for the purpose of testing this. When a real restaurant onboards, the first
+ * invitation it sends IS the verification, and this script is how it gets reported.
+ *
+ * Running it today means creating an Organization, a Restaurant and a Stripe connected account
+ * that exist only because a test needed them — the accumulation of test entities in production
+ * that #110 had to clean out, and which has no staging environment to happen in instead. That is
+ * the decision ADR-071 declined, and from inside a terminal it looks like a small operational step
+ * rather than a decision, which is exactly why the warning is here.
+ *
+ * **This comment is a note, not a mechanism.** Nothing enforces it. The real enforcement is one
+ * step below: the script refuses to proceed without a Restaurant unless `--create-restaurant` is
+ * passed, so production data cannot appear as a side effect of running this.
+ *
  * WHY A SCRIPT AND NOT A CURL ONE-LINER. The check needs four calls in order, each depending on the
  * last, and the interesting failures are in between — no restaurant, no assignable Role, a login
  * that works but a permission that does not. A one-liner reports the last status code; this reports

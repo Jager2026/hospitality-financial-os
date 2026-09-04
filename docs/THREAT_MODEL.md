@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.17.0
+version: 1.18.0
 status: Active
 classification: Critical
 owner: Founder
@@ -355,6 +355,39 @@ And nothing ran the seed. `preDeployCommand` ran migrations only, so **ADR-044's
 ---
 
 # Accepted Risk (Not Closed — Deliberately Left Open)
+
+## A closed test-mode connected account, `acct_1UBvb9B7fP2omx83`, is permanent
+
+**What it is.** A Stripe **test-mode** connected account created on 2026-09-04 by a deliberate probe, in the exact shape `StripeService.createConnectAccount` produces — `dashboard: "full"`, `losses_collector: "stripe"`, `fees_collector: "stripe"`. It was created to answer one question before it could cost anything: *can an account of our shape be removed after a live verification creates one?* It has been closed. It cannot be removed, and it will remain visible in the Stripe test dashboard indefinitely.
+
+**Why it cannot be removed, which is not the reason anyone expected.** Two routes exist and both were executed against it:
+
+```
+CREATE     → 200  acct_1UBvb9B7fP2omx83
+V2 CLOSE   → 200  closed
+V1 DELETE  → 403  account_invalid
+STILL THERE? → 200  yes
+```
+
+`POST /v2/core/accounts/:id/close` **succeeded**, and `DELETE /v1/accounts/:id` does not apply to a v2-created account at all. The account survives because of what `close` *means*, not because Stripe refused anything. Stripe's own words for the two operations:
+
+> **On closing** — *"Removes access to the Account and its associated resources. Closed Accounts can no longer be operated on, but limited information can still be retrieved through the API in order to be able to track their history."* (`/api/v2/core/accounts/close`)
+
+> **On deleting** — *"Test-mode accounts can be deleted at any time. Live-mode accounts that have access to the standard dashboard and Stripe is responsible for negative account balances cannot be deleted, which includes Standard accounts."* (`/api/accounts/delete`)
+
+**The documentation predicted a refusal that did not happen, and that is the part worth keeping.** The v2 `close` reference lists the error `stripe_loss_liable_cannot_be_deleted` — *"Account with Stripe-owned loss liability and dashboard cannot be deleted"* — which describes our configuration exactly. Reading the documentation alone would have produced the confident, wrong answer that closing is impossible for our accounts. It is possible; it simply does not remove the object. **A prediction from a vendor's error table is not a fact about the vendor's behaviour**, and the only thing that separated the two here was executing it.
+
+**The residue is real and is named rather than tidied away:** the probe that established this left exactly the class of artefact it was investigating. That cost bought the answer *before* a live verification created one in ignorance, which is the trade being accepted. It is a single test-mode account with no balance, no capabilities in use, and no path to production.
+
+**Recorded in:** ADR-071.
+
+## The precedent this sets against ADR-059, named rather than left to interpretation
+
+ADR-059 says **the platform does not disconnect connected accounts** — not when a venue closes, not for a seasonal pause, not when a restaurant leaves. The probe above **closed** an account, and closing is stronger than disconnecting.
+
+Formally there is no conflict: ADR-059 governs *venues* — real businesses whose data we would lose access to and who may return — and the probe account is an artefact of our own smoke test, belonging to nobody. **But the interpretation reads, and that is the risk being recorded.** A future session finding a closed account and a passing precedent could reasonably conclude the rule is softer than it is.
+
+It is not. **The rule is unchanged: no connected account belonging to a venue is ever closed or disconnected, for any reason.** What happened here is outside its subject matter, not an exception inside it.
 
 ## Redis flush silently un-revokes outstanding refresh tokens and token families
 **Risk:** If Redis is flushed or lost (crash without persistence, manual `FLUSHALL`, infrastructure failure), every revoked `jti` and revoked `familyId` disappears. A previously-stolen-and-revoked refresh token would once again verify successfully by signature until its own natural expiry (up to 7 days, `JWT_REFRESH_TTL_SECONDS`).
