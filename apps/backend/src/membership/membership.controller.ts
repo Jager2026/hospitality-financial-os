@@ -36,23 +36,22 @@ export class MembershipController {
     private readonly prisma: PrismaService,
   ) {}
 
-  // Sprint 11 (ADR-028): 20/min. THE CONDITION THIS COMMENT SET HAS NOW BEEN MET, and it is
-  // recorded here rather than quietly left behind: a real delivery provider exists (ADR-069), so
-  // this endpoint is no longer only a resource-exhaustion vector against our own table — it now
-  // sends real mail from a verified domain to any address the caller names.
+  // Sprint 15 (ADR-070), Founder decision: 20/min → 5/min. The condition Sprint 11's own comment
+  // set here (ADR-028) — "revisit once a real delivery provider exists and email-spam becomes the
+  // actual risk" — was met by ADR-069, and this is the revision it asked for.
   //
-  // What that changes: 20/min is 1,200 messages an hour to arbitrary recipients, from
-  // plaintabs.com. The cost of abuse is no longer rows in a table we own; it is our domain
-  // reputation, which is shared by every future message and is slow to repair.
+  // WHAT THIS LIMIT NOW PROTECTS IS DIFFERENT, and that is the whole reason the number moved. It
+  // used to bound resource exhaustion against a table we own: the worst case was rows. It now
+  // bounds real mail leaving a verified domain to any address the caller names, so the worst case
+  // is our domain reputation — which every future message shares and which is slow to repair.
   //
-  // THE NUMBER IS DELIBERATELY UNCHANGED HERE. How many staff a venue may onboard per minute is a
-  // product decision about onboarding throughput, not an engineering one, and lowering it
-  // unilaterally would silently narrow a real workflow. Flagged for the Founder in ADR-070; the
-  // mechanism is right, only the value is open.
+  // 5/min covers the real workflow with room to spare: a restaurant onboards staff in batches, a
+  // few times a year, not continuously. 20/min was 1,200 messages an hour; 5/min is 300, and no
+  // venue has ever needed either.
   @Post("memberships")
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission("membership.invite")
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @AuditEntity("MembershipInvitation")
   async invite(
     @Body(new ZodValidationPipe(inviteMembershipSchema)) dto: InviteMembershipDto,
