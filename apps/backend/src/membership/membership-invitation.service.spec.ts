@@ -1,14 +1,46 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmailOutboxService } from "../email/email-outbox.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import { MembershipInvitationService } from "./membership-invitation.service";
 
-// Real database — same precedent as restaurant.service.spec.ts. No external dependency to fake
-// here (no Stripe-equivalent), so no Test.createTestingModule() is needed; the service is
-// constructed directly.
+// Real database — same precedent as restaurant.service.spec.ts. The service is constructed
+// directly rather than through Test.createTestingModule().
+//
+// ADR-070: invite() now enqueues an email in the same transaction, so the real EmailOutboxService
+// is wired in with a transport that is never reached — the poller is not running in this file, so
+// nothing dispatches. What the tests read is the QUEUED message, which is how the recipient gets
+// the token now that the API response no longer carries it.
 describe("MembershipInvitationService (real database)", () => {
   const prisma = new PrismaService();
-  const service = new MembershipInvitationService(prisma);
+  const noopLogger = {
+    setContext: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+  const emailOutbox = new EmailOutboxService(
+    prisma,
+    // Never called: nothing in this file dispatches the Outbox.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { send: async () => ({ providerMessageId: "unused" }) } as any,
+    noopLogger,
+  );
+  const service = new MembershipInvitationService(prisma, emailOutbox, {
+    getOrThrow: () => "https://app.example",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+
+  /** Invite, then read the token out of the queued email — the only place it exists now. Every
+   * call is therefore also an assertion that the email was enqueued and carries a usable link. */
+  async function inviteAndReadToken(...args: Parameters<typeof service.invite>): Promise<string> {
+    await service.invite(...args);
+    const { token } = await readInvitationEmail(prisma, args[0].email);
+    return token;
+  }
+
   let roleId: string;
   let organizationId: string;
   let inviterUserId: string;
@@ -53,21 +85,35 @@ describe("MembershipInvitationService (real database)", () => {
     await prisma.$disconnect();
   });
 
-  it("invite() creates a pending invitation and returns the raw token exactly once", async () => {
-    const email = `invitee-${randomUUID()}@example.com`;
-    const result = await service.invite({ email, roleId }, organizationId, inviterUserId);
+  it(
+    "invite() creates a pending invitation and does NOT return the token — it goes to the email " +
+      "and nowhere else, because a token in two places means the email path is never exercised",
+    async () => {
+      const email = `invitee-${randomUUID()}@example.com`;
+      const result = await service.invite({ email, roleId }, organizationId, inviterUserId);
 
-    expect(result.email).toBe(email);
-    expect(result.token).toBeTruthy();
+      expect(result.email).toBe(email);
+      // THE FALSIFICATION the task asked for: an implementation that kept returning the token
+      // fails here, and it is asserted over the whole serialised response rather than one field so
+      // that renaming the field does not quietly restore the leak.
+      expect(JSON.stringify(result)).not.toContain("token");
 
-    const stored = await prisma.membershipInvitation.findUnique({ where: { id: result.id } });
-    expect(stored?.tokenHash).not.toBe(result.token); // hashed, not the raw value
-    expect(stored?.acceptedAt).toBeNull();
-  });
+      const stored = await prisma.membershipInvitation.findUnique({ where: { id: result.id } });
+      expect(stored?.acceptedAt).toBeNull();
+
+      // The token exists exactly once, in the queued message, and it is the hash of THAT token the
+      // invitation stores — proven by using it to accept below in the other tests.
+      const { token, acceptUrl, subject } = await readInvitationEmail(prisma, email);
+      expect(token).toBeTruthy();
+      expect(stored?.tokenHash).not.toBe(token); // hashed, not the raw value
+      expect(acceptUrl).toContain("https://app.example/invitations/accept");
+      expect(subject).toContain("invited you to join");
+    },
+  );
 
   it("accept() with the correct token creates User + Membership atomically for a brand-new email", async () => {
     const email = `new-person-${randomUUID()}@example.com`;
-    const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
 
     const membership = await service.accept({
       email,
@@ -109,7 +155,7 @@ describe("MembershipInvitationService (real database)", () => {
       },
     });
 
-    const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
     const membership = await service.accept({ email, token }); // no password — not needed
 
     expect(membership.userId).toBe(existingUser.id);
@@ -124,7 +170,7 @@ describe("MembershipInvitationService (real database)", () => {
 
   it("accept() cannot be replayed a second time with the same token", async () => {
     const email = `replay-${randomUUID()}@example.com`;
-    const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
 
     await service.accept({
       email,
@@ -162,7 +208,7 @@ describe("MembershipInvitationService (real database)", () => {
     });
 
     const email = `scoped-${randomUUID()}@example.com`;
-    const { token } = await service.invite(
+    const token = await inviteAndReadToken(
       { email, roleId, restaurantId: restaurant.id },
       organizationId,
       inviterUserId,
@@ -179,7 +225,7 @@ describe("MembershipInvitationService (real database)", () => {
 
   it("rejects accepting an invitation with a known-breached password, without creating a user", async () => {
     const email = `breached-${randomUUID()}@example.com`;
-    const { token } = await service.invite({ email, roleId }, organizationId, inviterUserId);
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
     // Overrides the beforeEach's default "not breached" stub. Same real HIBP fixture as
     // hibp.util.spec.ts/auth.service.spec.ts: "password" -> prefix 5BAA6, suffix
     // 1E4C9B93F3F0682250B6CF8331B7EE68FD8.

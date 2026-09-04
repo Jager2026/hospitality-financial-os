@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import Redis from "ioredis";
@@ -183,7 +184,10 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
 
     const accept = await request(app.getHttpServer())
       .post("/api/v1/memberships/invitations/accept")
-      .send({ email: dualRole.email, token: invite.body.data.token });
+      .send({
+        email: dualRole.email,
+        token: (await readInvitationEmail(prisma, dualRole.email)).token,
+      });
     // Accept returns 200, not 201 — the Membership is created but the endpoint answers OK rather
     // than Created. Corrected from the real response rather than assumed.
     expect(accept.status, JSON.stringify(accept.body)).toBe(200);

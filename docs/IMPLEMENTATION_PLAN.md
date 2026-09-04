@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.25.0
+version: 2.26.0
 status: Active
 classification: Critical
 priority: Highest
@@ -448,6 +448,31 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Evaluated on the Founder's instruction, and NOT built: a test cross-referencing the optional variables against the places their values are used.** It does not survive contact with what it would have to check. Enumerating the optional keys is easy — the zod schema is introspectable. Finding the consumers is easy — they are `config.get`/`getOrThrow`/`process.env`. But the property that matters is neither: it is *"does this consumer degrade silently when the value is absent or defaulted?"*, which is semantic and invisible to any static check. `FRONTEND_URL` was consumed through `getOrThrow`, which reads as safe and was not, precisely because the default guaranteed a value. A test that flagged "optional variable, used somewhere" would flag every one of them, so it would need an allowlist — and **an allowlist that someone edits to make the build green is a rubber stamp**, the same decay that let `test/global-setup.ts`'s permission matrix go stale for a whole sprint. It would convert a design question into a chore and reliably lose.
 
   **What would be worth ~20 lines, if we want a mechanism here at all:** an inventory test that pins the *set* of optional/defaulted variables, failing when that set changes rather than judging whether any member is safe. No semantics, no allowlist, and it puts a human decision at the moment optionality is declared. Its honest limit is that it catches the declaration side only — not the case that actually bit us three times, where the variable was already optional and a dependency arrived later. That case may simply not be mechanisable, which is why the rule went into `CLAUDE.md` as a question to ask when *adding a dependency*, rather than as a check.
+
+- **The dependency-audit step runs before Typecheck, Test and Build, so an external outage hides our own checks. Options recorded, no decision taken.**
+
+  Established on 2026-09-04, by measurement rather than inference: `pnpm audit` posts to `registry.npmjs.org/-/npm/v1/security/audits` and gets **`ERR_SOCKET_TIMEOUT` after 252 seconds**, while a plain registry GET answers in 0.9s and the neighbouring `advisories/bulk` endpoint answers 200 in 10.8s. **The registry is up; the one endpoint `pnpm audit` uses is not.** Raising our 120s cap would change nothing — pnpm's own socket timeout fires around 250s regardless.
+
+  The gate fails closed, which is correct (`a gate that cannot run its check must not report success`). The problem is only its **position**: because every step is in one job, a failure at step 4 leaves Typecheck, Test and Build reported as `skipped`, so a green local run is the only evidence anyone has.
+
+  - **A — move the audit step last.** One line. An external outage then hides nothing: our own checks have already run and reported. The job still fails, so strictness is unchanged. The mirror cost is that a broken build hides the audit result — but a broken build is ours to fix and must be fixed anyway, whereas a registry outage is not ours at all. Cheapest, and a large improvement.
+  - **B — a separate parallel job.** Neither result can hide the other; both report independently and both become required checks. Costs a second checkout plus install (~1 min per run) and a branch-protection change. Strictest signal.
+  - **C — retry with backoff inside `check-audit.js`.** Addresses the transient directly and changes no ordering. Risks turning a sustained outage into a very slow red build, and pnpm's own 250s socket timeout bounds what a retry can buy.
+  - **D — report "could not check" as non-blocking.** Named only to record that it is refused: the gate's own comment already says an audit that did not run is not an audit that found nothing.
+
+  **If asked for one: B, falling back to A.** They are not exclusive — A alone removes the hiding, and B additionally makes the two signals independent.
+
+- **Accepting an invitation records no `AgreementAcceptance`. Founder decision (ADR-070): fix it, and the trigger is explicit — BEFORE the first venue onboards staff.**
+
+  `AuthService.register` writes an `AgreementAcceptance`; `MembershipInvitationService.accept` does not. It is the second `User`-creation path and it predates ADR-049. Confirmed by reading both, not inferred.
+
+  **The gap does not change in nature. It changes in scale, and it becomes unrepairable in arrears.** Before ADR-070 a human had to copy a token by hand, so invited accounts were rare and effectively internal — the gap was theoretical. Now the invitation actually arrives, so this becomes **the normal way every waiter gets an account**. Owners who self-register have recorded consent; the staff whose personal data and earnings we process do not, and that asymmetry widens with every venue onboarded. **Consent cannot be backfilled. A record written later says someone agreed at a moment when they were not asked. Every day this runs adds accounts that can never be made correct retroactively.**
+
+  **Why the trigger is "before the first venue onboards staff" and not a sprint number:** the cost is strictly increasing and the repair is not available later, so the deadline is an event rather than a date. Nothing is lost by fixing it while zero staff accounts exist; everything created before the fix is permanently uncorrectable.
+
+  **Where it belongs:** the invitation accept screen does not exist yet either, and that is the natural home for the agreement checkbox — the same screen, one change. Doing it before that screen exists would mean recording a consent nobody was shown.
+
+  Its own axis, deliberately not folded into ADR-070: that change was onboarding delivery, this one is consent capture, and a legal record is not something to land as a side effect of a mail feature.
 
 - **The Outbox poller has no claim step (ADR-003), found while reading it for ADR-045.** `OutboxPollerService.poll()` selects `publishedAt: null` and marks the row published only later, inside the dispatch transaction. Between those two moments the row is visible to any other poller: no `SELECT … FOR UPDATE SKIP LOCKED`, no claimed-at column, no advisory lock. **Two instances read the same rows and both dispatch them.**
 

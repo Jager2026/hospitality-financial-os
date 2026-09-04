@@ -36,16 +36,22 @@ export class MembershipController {
     private readonly prisma: PrismaService,
   ) {}
 
-  // Sprint 11 (ADR-028): 20/min. No real email delivery exists yet (invite() just creates a
-  // MembershipInvitation row and hands the raw token back to the caller — the caller relays it),
-  // so this isn't yet an email-spam vector; it's a resource-exhaustion one — an authenticated,
-  // permissioned-but-possibly-compromised account could otherwise flood the table with rows. 20/
-  // min still comfortably covers onboarding a whole shift's worth of staff in one sitting. Revisit
-  // this number once a real delivery provider exists and email-spam becomes the actual risk.
+  // Sprint 15 (ADR-070), Founder decision: 20/min → 5/min. The condition Sprint 11's own comment
+  // set here (ADR-028) — "revisit once a real delivery provider exists and email-spam becomes the
+  // actual risk" — was met by ADR-069, and this is the revision it asked for.
+  //
+  // WHAT THIS LIMIT NOW PROTECTS IS DIFFERENT, and that is the whole reason the number moved. It
+  // used to bound resource exhaustion against a table we own: the worst case was rows. It now
+  // bounds real mail leaving a verified domain to any address the caller names, so the worst case
+  // is our domain reputation — which every future message shares and which is slow to repair.
+  //
+  // 5/min covers the real workflow with room to spare: a restaurant onboards staff in batches, a
+  // few times a year, not continuously. 20/min was 1,200 messages an hour; 5/min is 300, and no
+  // venue has ever needed either.
   @Post("memberships")
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission("membership.invite")
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @AuditEntity("MembershipInvitation")
   async invite(
     @Body(new ZodValidationPipe(inviteMembershipSchema)) dto: InviteMembershipDto,
