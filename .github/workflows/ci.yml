@@ -152,25 +152,11 @@ jobs:
       - name: Format check
         run: pnpm run format
 
-      # THREAT_MODEL.md, "No automated, recurring check for known-vulnerable dependencies"
-      # (OWASP A03:2025) — closes it. High/critical severity fails the build; moderate/low stay
-      # visible in the step's own output without blocking every PR (many have no available fix
-      # yet or aren't exploitable in this app's actual usage — a gate that blocks on those trains
-      # everyone to ignore it). Runs through check-audit.js rather than a bare `pnpm audit
-      # --audit-level=high` — the pnpm version this project is pinned to (9.12.0) has no working
-      # way to ignore a specific advisory (`audit.ignore`/`--ignore` need pnpm 10.11+, confirmed
-      # directly, not assumed), and this project isn't bumping pnpm itself just to unblock this
-      # gate (pnpm's own version drives Railway's package-manager detection, ADR-031). See that
-      # script's own comment for exactly which advisories are explicitly ignored and why — a new
-      # high/critical finding anywhere else still fails this step.
       # ADR-060: docs/INDEX.md no longer carries a version of its own — that single line was
       # the site of five consecutive merge conflicts with no content in any of them. What it stood
       # for (the register agrees with the documents) is checked here instead, both directions.
       - name: Documentation index integrity
         run: node .github/scripts/check-doc-index.js
-
-      - name: Dependency vulnerability scan
-        run: node .github/scripts/check-audit.js
 
       - name: Validate Prisma schema
         run: pnpm run prisma:validate
@@ -190,3 +176,35 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      # THREAT_MODEL.md, "No automated, recurring check for known-vulnerable dependencies"
+      # (OWASP A03:2025) — closes it. High/critical severity fails the build; moderate/low stay
+      # visible in the step's own output without blocking every PR (many have no available fix
+      # yet or aren't exploitable in this app's actual usage — a gate that blocks on those trains
+      # everyone to ignore it). Runs through check-audit.js rather than a bare `pnpm audit
+      # --audit-level=high` — the pnpm version this project is pinned to (9.12.0) has no working
+      # way to ignore a specific advisory (`audit.ignore`/`--ignore` need pnpm 10.11+, confirmed
+      # directly, not assumed), and this project isn't bumping pnpm itself just to unblock this
+      # gate (pnpm's own version drives Railway's package-manager detection, ADR-031). See that
+      # script's own comment for exactly which advisories are explicitly ignored and why — a new
+      # high/critical finding anywhere else still fails this step.
+      #
+      # LAST, DELIBERATELY, and the reason is visibility rather than importance (Founder decision,
+      # 2026-09-04). Every step here runs in one job, so a failure at step four leaves Typecheck,
+      # Test and Build reported as `skipped` — and this step depends on a third party we do not
+      # control. On 2026-09-03/04 the endpoint `pnpm audit` posts to was intermittently dead for
+      # hours (measured: ERR_SOCKET_TIMEOUT after 252s, while a plain registry GET answered in
+      # 0.9s and the neighbouring advisories/bulk endpoint answered 200 in 10.8s), and every
+      # occurrence hid whether our own code was green.
+      #
+      # WHAT THIS DOES AND DOES NOT FIX, stated so nobody expects the wrong thing: it fixes
+      # VISIBILITY, not passability. A dead endpoint still fails this step and still blocks the
+      # merge — the gate fails closed on purpose, because an audit that could not run is not an
+      # audit that found nothing. What changes is that the other seven checks have already
+      # reported by then, so "is our code green?" stops depending on a third party being up.
+      #
+      # The mirror cost, and why it is accepted: a broken build now hides the audit result. That
+      # is the better direction to fail — a broken build is ours and must be fixed anyway, while
+      # a registry outage is not ours and cannot be.
+      - name: Dependency vulnerability scan
+        run: node .github/scripts/check-audit.js
