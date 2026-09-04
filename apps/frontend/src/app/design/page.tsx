@@ -1,31 +1,38 @@
 import { notFound } from "next/navigation";
 import type { JSX } from "react";
 import { t } from "../../lib/i18n";
-import { ACCENT_PALETTE, ON_ACCENT_DARK, ON_ACCENT_LIGHT } from "../../styles/accent-palette";
 
 /**
  * The token layer, rendered. A design system nobody can look at drifts from the document that
  * describes it, so this page exists to make a transcription error visible rather than latent.
+ *
+ * ── IT DESCRIBES ONE SYSTEM (ADR-072) ────────────────────────────────────────────────────────
+ * There is no theme switch here, and its removal is the point rather than a simplification. The
+ * page used to pin `data-theme` on each specimen card so a dark machine could not repaint the
+ * "light default" one. With the light Portal abolished those attributes match no rule, so the
+ * page rendered the same surface twice with one card still captioned "light" — a specimen that
+ * lies is worse than no specimen, because it is believed.
+ *
+ * What replaces it is what is now worth looking at: the Portal's four-step LADDER, with all three
+ * text levels drawn on each step. The rule that changed in ADR-072 is that contrast is measured
+ * against the deepest surface a colour can land on, and this is where that becomes visible rather
+ * than merely asserted in a test.
  *
  * Development only — `notFound()` in production. It is a specimen, not a product screen, and it
  * has no place in the bundle a restaurant is served.
  */
 export const dynamic = "force-static";
 
-const RAMP = [
-  "0",
-  "25",
-  "50",
-  "100",
-  "200",
-  "300",
-  "400",
-  "500",
-  "600",
-  "700",
-  "800",
-  "900",
-  "950",
+/** Six steps, not thirteen. The other seven served the light Portal and are gone (ADR-072). */
+const RAMP = ["0", "50", "100", "500", "600", "950"] as const;
+
+/** The Portal's surfaces, ground first. Named by the token a component would actually reach for,
+ * because a specimen that shows raw values teaches the wrong habit. */
+const PORTAL_LADDER = [
+  { token: "--ground", label: "ground" },
+  { token: "--surface", label: "surface" },
+  { token: "--surface-2", label: "surface-2" },
+  { token: "--surface-3", label: "surface-3 · deepest" },
 ] as const;
 
 const TYPE_ROLES: { token: string; label: string; sample: string }[] = [
@@ -46,35 +53,24 @@ function Section({ title, children }: { title: string; children: JSX.Element }):
   );
 }
 
-/** One surface rendered in its own tokens, so a wrong value is visible rather than described. */
-function SurfaceCard({
-  label,
-  surface,
-  amount,
-}: {
-  label: string;
-  surface?: "terminal" | "dark" | "light";
-  amount: string;
-}): JSX.Element {
-  // Each card pins its own surface rather than inheriting one. Without that, on a machine set
-  // to dark the "light default" card renders dark and the specimen quietly shows two of the
-  // same thing — which is exactly what happened the first time this page was run.
-  const attrs =
-    surface === "terminal"
-      ? { "data-surface": "terminal" as const }
-      : surface === "dark"
-        ? { "data-theme": "dark" as const }
-        : { "data-theme": "light" as const };
+/**
+ * One step of the ladder, carrying all three text levels.
+ *
+ * This is the specimen that matters now. `--text-faint` measures 6.53 on the ground and 4.77 on
+ * `--surface-3`; both clear the floor, and the difference between them is exactly what a reader
+ * needs to see to understand why the floor is measured at the bottom of the ladder rather than
+ * at the top.
+ */
+function LadderStep({ token, label }: { token: string; label: string }): JSX.Element {
   return (
     <div
-      {...attrs}
-      className="flex flex-col gap-2 rounded-portal border border-rule bg-ground p-6 text-ink"
+      className="flex flex-col gap-1 rounded-portal border border-rule p-4"
+      style={{ background: `var(${token})` }}
     >
-      <span className="text-label uppercase text-muted">{t("dashboard.todayRevenue")}</span>
-      <span className="text-hero-2 font-semibold">{amount}</span>
-      <span className="text-small text-muted">{t("dashboard.todayRevenueNote")}</span>
-      <hr className="my-1 border-rule" />
-      <span className="text-small">{label}</span>
+      <span className="font-mono text-micro uppercase text-muted">{label}</span>
+      <span className="text-body text-ink">Aa · text</span>
+      <span className="text-body text-muted">Aa · muted</span>
+      <span className="text-body text-faint">Aa · faint</span>
     </div>
   );
 }
@@ -90,10 +86,35 @@ export default function DesignTokensPage(): JSX.Element {
       </header>
 
       <Section title={t("design.surfaces")}>
-        <div className="grid gap-4 md:grid-cols-3">
-          <SurfaceCard label={t("design.surface.portalLight")} amount="€1,240.00" />
-          <SurfaceCard label={t("design.surface.portalDark")} surface="dark" amount="€1,240.00" />
-          <SurfaceCard label={t("design.surface.terminal")} surface="terminal" amount="€42.00" />
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2 rounded-portal border border-rule bg-surface p-6">
+            <span className="text-label uppercase text-muted">{t("dashboard.todayRevenue")}</span>
+            <span className="text-hero-2 font-semibold">€1,240.00</span>
+            <span className="text-small text-muted">{t("dashboard.todayRevenueNote")}</span>
+            <hr className="my-1 border-rule" />
+            <span className="text-small">{t("design.surface.portal")}</span>
+          </div>
+
+          {/* The terminal pins its own surface on a wrapper, which is what makes it immune to
+              anything above it — the one reason it is still light (ADR-072). */}
+          <div
+            data-surface="terminal"
+            className="flex flex-col gap-2 rounded-portal border border-rule bg-ground p-6 text-ink"
+          >
+            <span className="text-label uppercase text-muted">{t("dashboard.todayRevenue")}</span>
+            <span className="text-hero-2 font-semibold">€42.00</span>
+            <span className="text-small text-muted">{t("dashboard.todayRevenueNote")}</span>
+            <hr className="my-1 border-rule" />
+            <span className="text-small">{t("design.surface.terminal")}</span>
+          </div>
+        </div>
+      </Section>
+
+      <Section title={t("design.ladder")}>
+        <div className="grid gap-3 md:grid-cols-4">
+          {PORTAL_LADDER.map((s) => (
+            <LadderStep key={s.token} token={s.token} label={s.label} />
+          ))}
         </div>
       </Section>
 
@@ -111,36 +132,20 @@ export default function DesignTokensPage(): JSX.Element {
       </Section>
 
       <Section title={t("design.accent")}>
-        <div className="flex flex-col">
-          {ACCENT_PALETTE.map((a) => (
-            <div
-              key={a.id}
-              className="flex flex-wrap items-center gap-4 border-t border-rule py-3 first:border-t-0"
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              type="button"
+              className="h-control rounded-portal bg-accent px-4 font-semibold text-on-accent"
             >
-              <span className="w-28 text-small font-semibold">
-                {a.label}
-                <span className="block font-mono text-micro font-normal text-muted">{a.light}</span>
-              </span>
-              <span className="flex items-center gap-2">
-                <span
-                  className="rounded-portal px-4 py-2 text-small font-bold"
-                  style={{ background: a.light, color: ON_ACCENT_LIGHT }}
-                >
-                  {t("terminal.pay")} €48.30
-                </span>
-                <span className="font-mono text-micro text-muted">{a.lightOnAccent}:1</span>
-              </span>
-              <span className="flex items-center gap-2">
-                <span
-                  className="rounded-portal px-4 py-2 text-small font-bold"
-                  style={{ background: a.dark, color: ON_ACCENT_DARK }}
-                >
-                  {t("terminal.pay")} €48.30
-                </span>
-                <span className="font-mono text-micro text-muted">{a.darkOnAccent}:1</span>
-              </span>
-            </div>
-          ))}
+              {t("terminal.pay")} €48.30
+            </button>
+            <span className="font-mono text-micro text-muted">
+              --on-accent on --accent · 14.19:1
+            </span>
+          </div>
+          <p className="max-w-prose text-small text-muted">{t("design.onAccentRule")}</p>
+          <p className="max-w-prose text-small text-faint">{t("design.brandingPalette")}</p>
         </div>
       </Section>
 
@@ -181,6 +186,8 @@ export default function DesignTokensPage(): JSX.Element {
               {t("terminal.pay")} €48.30
             </button>
           </div>
+          {/* The unresolved one, left visible on purpose (ADR-072): on white the fill has almost
+              no edge. Showing it is how the question stays open instead of being forgotten. */}
           <div
             data-surface="terminal"
             className="flex flex-col gap-2 rounded-portal border border-rule bg-ground p-4"
@@ -192,6 +199,7 @@ export default function DesignTokensPage(): JSX.Element {
             >
               {t("terminal.pay")} €48.30
             </button>
+            <p className="text-small text-muted">{t("design.terminalBoundary")}</p>
           </div>
         </div>
       </Section>
