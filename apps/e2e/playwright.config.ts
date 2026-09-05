@@ -41,6 +41,11 @@ const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
  */
 const STRIPE_SECRET_KEY = ["sk", "test", "e2eharnessplaceholderneverusedonnetwork"].join("_");
 const STRIPE_WEBHOOK_SECRET = ["whsec", "e2eharnessplaceholderneververifiesarealevent"].join("_");
+// ADR-069 made RESEND_API_KEY required at boot, and the harness composes the backend env itself —
+// so it had to be added HERE, not in the workflow. The underscore in the middle is not decoration:
+// a real Resend key is re_<id>_<secret>, and a placeholder without it would pass a rule real keys
+// fail. Nothing here sends: EmailService refuses outside production (ADR-070).
+const RESEND_API_KEY = ["re", "e2eharnessplaceholder", "neverusedonnetwork"].join("_");
 
 const backendEnv: Record<string, string> = {
   NODE_ENV: "test",
@@ -51,6 +56,7 @@ const backendEnv: Record<string, string> = {
   JWT_REFRESH_SECRET: "e2e_placeholder_refresh_secret_not_a_real_secret_32chars",
   STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET,
+  RESEND_API_KEY,
   DEFAULT_PLATFORM_FEE_BASIS_POINTS: "100",
   CORS_ORIGIN: `http://localhost:${FRONTEND_PORT}`,
   FRONTEND_URL: `http://localhost:${FRONTEND_PORT}`,
