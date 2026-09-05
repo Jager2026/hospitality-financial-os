@@ -279,3 +279,5 @@ above, which the existing counter cannot observe.
 
 **Carried forward** — the 403-versus-404 classification above, which belongs to the fix pull request
 and must be settled before a single assertion is changed.
+
+Probe: a documentation-only change on top of the A-prime workflow, used to establish that browser-e2e reports SKIPPED rather than being absent. Deleted immediately after the reading.
