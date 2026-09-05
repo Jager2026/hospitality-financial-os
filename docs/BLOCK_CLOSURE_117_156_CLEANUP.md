@@ -1,6 +1,6 @@
 ---
 title: BLOCK_CLOSURE_117_156_CLEANUP
-version: 1.0.0
+version: 1.1.0
 status: Active — closure report, part 4: the only part that changes anything
 classification: Internal
 owner: Founder
@@ -200,6 +200,6 @@ the fixes. In risk order:
 3. **`PERSONAL_DATA_MAP.md`'s drift** — `OutboxEvent`, `EmailDelivery`, `Shift`, six `User` columns.
 4. **`THREAT_MODEL.md:187` against `check-audit.js`** — an empty ignore list described as holding
    four entries.
-5. **The seventeen weak status assertions**, which need the 403-versus-404 classification settled
+5. **The nine weak status assertions** (recorded as seventeen until 2026-09-05; the count was mine and wrong), which need the 403-versus-404 classification settled
    first (part 3) before a single one is changed.
 6. The `agreement-versions.ts` docstring claiming an acceptance that is not recorded.

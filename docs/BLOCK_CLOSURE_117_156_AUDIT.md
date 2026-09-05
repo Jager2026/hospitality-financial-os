@@ -1,6 +1,6 @@
 ---
 title: BLOCK_CLOSURE_117_156_AUDIT
-version: 1.0.0
+version: 1.1.0
 status: Active — closure report, findings shown not fixed
 classification: Internal
 owner: Founder
@@ -113,8 +113,16 @@ no assertion, one that must be flagged for asserting only `not.toBe`/`toBeDefine
 
 ## The finding · **fix now**
 
-**Seventeen assertions of the form `expect(res.status).not.toBe(200)` or `.not.toBe(201)`, and every
-one of them is in an access-control end-to-end spec** — `permission-scope.e2e.spec.ts` and
+**Nine assertions of the form `expect(res.status).not.toBe(200)` or `.not.toBe(201)`, and every
+one of them is in an access-control end-to-end spec**
+
+**CORRECTED 2026-09-05: this said SEVENTEEN, and seventeen was my own miscount.** It came from a
+`grep -c` run over every backend spec with a three-alternative pattern, whose total was then
+attributed to the two files listed below. Measured properly: **34** `.not.toBe(` across the backend
+specs, **19** of them about a status, **9** of those in these two files. The other ten are
+legitimate — eight are `not.toBe(429)` in throttle specs, where asserting that a request was *not*
+rate-limited is exactly the right claim. **An audit's own count is a finding like any other, and
+this one was not falsified before it was written down.** — `permission-scope.e2e.spec.ts` and
 `disabled-membership.e2e.spec.ts`. Six of them are in the tests that assert one Organization cannot
 read another's payments, transactions and dashboards.
 
@@ -219,7 +227,8 @@ would report it, and 36 routes are eligible.
 
 # The baskets, collected
 
-**Fix now** — the seventeen `not.toBe(200)` assertions in the two access-control end-to-end specs.
+**Fix now** — the nine `not.toBe(200)` assertions in the two access-control end-to-end specs (this
+said seventeen; see the correction above).
 A test-only change, its own pull request, and the only finding in this part that stands over a leak
 class this project has already shipped twice.
 

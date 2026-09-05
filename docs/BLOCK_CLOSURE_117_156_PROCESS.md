@@ -1,6 +1,6 @@
 ---
 title: BLOCK_CLOSURE_117_156_PROCESS
-version: 1.0.0
+version: 1.1.0
 status: Active — closure report, findings shown not fixed
 classification: Internal
 owner: Founder
@@ -199,7 +199,7 @@ instance.**
 
 # Carried to the fix pull request, so it is not lost
 
-**The seventeen `not.toBe(200)` assertions (part 2) are in the "fix now" basket, as their own pull
+**The nine `not.toBe(200)` assertions (part 2 — recorded there as seventeen, corrected 2026-09-05) are in the "fix now" basket, as their own pull
 request, after this diagnostic block — and the fix is NOT a blind replacement with `.toBe(403)`.**
 
 Founder's correction, and it is established by fact rather than accepted on authority:
@@ -222,8 +222,8 @@ permission is missing.**
 is weak but agnostic; `.toBe(403)` everywhere would be a specific, wrong specification, asserted by
 a passing test — and a wrong test is harder to dislodge than an absent one.
 
-**The work is therefore: classify each of the seventeen against the disclosure rule first, then
-assert the specific status each route is supposed to return.**
+**The work is therefore: classify each of them against the disclosure rule first, then assert the
+specific status each route is supposed to return.**
 
 ---
 
