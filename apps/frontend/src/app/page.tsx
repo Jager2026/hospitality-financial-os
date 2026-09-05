@@ -5,7 +5,7 @@ import type { JSX } from "react";
 export default function HomePage(): JSX.Element {
   return (
     <main className="flex min-h-screen items-center justify-center p-8">
-      <p className="text-sm text-gray-500">Hospitality Operating System — Sprint 1 foundation.</p>
+      <p className="text-small text-muted">Hospitality Operating System — Sprint 1 foundation.</p>
     </main>
   );
 }

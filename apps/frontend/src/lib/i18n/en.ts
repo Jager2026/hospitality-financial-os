@@ -17,16 +17,24 @@ export const en = {
 
   // Design-token specimen (development only)
   "design.title": "Design tokens",
-  "design.subtitle": "Transcribed from DESIGN_SYSTEM.md v1.0.0. Every value measured.",
+  "design.subtitle":
+    "Transcribed from DESIGN_SYSTEM.md. Every value measured, against every surface it can land on.",
   "design.surfaces": "Surfaces",
-  "design.ramp": "Neutral ramp",
-  "design.accent": "Accent — one token, five verified values",
+  "design.ramp": "Neutral ramp — the terminal's material only",
+  "design.accent": "Accent — one value, and one ink that may sit on it",
   "design.semantic": "Semantic state",
   "design.type": "Type",
   "design.density": "Density",
-  "design.surface.portalLight": "Portal — light, default",
-  "design.surface.portalDark": "Portal — dark, preference",
+  "design.surface.portal": "Portal — the only Portal surface",
   "design.surface.terminal": "Terminal — pure white",
+  "design.text": "Text — three levels, on every surface",
+  "design.ladder": "The Portal ladder",
+  "design.onAccentRule":
+    "Text on an accent fill is the ink and nothing else. The light text measures 1.08 on the yellow — not low contrast, invisible.",
+  "design.brandingPalette":
+    "The five-value branding palette (accent-palette.ts) is a separate, unshipped feature. It assumes two Portal appearances and defaults to the abolished amber, so it governs nothing here and is not rendered.",
+  "design.terminalBoundary":
+    "The accent fill measures 1.28 against this ground. The button's own text is fine; its BOUNDARY is not, and WCAG asks 3:1 for a control edge.",
   "design.noWarning": "There is no warning colour, and that is the decision.",
 
   // Log In — UX_MAP.md, "Getting In"

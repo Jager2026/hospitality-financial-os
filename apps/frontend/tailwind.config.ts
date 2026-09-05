@@ -20,8 +20,14 @@ const config: Config = {
       colors: {
         ground: "var(--ground)",
         surface: "var(--surface)",
+        // ADR-072: the Portal ladder deepens, and the floor is measured at the bottom of it.
+        // Without these two the deep surfaces exist in CSS and are unreachable from a class,
+        // which is how a token layer quietly stops being the thing screens actually use.
+        "surface-2": "var(--surface-2)",
+        "surface-3": "var(--surface-3)",
         ink: "var(--text)",
         muted: "var(--text-muted)",
+        faint: "var(--text-faint)",
         rule: "var(--rule)",
         accent: "var(--accent)",
         "on-accent": "var(--on-accent)",
