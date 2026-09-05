@@ -1,6 +1,6 @@
 ---
 title: PERSONAL_DATA_MAP
-version: 1.3.0
+version: 1.4.0
 status: Active — research, no decisions
 classification: Critical
 owner: Founder
@@ -118,7 +118,11 @@ Employment data by inference rather than by declaration: nothing here is labelle
 
 Same retention answer, same reason: nothing deletes from this table either.
 
-**Erasure does not reach either of these two tables.** `redact-user.ts` updates `User`, `MembershipInvitation`, `AuditLog` and `AgreementAcceptance` — verified by reading it, 2026-09-05 — and touches neither `OutboxEvent` nor `EmailDelivery`. **After a completed erasure, the person's email address remains in both.** That is a statement `LEGAL_CLAIMS_VERIFICATION.md` needs, because that document certifies what erasure does, and it was written while this map did not know these tables existed.
+**Erasure reaches both, since 2026-09-05 — and for a whole block it did not.** `redact-user.ts` now tombstones `EmailDelivery.to` and rewrites `OutboxEvent.payload`'s `to` and `text`, inside the same transaction as the `User` update and matched on the original address — for the same reason `MembershipInvitation` always was: between two writes the address is still findable.
+
+**Why it was missed, because the reason decides what guards it now.** `repo-invariants.spec.ts` carries an ADR-052 check that every String column is classified as redacted or retained — but it parses `model User { … }` and nothing else, so a column on a *different* table holding the same person's address is outside its question **by construction**. The list was not short; the mechanism was one model wide and the problem is schema wide.
+
+**What covers it now is schema-wide and derived:** `erasure-leaves-nothing.e2e.spec.ts` enumerates every text and JSON column from `information_schema`, stores the address in several of them, and asserts it is found before the erasure and nowhere after. A new table that stores an address is covered the day it is created, by nobody remembering anything. Falsified in the direction that matters: with the `OutboxEvent` rewrite removed, it fails naming `outbox_event.payload`.
 
 ## The money side
 
