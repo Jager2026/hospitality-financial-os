@@ -176,6 +176,43 @@ export async function executeRedaction(
       where: { email: plan.originalEmail },
       data: { email: plan.tombstone },
     });
+    // The person's address does not live only on `User`. It is copied wherever we wrote to them,
+    // and ADR-052's claim — that an erasure empties the person — is only true if it reaches every
+    // copy.
+    //
+    // These two were missed for a whole block, and the reason is worth stating because it decides
+    // what guards this in future: `repo-invariants.spec.ts` checks that every String column ON THE
+    // USER MODEL is classified as redacted or retained. It parses `model User { … }` and nothing
+    // else, so a column on a *different* table holding the same person's address is outside its
+    // question by construction. The mechanism that does cover it is
+    // `erasure-leaves-nothing.e2e.spec.ts`, which asks the database itself.
+    //
+    // Matched on the ORIGINAL address, inside the same transaction as the `User` update, for the
+    // same reason `membershipInvitation` is: between two writes the address is still findable.
+
+    // `EmailDelivery.to` — one row per message, retained indefinitely. Its own schema comment says
+    // recipient and subject are kept "for the audit trail"; that reason survives a tombstone,
+    // which keeps the row and its shape while removing the identifier.
+    await tx.emailDelivery.updateMany({
+      where: { to: plan.originalEmail },
+      data: { to: plan.tombstone },
+    });
+
+    // `OutboxEvent.payload` — the uncomfortable one (ADR-070). For an invitation the payload holds
+    // the address AND, until delivery succeeds, the raw token: a working credential. Redacting the
+    // body is not merely thoroughness here, it is the only thing that removes a live credential
+    // addressed to a person who has asked to be erased.
+    //
+    // Raw SQL because the target is a key inside a JSON column: Prisma can filter on a JSON path
+    // but cannot rewrite one, and reading every row into memory to rewrite it would be worse.
+    await tx.$executeRaw`
+      UPDATE "outbox_event"
+      SET payload = jsonb_set(
+        jsonb_set(payload::jsonb, '{to}', to_jsonb(${plan.tombstone}::text)),
+        '{text}', to_jsonb('[redacted on erasure]'::text)
+      )
+      WHERE payload::jsonb ->> 'to' = ${plan.originalEmail}
+    `;
 
     if (options.clearRequestMetadata === true) {
       await tx.auditLog.updateMany({
