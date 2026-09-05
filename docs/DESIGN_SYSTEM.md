@@ -1,6 +1,6 @@
 ---
 title: DESIGN_SYSTEM
-version: 1.2.0
+version: 2.0.0
 status: Active — Part 1 (structure, hierarchy, state) and Part 2 (surfaces, palette, type, spacing, density) both written
 classification: Internal
 owner: Founder
@@ -275,7 +275,11 @@ The terminal also has no dashboard, no hierarchy problem and no emotional contra
 
 ## The Portal's surface — a withdrawn justification, and what replaces it
 
-**Decided (Founder): light by default, dark as a supported preference. Both defined in Part 2.**
+> **REVERSED 2026-09-04 (ADR-072). The Portal is dark, and there is no light Portal.** Founder decision. The text below is kept in full and unedited, because it is the argument the new decision replaces, and a reversal is only readable next to what it reversed. Two things in it are worth carrying forward rather than discarding: the reconciliation argument was *sound* and is now simply outranked by a Founder call on the product's own appearance, and the reframe underneath it — **surface is a token set, not an identity** — is what made this change cheap: one file, no screen touched.
+>
+> What did NOT survive: the amber accent, the light/dark pair, and `prefers-color-scheme` as a Portal mechanism. What did: the terminal's white, chosen on legibility rather than on house style.
+
+**Decided (Founder): light by default, dark as a supported preference. Both defined in Part 2.** *(Superseded — see the note above.)*
 
 This document previously justified a dark Restaurant Portal as ergonomics: *restaurants are dim, a bright screen at a service pass is unpleasant.* The Founder challenged it as an argument from a surface we do not build. Checked rather than defended, it is worse than that:
 
@@ -322,71 +326,100 @@ That sentence is the real justification for writing the whole token layer — ev
 
 None of the three is a typo. Each is a place where prose was internally inconsistent in a way prose cannot show. Executable form is not a nicety here; it is the review pass this document could not perform on itself.
 
-## Surfaces — three, not two
+## Surfaces — the Portal is dark, and there is no light Portal (ADR-072)
+
+**Superseded 2026-09-04.** Everything below this heading was rewritten when the Founder replaced the palette. The reasoning that was withdrawn is kept above, under *The Portal's surface*, marked rather than deleted — a decision is only readable if the argument it replaced is still there.
 
 | Surface | Ground | Why |
 |---|---|---|
-| **Portal — light (default)** | `#FAFAF8` | The owner's screen. Its content is financial documents, and everything they check our numbers against is light. |
-| **Portal — dark (preference)** | `#0F0E0C` | The same system, the other value of the same token. Honours `prefers-color-scheme` and an explicit choice. |
-| **Terminal** | `#FFFFFF` | Pure white deliberately: maximum luminance for a screen that may be read on a terrace in July. Nothing else on the ramp buys that. |
+| **Portal** | `#161615` | The only Portal appearance. Not a default with a preference behind it — one surface set, always. |
+| **Terminal** | `#FFFFFF` | Unchanged. Pure white for maximum luminance on a screen that may be read on a terrace in July. Chosen on legibility, and that reason did not change when the Portal did. |
+| Print and export | — | The only other light surfaces this product will have. **Not defined yet**, deliberately: nothing prints, and a token set with no consumer is what later drifts from reality. It arrives with the first such screen. |
 
-The Portal's two grounds are **one token with two values**, not two designs. The terminal's white is a genuinely separate value, chosen on legibility.
-
-## The neutral ramp
-
-Warm-neutral throughout — the hue is biased a hair toward the accent so the greys read as chosen rather than inherited. A pure grey beside an amber accent looks like an accident.
+**The Portal's ladder — four surfaces, deepening as things stack:**
 
 ```
-n-0   #FFFFFF     n-300 #C7C4BD     n-700 #403D38
-n-25  #FAFAF8     n-400 #928D84     n-800 #302D28
-n-50  #F4F3F0     n-500 #726D64     n-900 #1A1815
-n-100 #ECEBE7     n-600 #5C5852     n-950 #0F0E0C
-n-200 #D8D5CF
+#161615   ground
+#1E1E1C   --surface
+#262624   --surface-2
+#30302D   --surface-3   ← the deepest surface text can land on
 ```
 
-| Token | Light portal | Terminal | Dark portal |
+### The floor is measured from the deepest surface, not from the ground
+
+**Every text value must clear 4.5:1 against `#30302D`, not against `#161615`.** This is the rule that changed, and it is the one worth understanding: measuring against the ground certifies a value that fails on the very card it is most likely to be used in. A muted grey that reads perfectly on the page background can be unreadable inside a raised panel three levels up, and nothing would have caught it.
+
+| Token | Value | On ground | **On `#30302D`** |
 |---|---|---|---|
-| `--text` | `#0F0E0C` — **18.46:1** | `#0F0E0C` — **19.29:1** | `#FAFAF8` — **18.46:1** |
-| `--text-muted` | `#726D64` — **4.92:1** | `#726D64` — **5.14:1** | `#928D84` — **5.85:1** |
-| `--rule` | `#D8D5CF` — 1.40:1 | `#ECEBE7` | `#302D28` — 1.41:1 |
-| `--surface` | `#F4F3F0` | `#F4F3F0` | `#1A1815` |
+| `--text` | `#EFECE4` | 15.34 | **11.21** |
+| `--text-muted` | `#BDBAB1` | 9.33 | **6.82** |
+| `--text-faint` | `#9E9B94` | 6.53 | **4.77** |
+| `--rule` | `#3C3C38` | 1.63 | — |
 
-`--text-muted` takes a different ramp step on each ground rather than one value forced to serve both — that is what a ramp is for. `--rule` is measured against a different target: a divider wants roughly **1.4:1**, enough to separate and not enough to catch the eye. Light and dark landing at 1.40 and 1.41 means both surfaces divide their content with equal emphasis, which is a large part of why they read as one product.
+The enforcement checks every text level against **every** surface, not only the deepest, so the binding measurement is whichever is hardest — and a value that passes on the ground and fails deeper breaks the suite. That was verified by substituting such a value and watching it fail, not by reading the test.
 
-**A second transcription correction.** The ramp originally listed `n-200` as `#DEDCD7` while `--rule` on light was given as `#D8D5CF` — a value that was not on the ramp at all. Turning the table into code made that visible immediately: every semantic token must point at a ramp step, or the ramp is not the single source it claims to be. `n-200` is now `#D8D5CF` and `--rule` points at it. `#DEDCD7` was referenced by nothing and is gone.
+### There is no fourth text level, and there will not be
 
-**These tokens are enforced, not merely written down.** `apps/frontend/src/styles/tokens.contrast.spec.ts` re-derives every ratio on this page from `tokens.css` itself and fails on drift — including the two dark blocks disagreeing with each other, an accent straying into a semantic hue, a `--warning` token appearing, or the terminal being scoped somewhere `prefers-color-scheme` could repaint it.
+`--text-faint` clears the floor at **4.77** — by **0.27**. A fourth level would have to fit between that and 4.5 itself. Anything in that band differs from `--text-faint` by less than a third of a ratio point: **one token with a typo, not two roles.**
 
-## Accent — one token, five verified values
+The 0.27 is asserted, not described. If the deepest surface were ever lightened the headroom would grow, the assertion would fail, and this decision would have to be re-read rather than quietly reversed.
 
-**Default: `#9A5D14`.** On a dark surface the same token takes `#E0A050`.
+## The neutral ramp — the terminal's material only
 
-The four alternates exist for the terminal-branding candidate (`MASTERPLAN.md`). **A value without a measurement cannot enter this table.**
+Warm-neutral, and now trimmed to the five steps the terminal actually uses. The other eight served the light Portal, which no longer exists; a ramp step nobody points at is a value with no measurement behind it.
 
-| Value | Light surface | White text on it | As text on light | Dark surface | Dark text on it | As text on dark |
-|---|---|---|---|---|---|---|
-| **Amber (default)** | `#9A5D14` | **5.19:1** | 5.09:1 | `#E0A050` | **8.29:1** | 8.56:1 |
-| Navy | `#1F4E79` | **8.46:1** | 8.29:1 | `#7FB2DC` | **8.28:1** | 8.55:1 |
-| Violet | `#55408C` | **8.21:1** | 8.04:1 | `#A896DC` | **7.18:1** | 7.41:1 |
-| Plum | `#7A2E52` | **8.77:1** | 8.59:1 | `#D48CAC` | **7.25:1** | 7.48:1 |
-| Slate | `#3D5460` | **7.79:1** | 7.62:1 | `#96B2BF` | **8.38:1** | 8.65:1 |
+```
+n-0   #FFFFFF     n-500 #726D64
+n-50  #F4F3F0     n-600 #5C5852
+n-100 #ECEBE7     n-950 #0F0E0C
+```
 
-As text on the terminal's pure white they measure 5.32 / 8.66 / 8.41 / 8.97 / 7.97 — every one passes there too.
+| Token | Terminal | Measured |
+|---|---|---|
+| `--text` | `#0F0E0C` | 19.29 on ground |
+| `--text-muted` | `#726D64` | 5.14 on ground · **4.63 on `--surface`** |
+| `--text-faint` | `#5C5852` | 7.06 on ground · 6.37 on `--surface` |
+| `--rule` | `#ECEBE7` | 1.19 |
 
-**Said plainly, because the table says it and prose could hide it: the default is the weakest value in its own set.** Amber at 5.19:1 clears the floor with real headroom, and it is chosen for what it means in this industry rather than for its ratio — but every alternate measures 7.79 or better. That is the price of the hue, it is known, and it is on the record so nobody later mistakes *it passed* for *it was the strongest option*.
+**The terminal has no deeper surfaces, and that is a decision.** It is a single-purpose payment screen: one amount, one action, nothing stacked three levels down. `--surface-2` and `--surface-3` are pinned to `--surface` there so nothing inside a terminal can inherit a Portal-dark value.
 
-**Excluded by rule, not by taste — and it is a constraint on the data, not on the design.** No green and no red enters this table at any lightness. An accent colliding with `--success` or `--error` makes *press this* and *this worked* indistinguishable on the terminal, where a guest gets ten seconds. So the branding feature offers a **fixed list, never a colour picker**: a free hex field cannot enforce a hue exclusion, which means the constraint has to live in which values exist rather than in what a UI hopes people will avoid.
+**One measured warning for whoever adds a third terminal surface:** `--text-muted` clears the floor on `#F4F3F0` by only **0.13**, and on the next step down (`#ECEBE7`) it measures **4.31 and fails**. A third terminal surface requires moving `#726D64` to `#5C5852` in the same change.
+
+## Accent — one value, and one ink that may sit on it
+
+**`#FFE500`. One value, on every surface.** The amber is abolished entirely — not deprecated, not kept as an alternate.
+
+| | Measured |
+|---|---|
+| Accent on the Portal ground | **14.19** |
+| Accent on `#30302D` | **10.38** |
+| `--on-accent` (`#161615`) on the accent fill | **14.19** |
+| `--text` (`#EFECE4`) on the accent fill | **1.08 — invisible** |
+
+**Text on an accent fill is `#161615` and nothing else.** `#EFECE4` on `#FFE500` measures 1.08 — that is not "low contrast", it is not there. The rule is enforced **by ratio rather than by equality**, so any wrong value fails, not only the light one that prompted it. The 1.08 is itself asserted, because someone will eventually propose light text on the yellow for looking calmer, and a number ends that conversation without an argument.
+
+**The accent still never carries importance and never touches a money figure.** That rule is in Part 1 and it outlived the palette: it was never about which colour.
+
+**One measurement that has no answer yet.** On the terminal's white ground the accent fill measures **1.28** — the pay button's own text is fine at 14.19, but its *boundary* against the page is not, and WCAG asks 3:1 for a control's edge. Recorded rather than solved: no terminal screen exists, and inventing a border token for a button nobody has drawn is how a token layer starts being authored by an imaginary screen.
+
+### The five-value branding palette no longer describes this
+
+`accent-palette.ts` still holds five verified values with a light/dark pair each, for the restaurant-branding candidate (`MASTERPLAN.md`, ADR-039). **Its whole shape assumes two Portal appearances, and its default is the abolished amber.** It is left in place — that feature has not shipped and this change's axis was tokens — but it governs nothing today, and the test suite asserts the disconnection so nobody reads it as if it still did.
+
+The hue exclusion it encodes survives on its own merits: no green and no red at any lightness, because an accent colliding with `--success` or `--error` makes *press this* and *this worked* indistinguishable on the terminal, where a guest gets ten seconds.
 
 ## Semantic colour — reserved, never customisable
 
-| | Light | Dark |
-|---|---|---|
-| `--success` | `#2E7D46` — **4.86:1** | `#6FBF87` — **8.71:1** |
-| `--error` | `#B3261E` — **6.25:1** | `#F08B7F` — **8.00:1** |
+| | Value | On ground | On `#30302D` |
+|---|---|---|---|
+| `--success` | `#7BD68F` | 10.22 | 7.47 |
+| `--error` | `#FF8A7A` | 7.91 | 5.78 |
 
-**There is no warning colour, and that is a decision rather than an omission.** The two places one would be reached for are both places Part 1 explicitly forbids alarming: the platform-fee caption (a routine, permanent, correct fact — *The Caption Problem*) and an empty dashboard (*The Mirror Risk*). A system that owns an amber warning token will use it in exactly those two places within a month. Not having one is cheaper than the discipline of not using one — and it removes any collision with the default accent, which is itself amber.
+**There is still no warning colour, and that rule outlived the palette change** — which is the test of whether it was ever about colour. The two places one would be reached for are both places Part 1 explicitly forbids alarming: the platform-fee caption (a routine, permanent, correct fact — *The Caption Problem*) and an empty dashboard (*The Mirror Risk*). A system that owns the token will use it in exactly those two places within a month.
 
 States that are neither success nor failure — "under review", "requirements outstanding", "nothing yet today" — are carried by **words and position**, in neutral. That is Part 1's explanation-over-suppression rule expressed in the palette.
+
+**These tokens are enforced, not merely written down.** `apps/frontend/src/styles/tokens.contrast.spec.ts` re-derives every ratio on this page from `tokens.css` itself and fails on drift — a text value that passes on the ground and fails deeper, light text on the accent fill, a fourth text level, a `--warning` token appearing, a re-ordered surface ladder that would make "deepest" a lie, or the terminal being scoped somewhere it could be repainted.
 
 ## Type
 

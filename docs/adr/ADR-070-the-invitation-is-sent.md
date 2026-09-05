@@ -1,6 +1,6 @@
 ---
 title: ADR-070 — The invitation is sent, and the token leaves the API response
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -57,7 +57,9 @@ Without it the e2e suite, which boots the real `AppModule` and therefore the rea
 
 **It refuses rather than quietly succeeding.** A silent no-op would write `SENT` into an audit record for a message nobody was handed, and a delivery record that lies is worse than none. The refusal lands in `EmailDelivery.lastError`, visible and true.
 
-**The consequence, stated plainly: the wire is exercised in production and nowhere else.** That is precisely what a single live verification is for, and it is the next step.
+**The consequence, stated plainly: the wire is exercised in production and nowhere else.** That is precisely what a single live verification is for.
+
+**Amended 2026-09-04 (ADR-071): that verification is NOT the next step, and this sentence originally said it was.** Preparing it found that production has no Organization, so the check could only run by creating an Organization, a Restaurant and a Stripe connected account for the purpose of testing. The Founder decided against that; the live check waits for the first real venue, whose first invitation becomes the verification. **The wire therefore remains unexercised**, and what the deploy proves is only that `RESEND_API_KEY` is present and well-formed, since boot requires it.
 
 ---
 

@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   ACCENT_PALETTE,
   CONTRAST_FLOOR,
-  DEFAULT_ACCENT_ID,
   ON_ACCENT_DARK,
   ON_ACCENT_LIGHT,
   REJECTED_ACCENTS,
@@ -14,13 +13,19 @@ import {
  * `docs/DESIGN_SYSTEM.md` Part 2 is written to one standard, the Founder's: **measured, or it
  * does not exist.** A number that lives only in a document decays — someone nudges a hex, the
  * prose still claims the old ratio, and nothing anywhere notices. This file is what stops that:
- * every ratio the document states is re-derived here from `tokens.css` itself, so the document
- * and the code cannot drift apart silently.
+ * every ratio the document states is re-derived here from `tokens.css` itself.
  *
- * It is deliberately written to fail against a plausible wrong implementation, per
- * `CLAUDE.md`'s Testing Philosophy — a colour typo, a ramp step swapped for a neighbouring one,
- * one of the two dark blocks updated without the other, or a green accent slipped into the
- * customisation palette each break a specific assertion below.
+ * ── THE FLOOR IS MEASURED FROM THE DEEPEST SURFACE (ADR-072) ────────────────────────────────
+ * Every text colour is checked against **every** surface it can land on, which means the
+ * binding measurement is against the deepest one. Checking only the ground would certify a
+ * value that fails on the very card it is most likely to be used in — the exact hole this
+ * rewrite closes, and the second falsification below exists to prove the check has teeth.
+ *
+ * Written to fail against a plausible wrong implementation, per `CLAUDE.md`'s Testing
+ * Philosophy. Two failures are named explicitly because they were specified as the acceptance
+ * condition for this change, and both are verified by execution rather than by reading:
+ *   1. light text on the accent fill must break a test;
+ *   2. a text value that passes on the ground and fails on the deepest surface must break one.
  */
 
 // ── measurement ────────────────────────────────────────────────────────────────────────────
@@ -64,12 +69,7 @@ const CSS = readFileSync(join(__dirname, "tokens.css"), "utf8");
 // comment must never be able to satisfy an assertion about the code.
 const STRIPPED = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
 
-/**
- * Declarations of one selector block, merged across every occurrence of that selector.
- * Matches innermost blocks only, which is what makes the `@media`-nested dark block parse
- * correctly — an earlier version split on braces and silently read the `@media` line as the
- * selector, so the two dark blocks appeared to differ when they did not.
- */
+/** Declarations of one selector block, merged across every occurrence of that selector. */
 function block(selector: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const m of STRIPPED.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
@@ -79,10 +79,8 @@ function block(selector: string): Record<string, string> {
       const idx = decl.indexOf(":");
       if (idx === -1) continue;
       const k = decl.slice(0, idx).trim();
-      // Whitespace is stripped, not trimmed: Prettier wraps a long declaration across lines
-      // (`var(\n  --n-400\n)`), which is cosmetic but made two identical values compare
-      // unequal. Every value in this file is a single token — a hex, a `var()`, a length —
-      // so there is no whitespace here that carries meaning.
+      // Whitespace is stripped, not trimmed: Prettier wraps a long declaration across lines,
+      // which is cosmetic but made two identical values compare unequal.
       if (k.startsWith("--")) out[k] = decl.slice(idx + 1).replace(/\s+/g, "");
     }
   }
@@ -91,7 +89,7 @@ function block(selector: string): Record<string, string> {
 
 const root = block(":root");
 
-/** Resolves one level of `var(--x)` against the ramp, which is all these tokens ever use. */
+/** Resolves one level of `var(--x)`, which is all these tokens ever use. */
 function resolve(value: string | undefined, scope: Record<string, string>): string {
   if (!value) throw new Error("token missing from tokens.css");
   const ref = /^var\((--[a-z0-9-]+)\)$/.exec(value);
@@ -101,88 +99,221 @@ function resolve(value: string | undefined, scope: Record<string, string>): stri
   return target;
 }
 
-function surface(selector: string): { ground: string; text: string; muted: string; rule: string } {
+interface Surface {
+  ground: string;
+  surfaces: string[];
+  text: string;
+  muted: string;
+  faint: string;
+  rule: string;
+}
+
+function surface(selector: string): Surface {
   const b = selector === ":root" ? root : { ...root, ...block(selector) };
+  const r = (k: string): string => resolve(b[k], b);
   return {
-    ground: resolve(b["--ground"], b),
-    text: resolve(b["--text"], b),
-    muted: resolve(b["--text-muted"], b),
-    rule: resolve(b["--rule"], b),
+    ground: r("--ground"),
+    // Every surface a text colour can land on, deepest included. The floor is measured against
+    // all of them, so the binding one is whichever is hardest to read against.
+    surfaces: [r("--ground"), r("--surface"), r("--surface-2"), r("--surface-3")],
+    text: r("--text"),
+    muted: r("--text-muted"),
+    faint: r("--text-faint"),
+    rule: r("--rule"),
   };
 }
 
+const PORTAL = ":root";
+const TERMINAL = '[data-surface="terminal"]';
+
 // ── the documented numbers, exactly as DESIGN_SYSTEM.md Part 2 states them ──────────────────
 
-const DOCUMENTED = {
-  portalLight: { selector: ":root", text: 18.46, muted: 4.92, rule: 1.4 },
-  portalDark: { selector: '[data-theme="dark"]', text: 18.46, muted: 5.85, rule: 1.41 },
-  terminal: { selector: '[data-surface="terminal"]', text: 19.29, muted: 5.14, rule: 1.14 },
+const DOCUMENTED_PORTAL = {
+  text: { onGround: 15.34, onDeepest: 11.21 },
+  muted: { onGround: 9.33, onDeepest: 6.82 },
+  faint: { onGround: 6.53, onDeepest: 4.77 },
+  rule: 1.63,
 } as const;
 
-describe("design tokens — surfaces", () => {
-  for (const [name, spec] of Object.entries(DOCUMENTED)) {
-    it(`${name}: text and muted match the ratios DESIGN_SYSTEM.md records, and clear the 4.5 floor`, () => {
-      const s = surface(spec.selector);
-      expect(contrast(s.text, s.ground)).toBe(spec.text);
-      expect(contrast(s.muted, s.ground)).toBe(spec.muted);
-      // The floor is the point of the muted step. `#7A756D` looks like unmistakably readable
-      // grey and measures 4.38 — it was caught here, by number, not by eye.
-      expect(contrast(s.muted, s.ground)).toBeGreaterThanOrEqual(CONTRAST_FLOOR);
-    });
-  }
+const ACCENT = "#ffe500";
+const INK = "#161615";
 
-  it("rules divide light and dark with equal emphasis — within 0.01 of each other", () => {
-    const light = surface(":root");
-    const dark = surface('[data-theme="dark"]');
-    const lightRule = contrast(light.rule, light.ground);
-    const darkRule = contrast(dark.rule, dark.ground);
-    expect(lightRule).toBe(DOCUMENTED.portalLight.rule);
-    expect(darkRule).toBe(DOCUMENTED.portalDark.rule);
-    // A divider wants ~1.4:1 — enough to separate, not enough to catch the eye. The two
-    // surfaces landing together is a large part of why they read as one product.
-    // Compared in whole hundredths: `1.41 - 1.40` is 0.010000000000000009 in binary floating
-    // point, so a direct `<= 0.01` fails on a pair that is exactly one hundredth apart.
-    expect(Math.round(Math.abs(lightRule - darkRule) * 100)).toBeLessThanOrEqual(1);
+describe("design tokens — the Portal is dark, and there is no light Portal", () => {
+  it("has exactly one Portal appearance: no theme toggle, no colour-scheme branch", () => {
+    // Those mechanisms carried a second Portal appearance. There is no second appearance, and a
+    // toggle that switches between one thing and itself is a mechanism with nothing behind it.
+    expect(STRIPPED).not.toMatch(/\[data-theme="light"\]/);
+    expect(STRIPPED).not.toMatch(/\[data-theme="dark"\]/);
+    expect(STRIPPED).not.toMatch(/prefers-color-scheme/);
+    // The abolished amber must be gone as a value, not merely unreferenced.
+    expect(STRIPPED.toLowerCase()).not.toContain("#9a5d14");
+    expect(STRIPPED.toLowerCase()).not.toContain("#e0a050");
   });
 
-  it("the two dark blocks agree — the media query and the explicit data-theme override", () => {
-    // These are maintained by hand as two blocks, so they are exactly the pair that drifts:
-    // someone edits one and the toggle silently stops matching the OS preference.
-    const media = block(':root:not([data-theme="light"])');
-    const explicit = block('[data-theme="dark"]');
-    expect(Object.keys(explicit).length).toBeGreaterThan(0);
-    for (const [token, value] of Object.entries(explicit)) {
-      expect(media[token], `${token} differs between the dark blocks`).toBe(value);
+  it("the surface ladder actually deepens — `--surface-3` is the deepest, not just the last named", () => {
+    // Load-bearing for everything below: the floor is described as "measured from the deepest
+    // surface", and that sentence is only true while the ladder is ordered. Reordering the
+    // values would leave every ratio assertion passing while measuring the wrong pair.
+    const p = surface(PORTAL);
+    const lums = p.surfaces.map(relativeLuminance);
+    for (let i = 1; i < lums.length; i++) {
+      expect(lums[i], `surface ${i} is not lighter than surface ${i - 1}`).toBeGreaterThan(
+        lums[i - 1],
+      );
     }
-  });
-
-  it("light can be pinned on a subtree, not only inherited from :root", () => {
-    // Found by rendering the specimen on a dark machine: the card meant to demonstrate the
-    // light default rendered dark, because light lived only on `:root` and the media query
-    // matched it. `[data-theme="light"]` is attribute-scoped for the same reason the terminal
-    // is — "pin a surface" has to mean one thing everywhere, or each surface grows its own
-    // rules and they drift.
-    const light = surface('[data-theme="light"]');
-    const rootLight = surface(":root");
-    expect(light.ground).toBe(rootLight.ground);
-    expect(light.text).toBe(rootLight.text);
-    expect(light.muted).toBe(rootLight.muted);
-  });
-
-  it("the terminal cannot be darkened by a guest's own device preference", () => {
-    // Load-bearing, not incidental: the terminal's surface is chosen on legibility — it may be
-    // read in direct sunlight — so `prefers-color-scheme` must not repaint it. Custom
-    // properties on a descendant beat inherited ones regardless of ancestor specificity, which
-    // only holds while the terminal is scoped to a wrapper rather than to :root.
-    const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(stripped).toContain('[data-surface="terminal"] {');
-    expect(stripped).not.toMatch(/:root\[data-surface="terminal"\]/);
-    expect(surface('[data-surface="terminal"]').ground).toBe(root["--n-0"]);
   });
 });
 
-describe("design tokens — accent", () => {
-  it("every palette value measures what it claims, and clears the floor on both surfaces", () => {
+describe("design tokens — text clears the floor on EVERY surface, not just the ground", () => {
+  it("the Portal's three text levels measure what DESIGN_SYSTEM.md records", () => {
+    const p = surface(PORTAL);
+    const deepest = p.surfaces[p.surfaces.length - 1];
+    expect(contrast(p.text, p.ground)).toBe(DOCUMENTED_PORTAL.text.onGround);
+    expect(contrast(p.text, deepest)).toBe(DOCUMENTED_PORTAL.text.onDeepest);
+    expect(contrast(p.muted, p.ground)).toBe(DOCUMENTED_PORTAL.muted.onGround);
+    expect(contrast(p.muted, deepest)).toBe(DOCUMENTED_PORTAL.muted.onDeepest);
+    expect(contrast(p.faint, p.ground)).toBe(DOCUMENTED_PORTAL.faint.onGround);
+    expect(contrast(p.faint, deepest)).toBe(DOCUMENTED_PORTAL.faint.onDeepest);
+  });
+
+  // THE SECOND FALSIFICATION, and the reason this loops over surfaces instead of checking the
+  // ground: a value that passes on `#161615` and fails on `#30302D` must break a test. It does —
+  // verified by substituting one and watching this assertion fail, not by reading it.
+  for (const [name, selector] of [
+    ["portal", PORTAL],
+    ["terminal", TERMINAL],
+  ] as const) {
+    it(`${name}: every text level clears ${CONTRAST_FLOOR} against every surface it can land on`, () => {
+      const s = surface(selector);
+      for (const [level, colour] of [
+        ["text", s.text],
+        ["muted", s.muted],
+        ["faint", s.faint],
+      ] as const) {
+        for (const bg of s.surfaces) {
+          expect(contrast(colour, bg), `${name} ${level} on ${bg}`).toBeGreaterThanOrEqual(
+            CONTRAST_FLOOR,
+          );
+        }
+      }
+    });
+  }
+
+  it("the rule divides without catching the eye", () => {
+    expect(contrast(surface(PORTAL).rule, surface(PORTAL).ground)).toBe(DOCUMENTED_PORTAL.rule);
+  });
+});
+
+describe("design tokens — the accent, and the one ink that may sit on it", () => {
+  it("is the single yellow, on every surface — one accent, never a hardcoded colour", () => {
+    expect(root["--accent"]?.toLowerCase()).toBe(ACCENT);
+    // The terminal does not get its own accent: there is one, and it is this one.
+    const terminal = { ...root, ...block(TERMINAL) };
+    expect(resolve(terminal["--accent"], terminal).toLowerCase()).toBe(ACCENT);
+  });
+
+  it("measures 14.19 on the Portal ground and 10.38 on the deepest surface", () => {
+    const p = surface(PORTAL);
+    expect(contrast(ACCENT, p.ground)).toBe(14.19);
+    expect(contrast(ACCENT, p.surfaces[p.surfaces.length - 1])).toBe(10.38);
+  });
+
+  // THE FIRST FALSIFICATION. Asserted by RATIO rather than by equality on purpose: an equality
+  // check only catches the one wrong value someone happens to think of, while the ratio catches
+  // every wrong value there is. `#EFECE4` on `#FFE500` measures 1.08 — not "low contrast",
+  // invisible — and setting `--on-accent` to it fails this line.
+  it("text on an accent fill clears the floor, which only the ink does", () => {
+    const onAccent = resolve(root["--on-accent"], root);
+    expect(contrast(onAccent, ACCENT)).toBeGreaterThanOrEqual(CONTRAST_FLOOR);
+    expect(onAccent.toLowerCase()).toBe(INK);
+  });
+
+  it("the light text token on the accent fill is recorded as unusable, not merely unused", () => {
+    // The number is what makes the rule survive a redesign: someone will propose light text on
+    // the yellow because it looks calmer, and 1.08 ends that conversation without an argument.
+    const p = surface(PORTAL);
+    expect(contrast(p.text, ACCENT)).toBe(1.08);
+    expect(contrast(p.text, ACCENT)).toBeLessThan(CONTRAST_FLOOR);
+  });
+});
+
+describe("design tokens — there is no fourth text level, and there will not be", () => {
+  it("exactly three text colours exist, in the ladder and in the semantic layer", () => {
+    // `--text-hero` and friends share the prefix but are lengths, so the filter is on the VALUE
+    // being a colour rather than on the name. A fourth level would have to be a hex under a
+    // `--text-*` name, and that is precisely what this refuses.
+    const colours = Object.entries(root)
+      .filter(([k, v]) => k.startsWith("--text") && /^#[0-9a-f]{6}$/i.test(resolve(v, root)))
+      .map(([k]) => k)
+      .sort();
+    expect(colours).toEqual(["--text", "--text-faint", "--text-muted"]);
+
+    const ladder = Object.keys(root)
+      .filter((k) => k.startsWith("--p-text"))
+      .sort();
+    expect(ladder).toEqual(["--p-text-faint", "--p-text-muted", "--p-text"].sort());
+  });
+
+  it("there is no room for one: the faintest passing value sits 0.27 above the floor", () => {
+    // This is the whole argument, made executable rather than asserted in prose. A fourth level
+    // would have to fit between `--text-faint` (4.77 on the deepest surface) and the floor
+    // itself (4.5). Anything in that band differs from `--text-faint` by less than a third of a
+    // ratio point — one token with a typo, not two roles.
+    //
+    // It is also a live guard rather than a decoration: if the deepest surface were ever
+    // lightened, the headroom would grow, this assertion would fail, and the decision would have
+    // to be re-read instead of quietly reversed.
+    const p = surface(PORTAL);
+    const headroom = contrast(p.faint, p.surfaces[p.surfaces.length - 1]) - CONTRAST_FLOOR;
+    expect(Number(headroom.toFixed(2))).toBe(0.27);
+    expect(headroom).toBeLessThan(0.5);
+  });
+});
+
+describe("design tokens — semantic state", () => {
+  it("success and error clear the floor on every Portal surface", () => {
+    const p = surface(PORTAL);
+    for (const token of ["--success", "--error"]) {
+      const colour = resolve(root[token], root);
+      for (const bg of p.surfaces) {
+        expect(contrast(colour, bg), `${token} on ${bg}`).toBeGreaterThanOrEqual(CONTRAST_FLOOR);
+      }
+    }
+  });
+
+  it("there is no warning colour, and that rule outlives the palette", () => {
+    // The palette changed completely; this did not. The two places a warning colour gets reached
+    // for are the two places DESIGN_SYSTEM.md forbids alarming — the platform-fee caption and an
+    // empty dashboard. A system that owns the token will use it there within a month.
+    expect(STRIPPED).not.toMatch(/--warning/);
+    expect(STRIPPED).not.toMatch(/--caution/);
+  });
+});
+
+describe("design tokens — the guest terminal stays light", () => {
+  it("cannot be repainted by anything above it", () => {
+    // Load-bearing, not incidental: the terminal's surface is chosen on legibility — it may be
+    // read in direct sunlight — so nothing outside it may darken it. Custom properties on a
+    // descendant beat inherited ones regardless of ancestor specificity, which only holds while
+    // the terminal is scoped to a wrapper rather than to :root.
+    expect(STRIPPED).toContain('[data-surface="terminal"] {');
+    expect(STRIPPED).not.toMatch(/:root\[data-surface="terminal"\]/);
+    expect(surface(TERMINAL).ground).toBe(root["--n-0"]);
+  });
+
+  it("defines every surface token, so nothing inside it inherits a Portal-dark value", () => {
+    // An undefined `--surface-2` here would resolve to `#262624` on a white page. The terminal
+    // pins its deep surfaces to `--surface` deliberately: it is a single-purpose payment screen
+    // with nothing stacked three levels down.
+    const t = surface(TERMINAL);
+    for (const bg of t.surfaces) {
+      expect(relativeLuminance(bg)).toBeGreaterThan(0.5);
+    }
+  });
+});
+
+describe("design tokens — the restaurant-branding palette (its own feature, ADR-039)", () => {
+  it("every palette value measures what it claims, and clears the floor", () => {
     for (const a of ACCENT_PALETTE) {
       expect(contrast(a.light, ON_ACCENT_LIGHT), `${a.id} light`).toBe(a.lightOnAccent);
       expect(contrast(a.dark, ON_ACCENT_DARK), `${a.id} dark`).toBe(a.darkOnAccent);
@@ -192,76 +323,29 @@ describe("design tokens — accent", () => {
   });
 
   it("no palette value is green or red — the exclusion is structural, not stylistic", () => {
-    // A brand accent that collides with --success or --error makes "press this" and "this
-    // worked" indistinguishable on the terminal, where a guest gets ten seconds. This is why
-    // the customisation feature offers a fixed list and never a colour picker: a free hex
-    // field cannot enforce a hue exclusion. Here that constraint is executable.
     for (const a of ACCENT_PALETTE) {
       for (const value of [a.light, a.dark]) {
         const h = hue(value);
-        const isGreen = h >= 85 && h <= 170;
-        expect(isGreen, `${a.id} ${value} sits in the success-green range`).toBe(false);
-        const isRed = h >= 345 || h <= 20;
-        expect(isRed, `${a.id} ${value} sits in the error-red range`).toBe(false);
+        expect(h >= 85 && h <= 170, `${a.id} ${value} sits in the success-green range`).toBe(false);
+        expect(h >= 345 || h <= 20, `${a.id} ${value} sits in the error-red range`).toBe(false);
       }
     }
   });
 
-  it("the CSS default is the amber the palette names, not a literal that drifted from it", () => {
-    const amber = ACCENT_PALETTE.find((a) => a.id === DEFAULT_ACCENT_ID);
-    expect(amber).toBeDefined();
-    expect(root["--accent-light"]?.toLowerCase()).toBe(amber?.light.toLowerCase());
-    expect(root["--accent-dark"]?.toLowerCase()).toBe(amber?.dark.toLowerCase());
-  });
-
-  it("the default is the weakest value in its own set — recorded, not hidden", () => {
-    // Not a defect. Amber is chosen for what it means in this industry rather than for its
-    // ratio, and it clears the floor with real headroom. The assertion exists so the fact
-    // stays true and visible: if a later edit made some alternate weaker than the default,
-    // that would mean the palette changed shape and the record should be re-read.
-    const amber = ACCENT_PALETTE.find((a) => a.id === DEFAULT_ACCENT_ID)!;
-    const alternates = ACCENT_PALETTE.filter((a) => a.id !== DEFAULT_ACCENT_ID);
-    for (const alt of alternates) {
-      expect(alt.lightOnAccent).toBeGreaterThan(amber.lightOnAccent);
-    }
-  });
-
   it("the rejected amber still fails, which is why it is kept", () => {
-    // #B5701F looks like a perfectly good amber. It measured 3.87 against the pay button's own
-    // text — under the floor, on the one screen where a stranger gets ten seconds. Keeping the
-    // measurement executable is what turns "let's brighten it up" from a taste debate back
-    // into a contrast failure.
     for (const r of REJECTED_ACCENTS) {
       expect(contrast(r.hex, ON_ACCENT_LIGHT)).toBe(r.measuredOnAccentLight);
       expect(contrast(r.hex, ON_ACCENT_LIGHT)).toBeLessThan(CONTRAST_FLOOR);
     }
   });
-});
 
-describe("design tokens — semantic state", () => {
-  it("success and error clear the floor on both surfaces", () => {
-    const light = surface(":root");
-    const dark = surface('[data-theme="dark"]');
-    const pairs: [string, string][] = [
-      [root["--success-light"], light.ground],
-      [root["--error-light"], light.ground],
-      [root["--success-dark"], dark.ground],
-      [root["--error-dark"], dark.ground],
-    ];
-    for (const [colour, ground] of pairs) {
-      expect(contrast(colour, ground)).toBeGreaterThanOrEqual(CONTRAST_FLOOR);
-    }
-  });
-
-  it("there is no warning colour, and that is the decision", () => {
-    // DESIGN_SYSTEM.md: the two places one gets reached for are the two places the document
-    // forbids alarming — the platform-fee caption and an empty dashboard. A system that owns
-    // an amber warning token will use it in exactly those two places within a month. Not
-    // having the token is cheaper than the discipline of not using it, so its absence is
-    // asserted rather than merely intended.
-    const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(stripped).not.toMatch(/--warning/);
-    expect(stripped).not.toMatch(/--caution/);
+  it("no longer describes the Portal's accent, and that gap is asserted rather than assumed", () => {
+    // ADR-072 abolished the amber and fixed the Portal accent at one value. This palette still
+    // exists as data for a feature that has not shipped, and its whole shape — a light value and
+    // a dark value per accent — describes two Portal appearances that no longer exist. Asserting
+    // the disconnection stops someone reading the palette as if it still governed the Portal.
+    const hexes = ACCENT_PALETTE.flatMap((a) => [a.light.toLowerCase(), a.dark.toLowerCase()]);
+    expect(hexes).not.toContain(ACCENT);
   });
 });
 
@@ -273,13 +357,9 @@ describe("design tokens — the Hierarchy Law, as arithmetic", () => {
   });
 
   it("no other role exceeds 0.625x the hero, so a second rank-1 element is impossible", () => {
-    // This is what makes the Hierarchy Law enforceable rather than advisory: "make it bigger"
-    // stops being a specification and a review can fail on a number instead of an opinion.
-    //
-    // The constant is 0.625, not the 0.62 DESIGN_SYSTEM.md first wrote. The rule was derived
-    // from the intended pair (48 -> 30) and then rounded DOWN in prose, which made the
-    // document forbid its own example. Caught by this test on its first run; the document was
-    // corrected to match the arithmetic rather than the arithmetic bent to match the prose.
+    // What makes the Hierarchy Law enforceable rather than advisory: "make it bigger" stops
+    // being a specification and a review can fail on a number instead of an opinion. Survives
+    // the palette change — it is about hierarchy, not taste.
     const hero = px("--text-hero");
     for (const token of ["--text-hero-2", "--text-title", "--text-body", "--text-small"]) {
       expect(px(token) / hero, `${token} competes with the hero`).toBeLessThanOrEqual(0.625);
