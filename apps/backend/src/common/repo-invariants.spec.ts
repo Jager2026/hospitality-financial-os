@@ -530,7 +530,7 @@ describe("repository invariants", () => {
     // eight files as unread, `scripts/preflight-deploy.js` included, which has been in the include
     // list since #82. It failed by finding EVERYTHING, which is the loud direction and is why it
     // was caught in one run.
-    const ANY_DEPTH = " ";
+    const ANY_DEPTH = "<<any-depth>>";
     const matchers = include.map(
       (pattern) =>
         new RegExp(
