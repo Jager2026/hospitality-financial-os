@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.27.0
+version: 2.28.0
 status: Active
 classification: Critical
 priority: Highest
@@ -381,6 +381,14 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Neither diagnosis used the instrument built for exactly this**, which is a separate problem and has its own entry below.
 
   **Corrected on 2026-09-02 by measurement, and the correction changes which number to watch.** `unpublished` as printed — `publishedAt IS NULL` — is the wrong count. It mixes two populations: rows that are merely *not yet polled* (other spec files write Outbox events and never call `poll()`), and rows that are *permanently unpublishable* (the deliberately malformed ones, retried forever because the batch query has no `attempts` filter). Only the second population can crowd a batch. Measured directly: the dev database read **85 unpublished** and the full suite passed twice at that level; one isolated run of `outbox-poller.service.spec.ts` against those 85 dropped the count to **15**, all with `attempts` between 8 and 150 — the permanent debris, and nothing else. **The threshold that matters is permanently-unpublishable rows against a batch of 50, and it sat at 15 after many runs.** The earlier figures in this entry (61, 16) were the mixed count and should be read as such. `global-setup.ts`'s warning still fires on the mixed count and will therefore warn early; that is the safe direction, but it means a warning is not yet a diagnosis.
+
+  **The mechanism has TWO variants, and everything above describes only one of them (2026-09-05, block closure #117–#156, part 3).** Recorded rather than fixed — the repair is test infrastructure and is its own axis.
+
+  Everything in this entry so far is **accumulation across runs**: rows survive, the count climbs, and a later run trips over what earlier ones left. The second variant is **interference inside a single run**, and it was measured on a database that had been reset immediately beforehand. `dashboard.service.spec.ts` and `analytics.service.spec.ts` each timed out at 5.06 s against the 5000 ms default while the log filled with `Invalid tx.ledgerLine.findMany() invocation … Error creating UUID … found 'n' at 1` — the real Outbox poller, running inside the `AppModule` those specs boot, hitting the `payload: { journalEntryId: "not-a-valid-uuid" }` rows that `outbox-poller.service.spec.ts` writes deliberately in a **parallel vitest worker**. Both files then passed in isolation, 37 of 37, which is what separates interference from a defect in the specs themselves.
+
+  **The counter cannot observe this variant, and the reason is structural rather than a tuning problem: it measures at setup, and at setup the debris does not exist yet.** The printout for that failing run read `outbox: 0 (0 unpublished)` and was accurate. So the instrument is not merely early here — it is measuring a quantity that is *necessarily* zero at the moment it is taken. Any remedy aimed at the printed number (raise the threshold, make the warning louder) addresses the first variant only.
+
+  **Consequence for whoever picks this up: a fix for accumulation does not fix interference.** Per-file transactional rollback would close both; a cleanup hook that runs between files closes only the first, and would have left this failure exactly where it is.
 
   **An unreproduced failure on the same day, recorded rather than closed.** 2026-09-02, branch `docs/masterplan-positioning` (documentation only, code identical to `main`): `db:reset` followed by the full suite → **one backend test failed, 343 of 344**; frontend green. **The log was deleted before it was read**, and two subsequent full runs were green (344/344). vitest's `results.json` was checked afterwards and had already been overwritten by the green runs. **Known:** it was not this entry's mechanism — the run was on a freshly reset database, and the poller spec passes in isolation against far more debris than a fresh database holds. **Unknown:** which test, which assertion. It stays open as a failure of unknown cause; two green runs establish non-reproducibility, not absence. The rule this produced is in `CLAUDE.md`, Testing Review.
 
