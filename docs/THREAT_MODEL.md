@@ -1,6 +1,6 @@
 ---
 title: THREAT_MODEL
-version: 1.18.0
+version: 1.19.0
 status: Active
 classification: Critical
 owner: Founder
@@ -184,7 +184,9 @@ Worth stating plainly since it is now a matter of record: **production is alread
 ## 18. No automated, recurring check for known-vulnerable dependencies (OWASP A03:2025, Software Supply Chain Failures)
 **Threat:** As stated in the entry this closes — a new CVE against an already-installed dependency produced no signal until someone thought to run `pnpm audit` by hand.
 
-**Closed by:** ADR-032 Decision 2. CI now runs a real `Dependency vulnerability scan` step (`.github/scripts/check-audit.js`) on every PR — high/critical severity fails the build. Confirmed working both directions before merging: currently green (with 4 known, explicitly-justified, dev-tooling-only advisories ignored by id), and confirmed to genuinely fail when a covered advisory is *not* in the ignore list.
+**Closed by:** ADR-032 Decision 2. CI now runs a real `Dependency vulnerability scan` step (`.github/scripts/check-audit.js`) on every PR — high/critical severity fails the build. Confirmed working both directions before merging: confirmed to genuinely fail when a covered advisory is *not* in the ignore list, and confirmed green.
+
+**The ignore list is EMPTY, and the correction matters more than the number.** This entry said the scan was green *“with 4 known, explicitly-justified, dev-tooling-only advisories ignored by id”*. That was true when written and stopped being true with ADR-037: `check-audit.js:27` reads `const IGNORED_ADVISORIES = {};`, and the vitest 2→3 upgrade removed the four advisories rather than re-justifying them — which `IMPLEMENTATION_PLAN.md` already recorded and this document did not. **Nothing is excused today. The gate fails on any high or critical advisory, with no exceptions to inspect.** Corrected 2026-09-05 (block closure #117–#156, part 2), where the contradiction was settled by reading the code rather than either document.
 
 ## 19. No breached-password check at registration (OWASP A07:2025, Authentication Failures)
 **Threat:** Half of the original combined entry ("no MFA and no breached-password check") — a user could pick a password already known to be in a public breach corpus, with no way for this system to know. The MFA half is **not** closed by this — see the Open, Not Answered entry below, which now stands on its own.

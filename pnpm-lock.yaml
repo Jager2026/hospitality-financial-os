@@ -216,19 +216,7 @@ importers:
 
   packages/config: {}
 
-  packages/shared:
-    devDependencies:
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
-
   packages/types:
-    devDependencies:
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
-
-  packages/ui:
     devDependencies:
       typescript:
         specifier: ^5.5.0

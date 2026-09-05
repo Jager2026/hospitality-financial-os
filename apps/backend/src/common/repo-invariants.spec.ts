@@ -556,7 +556,21 @@ describe("repository invariants", () => {
       }
     })(REPO_ROOT);
 
-    const claiming = scripts.filter((file) => readFileSync(file, "utf8").includes("@ts-check"));
+    // A CLAIM, not a mention. `includes("@ts-check")` was the first version of this and it could
+    // not tell the two apart: the very next file written in this repository was one explaining, in
+    // a docstring, why it deliberately carries no `@ts-check` — and the invariant flagged it. A
+    // checker that punishes a file for discussing the rule is a checker nobody can write around
+    // honestly, so the fix is the matcher rather than the comment.
+    //
+    // TypeScript honours the directive as a line comment of its own, so that is what is matched:
+    // a line whose entire trimmed content is `// @ts-check`. Every real claimant in the repository
+    // writes it exactly that way, on line 1 or 2.
+    const claims = (file: string): boolean =>
+      readFileSync(file, "utf8")
+        .split("\n")
+        .some((line) => line.trim() === "// @ts-check");
+
+    const claiming = scripts.filter(claims);
 
     // Non-vacuity: if the walk found nothing that claims to be checked, the assertion below would
     // pass while checking nothing — the shape this suite has already been bitten by twice.
