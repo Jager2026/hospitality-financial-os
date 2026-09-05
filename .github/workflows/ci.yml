@@ -1,8 +1,23 @@
 name: CI
 
 on:
+  # NO `branches:` FILTER HERE, AND IT IS NOT AN OVERSIGHT — DO NOT ADD ONE BACK (ADR-073).
+  #
+  # `lint-typecheck-test-build` below is the ONLY required status check on `main`. A base-branch
+  # filter made it conditional on where the pull request happened to point, so a stacked pull
+  # request ran it not at all: no red mark, no pending mark, no check on the page. That is not a
+  # weaker signal than a failure — it is the SAME PAGE as success, which is why it went unnoticed
+  # until #151 and #153 were measured (`browser-e2e` only, and no checks whatsoever, respectively).
+  #
+  # The required check is the one thing that must never be conditional on anything, because the
+  # distinction between "did not run" and "passed" cannot be made by the thing that did not run.
+  # Stacking is legitimate when the work genuinely depends on an open pull request (CLAUDE.md), so
+  # the fix is to verify those pull requests, not to forbid them.
+  #
+  # Cost, stated rather than hidden: a stacked pull request now runs the full job, and so does its
+  # rebase after the parent merges. That is minutes on a branch that would otherwise have merged
+  # unverified.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 

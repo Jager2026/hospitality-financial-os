@@ -1,7 +1,7 @@
 ---
 title: ADR-073 — A check that did not run reports nothing, and nothing looks like green
-version: 1.0.0
-status: Proposed
+version: 1.1.0
+status: Accepted
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,7 +9,10 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-073 — A check that did not run reports nothing, and nothing looks like green
 
-**Status:** Proposed (Sprint 15), 2026-09-04. **The class is recorded; the remedy is not chosen.** No workflow is changed by this ADR.
+**Status:** Accepted in part (Sprint 15), 2026-09-04, amended 2026-09-05.
+
+- **v1.0.0 recorded the class and changed nothing.**
+- **v1.1.0 closes one of the three instances with a mechanism** — the base-branch filter — and establishes by measurement, not by reading, that the obvious fix for the second instance would brick the repository. **The `paths` instance stays open, deliberately, and the branch-protection change must NOT be made yet.** See *The trap, measured* below.
 
 ---
 
@@ -77,7 +80,7 @@ Two things follow, and the second is the uncomfortable one:
 - **The class is not exotic.** It appeared three times in one week from three unrelated causes: a `paths` filter, a step ordering, and a base-branch filter. Each was invisible in a different way.
 - **This ADR's own delivery demonstrates the problem it describes.** That is the strongest evidence available that the record is worth keeping — and a reminder that recognising the class in the abstract did not stop me shipping into it an hour later.
 
-**Not fixed here.** Widening the trigger, or making the required check run against every base, is one of the same options below and belongs to the same decision.
+**Not fixed in v1.0.0. Fixed in v1.1.0** — the trigger is widened, and the reasoning is in *the base-branch instance, closed by mechanism* below.
 
 ---
 
@@ -99,6 +102,8 @@ Both branches are reachable from a test because the condition is passed in. The 
 ---
 
 ## The options, and none is chosen here
+
+**v1.1.0 note:** these four are the original texts and are kept rather than rewritten, because a measurement narrowed them afterwards. A′/B′/C′ below are these same options after the measurement; read this section for the reasoning and that one for what is actually on the table.
 
 The structural point first, because every viable option is a version of it:
 
@@ -130,16 +135,100 @@ A line in the pull-request report saying which checks did not run.
 
 ---
 
-## What this ADR deliberately does not do
+## v1.1.0 — the base-branch instance, closed by mechanism
 
-**It changes no workflow.** The class is worth recording on its own — the next instance will not look like this one, and the value of the record is the shape rather than the fix.
+`ci.yml`'s `pull_request` trigger loses its `branches: [main]` filter. The required check now runs on a pull request into **any** base.
 
-**It does not make `browser-e2e` required.** That is a branch-protection change, and `IMPLEMENTATION_PLAN.md` already carries a rule from ADR-072's decision: **protection rules are not edited while the queue is blocked.** Whether it should be required is part of the same decision as the options above, not a separate quick fix.
+This is the smallest of the three instances and the only one whose fix has no trade-off worth deliberating: the required check is, by definition, the one thing that may not be conditional on anything, because **the distinction between *did not run* and *passed* cannot be made by the thing that did not run.** A filter on it made merge-readiness depend on where a branch happened to point.
+
+**The reason it is a comment in the file and not only a line in this ADR:** the deleted filter looks like an omission. Somebody tidying the workflow re-adds it in one line and reintroduces the instance, and nothing goes red when they do — that is the whole property of this class. The comment states the cost as well, so the next reader is answering a recorded argument rather than an apparent oversight.
+
+**Cost, accepted:** a stacked pull request now runs the full job, and runs it again after its post-merge rebase. Minutes, on branches that were previously merging unverified.
+
+**What this does not do:** it does not make stacking cheap or recommended. CLAUDE.md's rule stands unchanged — branch from `main` unless the work genuinely depends on an open pull request. This makes the exception *verified*, not attractive.
+
+---
+
+## The trap, measured
+
+The obvious next step — add `browser-e2e` to the required checks — was put to the test before being proposed, because `enforce_admins: true` means a mistake here cannot be clicked past by anybody, including the Founder.
+
+**Method, and it is the point of this section:** a throwaway base branch was protected requiring `browser-e2e`, and a documentation-only pull request was opened into it. `main` was never touched; its protection was read before and after and is byte-identical. Everything was deleted afterwards.
+
+**Reading:**
+
+| Measured | Value |
+|---|---|
+| `e2e.yml` workflow runs for the head commit | **0** |
+| `browser-e2e` in the check list | **absent** — not skipped, not pending, not neutral |
+| Checks that did report | `lint-typecheck-test-build` **pass**, both Railway deploys **pass** |
+| `statusCheckRollup.state` | **SUCCESS** |
+| `mergeStateStatus` | **BLOCKED** |
+| Merge API | *"the base branch policy prohibits the merge"* |
+
+**The trap is real, and its shape is worse than "the pull request waits."**
+
+- The block is **permanent**, not slow. Nothing will ever produce that check run: the workflow was never triggered, so there is no run to re-run and no button to press.
+- **Every check on the page is green.** The rollup says SUCCESS. The blocker is the one name that is not on the list, which is the same perceptual failure as the original bug, arriving from the opposite direction — first a silence that read as success, now a success that hides a silence.
+- The only two exits GitHub offers are `--auto` (wait forever) and `--admin` (an administrator override). CLAUDE.md forbids the second in as many words, and `enforce_admins: true` disables it anyway.
+
+**A confirmation worth separating from the above, because it decides between the options below:** a workflow-level `paths:` filter that does not match produces **no workflow run at all** — measured as `total_count: 0` on #147's head, whose `github-actions` check suite contains exactly one check run. This is not the same as a job that GitHub skips: a job skipped by a job-level `if:` inside a workflow that *did* trigger still reports a conclusion, and a reported conclusion satisfies a required check. **The conditionality has to move from the workflow to the job for the check to be requirable at all.** That single fact is what makes option A cheap and option C unnecessary.
+
+---
+
+## The options for the `paths` instance, and none is chosen here
+
+The order matters more than the choice: **the branch-protection change is the LAST step of whichever option is picked, never the first.** Doing it first blocks every backend and documentation pull request with no way back except deleting the rule again.
+
+### A′ — move the condition from the workflow into the job
+
+`e2e.yml` triggers on every pull request; the `paths` decision becomes a first job that computes whether the frontend changed, and `browser-e2e` `needs:` it and self-skips. The check then **always reports** — success or skipped — and can be required safely.
+
+**Cost:** a few seconds of runner time per pull request for the decision job. **Weakness, unchanged from v1.0.0:** the skip condition still lives in the repository and widening it is a one-line edit — but it is now a visible edit to a job, not an invisible property of a trigger.
+
+**Cheapest of the three, and the fact above is why:** it is the only one that makes the check requirable without changing what actually runs.
+
+### B′ — a derived gate rather than a typed list
+
+The Founder's candidate, and ADR-060's move applied here: one required aggregating job that **reads `.github/workflows/` and derives** the set of jobs that must have reported, instead of holding a list somebody maintains.
+
+**What it buys over A′:** it closes the class rather than this instance. A future workflow that is conditional is caught by the deriving rule, not by somebody remembering. **What it costs:** a real script with a real failure mode, and CLAUDE.md's own warning applies to it directly — *a tool you wrote to check something errs in its own favour, and quietly*. `check-doc-index.js` is the precedent that it can be done well; it is also the precedent for how much work it is.
+
+**Not exclusive with A′.** A′ is the mechanism; B′ is the guard that stops the next instance. Doing A′ first and B′ later loses nothing.
+
+### C′ — remove the `paths` filter entirely
+
+Every pull request runs the E2E suite. No silence, because nothing is conditional.
+
+**Now measurable rather than estimated:** ADR-041 rejected this on the grounds that *"a slow check that runs on everything starts getting ignored"*. The suite's real cost should be read off recent runs before this is weighed again.
+
+**Superseded in practice by the measurement above:** A′ achieves requirability without paying this, so C′ is now the expensive way to buy the same property.
+
+### D — unchanged, still named to be refused
+
+A line in the report listing checks that did not run. It relies on a human noticing an absence.
+
+---
+
+## The branch-protection change, written out so it is not re-derived
+
+Recorded here rather than left in a conversation, because it is the step most likely to be taken out of order.
+
+**Repository → Settings → Branches → the `main` rule → Require status checks to pass before merging → search `browser-e2e` → add → Save.**
+
+**Do not do this yet.** Until A′ or C′ has merged, `browser-e2e` does not exist as a check on a backend-only or documentation-only pull request, and adding it makes those pull requests permanently unmergeable — measured above, not predicted. Two preconditions, both checkable:
+
+1. The chosen option has merged to `main`.
+2. A backend-only or documentation-only pull request has been observed to produce a `browser-e2e` check run with a conclusion — `skipped` counts, `absent` does not.
 
 ---
 
 ## Consequences
 
 **The rule to carry forward, in one line:** when a check is made conditional, ask what its silence will look like — and if silence is indistinguishable from success, the condition needs something that always runs to speak for it.
+
+**The rule v1.1.0 adds, and it is about the fix rather than the bug:** *making a silent check required does not make it speak.* Requiring a check that cannot report converts an invisible gap into a permanent block, and the block is invisible too — every check on the page stays green. Before requiring anything, establish that it reports on the pull requests where it does **not** apply, because that is the case the requirement is being added for.
+
+**A note on how that was established, since the method is the reusable part:** the question was answered by protecting a throwaway branch and opening one pull request into it, not by reading GitHub's documentation and not by trying it on `main`. A branch-protection rule is cheap to create and delete and expensive to be wrong about — `enforce_admins: true` means there is no override — so the experiment belongs somewhere disposable. This is the same discipline CLAUDE.md asks for on tools that check things: run it where the answer is already known, or where being wrong costs nothing.
 
 **This applies beyond CI.** Any mechanism that can decline to execute has the same property: a scheduled job that did not fire, a webhook that was never delivered, a poller that was not running. In each case the absence of a signal reads as the absence of a problem. `EmailDelivery` (ADR-069) is this project's one existing answer to that shape — a record written **before** the attempt, so that "nothing happened" is itself a visible row rather than an empty result set.
