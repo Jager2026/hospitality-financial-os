@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.29.0
+version: 2.30.0
 status: Active
 classification: Critical
 priority: Highest
@@ -363,7 +363,7 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   - The gate is satisfied by **either** that flag **or** `SEED_ALLOW_REVOCATIONS=1` in the environment (`seed.ts:270`), so the protection is **two absences, not one**. The environment variable is **not set on the production backend service** — verified by listing the service's variable names, 2026-09-05, not inferred from the repository, where it would be invisible either way.
   - With both absent, a divergence between `seed.ts` and production **fails the deploy** naming the Role and Permission, instead of revoking silently.
 
-  **So the honest form of the answer to "can a deploy silently revoke permissions in production?" is: no, and it is one line of configuration away from yes.** ADR-048 says as much — *"that word must never appear in `railway.backend.json` without its own ADR"* — and that rule has **no mechanism behind it**: nothing in CI or in the invariant suite reads `railway.backend.json` or the service's variables. It is a sentence in an ADR. Recorded here rather than fixed, because the fix is a guard and this correction is a document.
+  **So the honest form of the answer to "can a deploy silently revoke permissions in production?" is: no, and it is one line of configuration away from yes.** ADR-048 says as much — *"that word must never appear in `railway.backend.json` without its own ADR"* — and that rule has **no mechanism behind it**: nothing in CI or in the invariant suite reads `railway.backend.json` or the service's variables. It is a sentence in an ADR. **Scheduled as its own entry below — *ADR-048's flag rule has no mechanism, and only half of it can get one*** — because one half is buildable and the other is not, and folding them together would hide that.
 
   ADR-044's addendum records what the *previous* state cost: a shipped privilege-escalation fix that was not in effect in production for eleven days, because the code read a column the data never received. **That is the failure automation closed.** The Founder's formulation — *`seed.ts` describes production rather than making it so* — was the diagnosis of that period and no longer describes the system: since ADR-048 the seed does make it so, additively.
 
@@ -493,6 +493,18 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Where it belongs:** the invitation accept screen does not exist yet either, and that is the natural home for the agreement checkbox — the same screen, one change. Doing it before that screen exists would mean recording a consent nobody was shown.
 
   Its own axis, deliberately not folded into ADR-070: that change was onboarding delivery, this one is consent capture, and a legal record is not something to land as a side effect of a mail feature.
+
+- **ADR-048's flag rule has no mechanism, and only half of it can get one.** Found in the block-closure correction to the seed entry above (2026-09-05), and split here because the two halves have genuinely different answers rather than different priorities.
+
+  ADR-048's guarantee is that a deploy applies additions and refuses to revoke. That rests on **two absences**, and `seed.ts:270` accepts either of two ways in: `--allow-revocations` on the command line, or `SEED_ALLOW_REVOCATIONS=1` in the environment. ADR-048 names the danger in words — *"that word must never appear in `railway.backend.json` without its own ADR"* — and nothing enforces it.
+
+  **Half one: the flag in the config. A mechanism is possible and cheap.** `railway.backend.json` is a file in this repository; an invariant that fails when `--allow-revocations` appears in it is a handful of lines in `repo-invariants.spec.ts`, with no list to maintain and nothing to add yourself to. It would make the ADR's sentence enforced rather than remembered. **Trigger: alongside the next change to `railway.backend.json`, whatever that change is** — the file is edited rarely enough that waiting for a reason to open it is cheaper than a dedicated task, and frequent enough that the wait is bounded.
+
+  **Half two: the environment variable. An invariant is impossible by construction, and that is the honest word for it — not "deferred".** `SEED_ALLOW_REVOCATIONS=1` would be set on the Railway service, and **a variable set on a live service is not visible in this repository by anything**: no file contains it, no check can read it, and a test that passed would be asserting the absence of something it cannot see. This is not a mechanism nobody has written yet. It is one that cannot exist on this side of the boundary.
+
+  **What is available instead, and it is weaker on purpose rather than by neglect:** the variable names on the live service can be *listed* by a person with Railway access — that is how its absence was established on 2026-09-05 — so the check is a periodic human reading, not an automated one. Recorded so that nobody later mistakes the silence for coverage, which is this project's own recurring class: **a check that cannot run reports nothing, and nothing is indistinguishable from green** (ADR-073).
+
+  **The asymmetry is the point of writing both down together.** Building half one and calling the rule enforced would be exactly the remedy-fits-the-instance failure the closure named: the config would be guarded, the environment would not, and the guarantee would read as complete while one of its two absences went unwatched.
 
 - **The Outbox poller has no claim step (ADR-003), found while reading it for ADR-045.** `OutboxPollerService.poll()` selects `publishedAt: null` and marks the row published only later, inside the dispatch transaction. Between those two moments the row is visible to any other poller: no `SELECT … FOR UPDATE SKIP LOCKED`, no claimed-at column, no advisory lock. **Two instances read the same rows and both dispatch them.**
 
