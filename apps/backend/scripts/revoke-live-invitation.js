@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * Revokes the invitation created by a LIVE production verification, and nothing else.
  *
@@ -38,11 +39,18 @@
 
 const { PrismaClient } = require("@prisma/client");
 
+/** @param {string} name @returns {string | null} */
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? null : process.argv[i + 1];
 }
 
+/**
+ * Refuses and exits. Typed `never` deliberately: every caller relies on it not returning,
+ * and without that the `if (!email) fail(...)` guard below does not narrow — which is how a
+ * `null` email reached a Prisma `where` clause in the compiler's reading of this file.
+ * @param {string} message @returns {never}
+ */
 function fail(message) {
   console.error(`\n  REFUSING: ${message}\n`);
   process.exit(2);

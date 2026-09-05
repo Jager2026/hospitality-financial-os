@@ -498,4 +498,80 @@ describe("repository invariants", () => {
         `reference ambiguous forever. Collisions:\n${collisions.join("\n")}`,
     ).toEqual([]);
   });
+  // A file that carries `// @ts-check` and sits in no tsconfig is not merely unchecked — it
+  // *claims* to be checked, and the claim is what makes it worse than a plain unchecked file: it
+  // answers the question before anyone asks it. `.github/scripts/check-doc-index.js` was exactly
+  // that, established by running `tsc --listFiles` and finding three project files, none of them
+  // it.
+  //
+  // The narrow fix was to add three filenames to tsconfig.scripts.json's include. That list had
+  // already fallen three files behind since #82 and would fall behind again — the remedy fitting
+  // the instance rather than the property. The include is directory globs now, and this invariant
+  // is what makes those globs load-bearing: a marker that cannot be honoured fails here.
+  //
+  // Deliberately NO exception list, and that is the whole reason it cannot decay. A file that does
+  // not claim to be checked is not caught, which is the correct boundary — the invariant enforces
+  // that a claim is TRUE, not that every file makes one. There is nothing for anyone to add
+  // themselves to in order to go green; the only ways out are to include the file or to stop
+  // claiming.
+  it("lets no file claim @ts-check without a tsconfig that reads it", () => {
+    const raw = readFileSync(join(REPO_ROOT, "tsconfig.scripts.json"), "utf8").replace(
+      /^\s*\/\/.*$/gm,
+      "",
+    );
+    const include: string[] = JSON.parse(raw).include;
+    expect(include.length, "tsconfig.scripts.json declares no include patterns").toBeGreaterThan(0);
+
+    // A tsconfig include glob, as a regular expression: `**/` spans directories, `*` does not.
+    //
+    // The sentinel is not decoration. Expanding `**/` first produces `(?:[^/]+/)*`, which contains
+    // a `*` — and the next pass, which turns a glob `*` into `[^/]*`, then chewed through the
+    // expansion it had just written. Every pattern stopped matching and the invariant reported all
+    // eight files as unread, `scripts/preflight-deploy.js` included, which has been in the include
+    // list since #82. It failed by finding EVERYTHING, which is the loud direction and is why it
+    // was caught in one run.
+    const ANY_DEPTH = " ";
+    const matchers = include.map(
+      (pattern) =>
+        new RegExp(
+          "^" +
+            pattern
+              .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+              .replace(/\*\*\//g, ANY_DEPTH)
+              .replace(/\*/g, "[^/]*")
+              .split(ANY_DEPTH)
+              .join("(?:[^/]+/)*") +
+            "$",
+        ),
+    );
+
+    const SKIP = new Set(["node_modules", "dist", ".next", ".git", "coverage", "test-results"]);
+    const scripts: string[] = [];
+    (function walk(dir: string) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (SKIP.has(entry.name)) continue;
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(js|mjs|cjs)$/.test(entry.name)) scripts.push(full);
+      }
+    })(REPO_ROOT);
+
+    const claiming = scripts.filter((file) => readFileSync(file, "utf8").includes("@ts-check"));
+
+    // Non-vacuity: if the walk found nothing that claims to be checked, the assertion below would
+    // pass while checking nothing — the shape this suite has already been bitten by twice.
+    expect(claiming.length, "no file claims @ts-check — the walk is broken").toBeGreaterThan(3);
+
+    const unread = claiming
+      .map((file) => relative(REPO_ROOT, file).split(/[\\/]/).join("/"))
+      .filter((rel) => !matchers.some((matcher) => matcher.test(rel)));
+
+    expect(
+      unread,
+      `These files carry // @ts-check and no tsconfig include pattern matches them, so no ` +
+        `compiler ever reads the marker — the file claims a check it does not get. Either add ` +
+        `its directory to tsconfig.scripts.json's include, or remove the marker. Files:\n` +
+        unread.join("\n"),
+    ).toEqual([]);
+  });
 });

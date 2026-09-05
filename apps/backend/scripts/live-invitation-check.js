@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * The live verification of ADR-070: send ONE real invitation through the production API and report
  * exactly what to look for in the mailbox.
@@ -60,19 +61,27 @@ const NEW_RESTAURANT = {
   address: "Vilnius, Lithuania",
 };
 
+/** @param {string} name @returns {string | null} */
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? null : process.argv[i + 1];
 }
 
+/**
+ * Stops the check and exits. Typed `never` so the guards below narrow the way the code
+ * already assumes they do.
+ * @param {string} step @param {string} message @returns {never}
+ */
 function fail(step, message) {
   console.error(`\n  STOPPED at ${step}:\n  ${message}\n`);
   process.exit(2);
 }
 
+/** @param {string} prompt @returns {Promise<string>} */
 function askHidden(prompt) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    /** @param {Buffer | string} char */
     const onData = (char) => {
       if (["\n", "\r", ""].includes(String(char))) {
         process.stdin.removeListener("data", onData);
@@ -92,6 +101,11 @@ function askHidden(prompt) {
   });
 }
 
+/**
+ * @param {string} method
+ * @param {string} path
+ * @param {{ token?: string, body?: unknown }} [options]
+ */
 async function call(method, path, { token, body } = {}) {
   const res = await fetch(`${API}/api/v1${path}`, {
     method,
@@ -164,9 +178,14 @@ async function main() {
   const roles = await call("GET", "/roles", { token });
   if (roles.status !== 200) fail("roles", `HTTP ${roles.status}. ${roles.text.slice(0, 300)}`);
   const roleList = roles.json?.data ?? roles.json ?? [];
-  const waiter = roleList.find?.((r) => r.name === "Waiter");
+  const waiter = roleList.find?.(
+    (/** @type {{ name: string, id: string }} */ r) => r.name === "Waiter",
+  );
   if (!waiter) {
-    fail("roles", `no assignable "Waiter" Role. Roles seen: ${roleList.map?.((r) => r.name)}`);
+    fail(
+      "roles",
+      `no assignable "Waiter" Role. Roles seen: ${roleList.map?.((/** @type {{ name: string }} */ r) => r.name)}`,
+    );
   }
   console.log(`  3/4  Role: Waiter (${waiter.id})`);
 

@@ -1,4 +1,14 @@
-// @ts-check
+// NO @ts-check here, deliberately, and the reason is resolution rather than syntax.
+//
+// The marker was present and unread by any compiler from the day it was written: no tsconfig
+// included this file. Adding it to tsconfig.scripts.json surfaces what the marker had been
+// silently not checking — `@typescript-eslint/parser` publishes its types behind an `exports`
+// map that `moduleResolution: "node"` cannot follow, and `eslint-config-prettier` ships none at
+// all. Moving this config to `node16` or `bundler` would change module resolution for the six
+// CommonJS scripts that share it, to typecheck one file that no product code imports.
+//
+// So the honest half of the choice the repo-invariant offers is taken: stop claiming. The file is
+// still exercised on every `pnpm run lint`, which is the check that actually matters for it.
 const tseslint = require("@typescript-eslint/eslint-plugin");
 const tsParser = require("@typescript-eslint/parser");
 const prettierConfig = require("eslint-config-prettier");
