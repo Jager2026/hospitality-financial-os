@@ -58,6 +58,29 @@ The step-level case in `ci.yml` is the same class one level down, and this proje
 
 ---
 
+## A second instance, found while writing this ADR, on the pull requests that carry it
+
+`ci.yml` triggers on `pull_request: branches: [main]`. **A pull request whose base is another branch does not run it at all** — and the required check, `lint-typecheck-test-build`, is the job inside it.
+
+Observed on this batch of work rather than reasoned about:
+
+| Pull request | Base | Checks that appeared |
+|---|---|---|
+| Specimen page | `feat/dark-portal-tokens` | `browser-e2e` only |
+| Terminal options (docs) | `feat/dark-portal-tokens` | **none at all** |
+| This ADR | `main` | `lint-typecheck-test-build` |
+
+**A stacked pull request gets no report from the one required check.** Not red, not pending — absent from the page, exactly as `browser-e2e` is absent from a backend-only pull request. The docs-only one has no checks whatsoever and reads as ready.
+
+Two things follow, and the second is the uncomfortable one:
+
+- **The class is not exotic.** It appeared three times in one week from three unrelated causes: a `paths` filter, a step ordering, and a base-branch filter. Each was invisible in a different way.
+- **This ADR's own delivery demonstrates the problem it describes.** That is the strongest evidence available that the record is worth keeping — and a reminder that recognising the class in the abstract did not stop me shipping into it an hour later.
+
+**Not fixed here.** Widening the trigger, or making the required check run against every base, is one of the same options below and belongs to the same decision.
+
+---
+
 ## What is NOT an instance, and why the distinction matters
 
 Several conditionals in the application read `NODE_ENV` and do nothing outside production: `StripeService`'s boot probe, `EmailService`'s refusal to touch the wire, `env.validation`'s production rules, `assertPlatformTermsPublished`.
