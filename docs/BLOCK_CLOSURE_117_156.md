@@ -41,6 +41,35 @@ the failure it was built to replace.
 
 ---
 
+# First by risk, on its own: the plan says the seed never runs
+
+**Founder's ranking, and it sits above everything else in this document rather than among it.**
+
+| | |
+|---|---|
+| `IMPLEMENTATION_PLAN.md` says | *"`railway.backend.json` runs migrations before a deploy and nothing else, so `seed.ts` has never executed automatically."* |
+| `railway.backend.json` actually says | `"pnpm --filter backend run prisma:migrate:deploy && pnpm --filter backend run prisma:seed"` |
+| The system | **Correct.** ADR-048 decided exactly this, and the seed is invoked **without** `--allow-revocations` — verified absent — so a divergence fails the deploy instead of revoking |
+| The document | **Wrong**, and wrong about whether a deploy can silently remove permissions in production |
+
+**Why this ranks first and the rest do not.** Every other finding here is read at leisure: a stale
+tense, an unmapped table, a trigger nobody looked at. **This one is read in a panic.** The question
+*"can a deploy revoke permissions?"* is asked during an incident, by someone who needs an answer in
+seconds and will take it from the document that is authoritative for the queue. They will get
+*"the seed never runs"* — reassuring, specific, and false at the premise.
+
+A wrong answer under time pressure is not the same class of failure as a stale line. It is the
+class where somebody deploys, or declines to, on the strength of it.
+
+The detail worth keeping when the line is fixed is the one ADR-048 built the design around: **the
+absence of `--allow-revocations` is the decision, and it is visible in the diff.** The corrected
+sentence must say that, or the next reader gets a different wrong answer — that the seed runs and
+may therefore revoke.
+
+Full detail below at **S3**. Basket: **fix now**.
+
+---
+
 # 1.2 — Triggers, established by fact
 
 Eighteen trigger-bearing entries. Each was checked against the system rather than by re-reading its
@@ -120,16 +149,42 @@ reason — prematurity — not two**, and that reason expires at the same moment
 
 ## Two conditions that cannot be checked as written
 
-### T10 — Secrets in working files · **needs a Founder answer**
+### T10 — Secrets in working files · **fired. The trigger is rewritten here, and the rewrite is the finding**
 
-Trigger: *"before any secret with production scope exists on this machine."* **I cannot establish
-this and will not guess.** Reading `.env` is denied to me by `.claude/settings.json` (ADR-058), which
-is correct and which also means the question is outside what I can measure.
+Trigger as written: *"before any secret with production scope exists on this machine."*
 
-**It is worth asking now rather than at leisure, and the reason is specific:** every key that had
-touched this machine when the entry was written was test-mode. `RESEND_API_KEY` is not
-mode-scoped — a Resend key sends real mail from a verified domain. If it has ever been on this
-machine, the trigger has fired.
+**Answered by the Founder: `RESEND_API_KEY` has never been on this machine** — it was pasted into
+Railway from a browser. The question I raised has a clean negative answer.
+
+**And the trigger fired anyway, by a route its wording does not describe.** The Founder's
+correction, and it is the right one: the risk was never *storage*. It is **access**. Two instances,
+both from this session, both established by execution rather than recalled:
+
+- **The Stripe key's prefix was read inside the production container** to establish its mode. The
+  value never left; the mode was established as fact rather than assumed. Still: that is a session
+  reading a production secret.
+- **`railway run --service backend` injects the whole production environment into a process on this
+  machine.** My own diagnostic printed `DATABASE_URL host: postgres.railway.internal` — which is
+  proof that the production `DATABASE_URL`, password included, was in a local process's environment.
+  Nothing was written to disk, and the original entry is about files, so it would have called this
+  clean.
+
+**The condition, restated so it covers what actually happens:**
+
+> **Any path that gives a session access to production secrets — a file on disk, a value in a local
+> process's environment, or execution inside the production container.**
+
+**Why the original wording missed it, and this is the reusable part.** It was written from the
+incident that produced it — scratch files named `ikey.txt` and `env-backup-real` — so it described
+**the shape of that incident** rather than the property that made it dangerous. A trigger derived
+from one occurrence inherits that occurrence's accidents. `railway run` is not a scratch file, and
+by the letter of the old condition it is not a secret on this machine either; by the property, it is
+the same exposure with a shorter lifetime.
+
+**Consequence: the options recorded under that entry no longer fit.** All three — an entropy scan of
+the working tree, a scratchpad-hygiene rule, or accepting that no such file has ever been in the
+repository — address files. None sees a process environment or a container session. **The entry
+needs re-deciding against the new condition, not re-scheduling.** Not decided here.
 
 ### T13 — Refresh-token revocation surviving a Redis outage · **plan, with a trigger** (replace the trigger)
 
@@ -172,7 +227,7 @@ The plan calls this deferred and says *"the specs simply never followed."* They 
 `syntheticCaller`, and `repo-invariants.spec.ts` fails on any fixture pairing a seeded Role name with
 a literal permission list. The entry is stale; the work exists.
 
-### S3 — "the seed has never executed automatically" · **fix now**, and it is the most consequential line in the document
+### S3 — "the seed has never executed automatically" · **fix now — FIRST BY RISK, see the section above**
 
 The plan says:
 
@@ -361,9 +416,11 @@ purpose.
 
 # The baskets, collected
 
-**Fix now** — T1 (the trigger line) · S1 (three unchecked scripts, one of which deletes production
-rows, and the hand-typed include that let it happen) · S3 (the plan's false statement about the
-seed) · A3 (the docstring) · D1 (the data map) · D2 (the audit contradiction).
+**Fix now, ranked** — **S3 first and separately: the plan's false statement about the seed.** It is
+the only finding here that gets read in a panic rather than at leisure, and the only one where a
+wrong answer changes what somebody does in the next minute. Then: S1 (three unchecked scripts, one
+of which deletes production rows, and the hand-typed include that let it happen) · D1 (the data
+map) · D2 (the audit contradiction) · T1 (the trigger line) · A3 (the docstring).
 
 **Plan, with a trigger** — T2 (the Outbox claim step; its trigger has fired) · T3 (audit option B) ·
 T13 (re-arm with a checkable condition) · A2 (widen T5 to both halves of the gate) · the
@@ -372,8 +429,9 @@ spawn-bound test budget above.
 **Accept and record** — T6 (staging now rests on one reason) · S2 (a closed entry to strike) · A1
 (columns ahead of their flow) · D3 · D4.
 
-**Needs a Founder answer** — T10: has any production-scoped secret, `RESEND_API_KEY` in particular,
-been present on this machine?
+**Answered, and it changed the entry** — T10. `RESEND_API_KEY` has never been on this machine. The
+trigger fired by another route, its condition is rewritten above to cover access rather than
+storage, and the three options recorded under it all address files and therefore no longer fit.
 
 **Deferred to a later pass, by the Founder's own cut** — ADR→code for the twenty-two decisions about
 design, process, CI and documentation; and claim-level reconciliation of the other twenty-two
