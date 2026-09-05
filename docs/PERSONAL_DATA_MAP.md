@@ -1,6 +1,6 @@
 ---
 title: PERSONAL_DATA_MAP
-version: 1.2.0
+version: 1.3.0
 status: Active — research, no decisions
 classification: Critical
 owner: Founder
@@ -29,6 +29,16 @@ Every statement below was read out of `schema.prisma` and the service code, not 
 | `lastLogin` | behavioural — when this person was active | |
 | `locale` | weak, but a preference attached to a person | |
 | `id` | pseudonymous key | the join point for everything below |
+| `emailVerified`, `twoFactorEnabled` | not identifiers; account state about a person | added below in the 2026-09-05 correction |
+| `status`, `deletedAt` | lifecycle — `deletedAt` records that a specific person asked to be erased, and when | |
+| `stripeAccountId` | **the key to Stripe's own file on that individual**, exactly as on `Restaurant` below | ADR-061. `@unique`. Nothing writes it yet — see the note under this table |
+| `stripeOnboardingStatus`, `stripeTransfersStatus`, `stripePayoutsStatus` | Stripe's verification verdict on a natural person | ADR-061 |
+| `stripeRequirementsDue` | **what Stripe is still demanding from that person** — a list that describes their documents | ADR-061 |
+| `stripeAccountCreatedAt` | when that person's file at Stripe was opened | ADR-061 |
+
+**The six Stripe columns are a correction, and the shape of the miss is worth recording.** This table listed six fields until 2026-09-05; the schema had eighteen. The map discussed `stripeAccountId` at length — under `Restaurant`, calling it *"the key to Stripe's own file on that individual, including documents we never see"* — and did not notice the identical column had appeared on `User`. **The sentence was right and was filed under the wrong table.**
+
+**They describe a capability that does not exist yet.** No route and no service writes any of the six (verified across `apps/backend/src`, 2026-09-05): ADR-061 is Model B, and Model B is blocked on a written answer from VMI or the Bank of Lithuania. `redact-user.ts` already erases all six. **So the columns are ahead of their flow, and the erasure path is ahead of both** — recorded here so a privacy policy written from this document does not describe a waiter's Stripe file as something we currently hold.
 
 ## `Membership` — the person as a role at a place
 
@@ -70,6 +80,45 @@ This is the row where "company data" and "personal data" are not separable by lo
 | `stripeAccountId` | the key to Stripe's own file on that individual, including documents we never see |
 
 **Nothing in the schema records which case a given Restaurant is.** The distinction exists in Lithuanian law and not in our data.
+
+## `Shift` — the person as a working day
+
+| field | why it matters |
+|---|---|
+| `closedBy` | a `User.id` — **which named person closed which shift**, and by inference who was on duty at the end of it |
+| `openedAt`, `closedAt`, `businessDate` | when that happened, to the second, with the venue's own date attached |
+
+Employment data by inference rather than by declaration: nothing here is labelled as a work record, and a full history of who closed the till and when is one.
+
+## `OutboxEvent` — the table that briefly holds a credential
+
+**The sharpest entry in this document, and it was absent from it until 2026-09-05.**
+
+| field | why it matters |
+|---|---|
+| `payload` (`Json`) | For an email event this is the **whole message**: `to` — the recipient's address — `subject`, and `text`, the body itself. For an invitation (ADR-070) that body contains the **raw invitation token**, which is a working credential granting membership for seven days |
+| `aggregateId`, `createdAt`, `publishedAt`, `attempts` | that a specific person was written to, when, and how many times we failed |
+
+**What happens to the body, precisely, because "it is redacted" is only half true:**
+
+- **On successful delivery** — `redactPayload` (`email-outbox.service.ts:175`) replaces `text` with `"[redacted after delivery]"` and **keeps `to` and `subject`**. The credential is bounded to the delivery window, seconds in the normal case.
+- **On failure it is not redacted at all.** `attempts` increments, an alert fires at 5, and the row is retried on every poll thereafter. There is **no maximum, no dead-letter table, and no deletion path anywhere in the codebase** — verified by searching for any delete on `outboxEvent` outside the specs, 2026-09-05, and finding none.
+
+**So the retention of an unsent invitation's body is: indefinite.** ADR-070 names this — *"an event that fails permanently keeps its body until someone clears it"* — and there is no "someone", because there is no mechanism. A live credential to a named address sits in a table with no expiry.
+
+**And the address survives regardless of the body.** `to` is kept after redaction by design, so every person ever emailed has their address retained in this table permanently.
+
+## `EmailDelivery` — one row per message, kept
+
+| field | why it matters |
+|---|---|
+| `to` | the recipient's address, **in the clear, one row per message sent** |
+| `subject` | what they were written to about |
+| `status`, `lastError`, `providerMessageId` | whether it reached them, and the provider's own handle for it |
+
+Same retention answer, same reason: nothing deletes from this table either.
+
+**Erasure does not reach either of these two tables.** `redact-user.ts` updates `User`, `MembershipInvitation`, `AuditLog` and `AgreementAcceptance` — verified by reading it, 2026-09-05 — and touches neither `OutboxEvent` nor `EmailDelivery`. **After a completed erasure, the person's email address remains in both.** That is a statement `LEGAL_CLAIMS_VERIFICATION.md` needs, because that document certifies what erasure does, and it was written while this map did not know these tables existed.
 
 ## The money side
 
@@ -251,3 +300,36 @@ The practical consequence is the one that matters for the privacy policy: **rete
 - Whether disabling a Membership should also revoke that person's refresh tokens (ADR-051 — a session question, deliberately separate from the access question it answers).
 
 Each is listed rather than guessed, and none of them changes §2's boundary.
+
+---
+
+# Keeping this document true — four options, none chosen
+
+**Not part of the inventory.** This section is about the document rather than the data, and it exists because **this map has now drifted twice, in the same direction, and been caught the same way both times: by a block-closure pass, months apart.**
+
+- **First drift:** it went stale and was rebuilt.
+- **Second drift (found 2026-09-05):** `OutboxEvent`, `EmailDelivery` and `Shift` absent entirely; six `User` columns absent. `DATABASE.md` named all twenty-four models throughout. **The schema was documented; only the personal-data consequences were not.**
+
+The discrepancy is derivable, which makes a mechanism possible. **The trap is that the obvious mechanism is narrower than the problem** — the fifth recurring class in `BLOCK_CLOSURE_117_156_PROCESS.md`, where a remedy fits the instance and leaves the property.
+
+### A — an invariant: every model in `schema.prisma` is named in this document
+
+**Cost:** ~20 lines in `repo-invariants.spec.ts`, mirroring `check-doc-index.js`.
+
+**Width: too narrow, and demonstrably so.** This map's job is not to list models; it is to say which *fields* identify a person. The `User` miss was six **columns** on a model the map already named — so this check would have passed straight through the sharpest of the four findings. **It catches three of four and misses the one that mattered most.**
+
+### B — a column-level invariant: every column is either mapped or on an exclusion list
+
+**Width: correct.** **Mechanism: wrong, and this project has already refused it once.** An exclusion list of several hundred columns is a list someone edits to make the build green — the rubber-stamp decay `CLAUDE.md` names, and the exact shape `IMPLEMENTATION_PLAN.md` rejected for the optional-environment-variable check: *"an allowlist that someone edits to make the build green is a rubber stamp."*
+
+### C — pin the SET, and fail when it changes
+
+The move the plan proposed for that same env-var class and called worth about twenty lines: a snapshot of every model and column, asserted against the schema. It judges nothing — **nothing mechanical can decide whether a field identifies a person** — it fails at the moment the schema changes, which is exactly when the question needs asking, and puts a human at that moment.
+
+**Width: matches the problem**, because it triggers on a new column as readily as on a new model. **Cost:** a snapshot updated with every migration. **The honest risk:** it becomes a chore updated without thought. What makes it less bad than B is that the update is a visible diff of *what changed in the schema*, sitting next to the map that should have changed with it — an allowlist hides what it excuses, a snapshot displays it.
+
+### D — accept it, and rely on the closure pass
+
+It has worked twice. **What it cost this time is the argument against it:** the drift concealed, for a whole block, that an unsent invitation's body — a live credential to a named address — is retained indefinitely with no deletion path. A privacy policy written in that window would have been wrong about it.
+
+**None chosen here.** The one observation worth carrying into the choice: **A is the instance-shaped remedy and C is the property-shaped one**, and this document exists because the instance-shaped fix was applied the first time.
