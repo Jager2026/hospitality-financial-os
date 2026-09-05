@@ -1,31 +1,77 @@
 name: E2E
 
-# ADR-041 — this runs ONLY on pull requests that touch the frontend or the harness itself.
-#
-# The reason is not saving minutes. A slow check that runs on everything starts getting worked
-# around, and a bypassed check is worse than an absent one: it manufactures a feeling of safety
-# that nothing is producing. Today the frontend is one screen and the backend changes constantly,
-# so paying the full browser price on every backend PR buys nothing and steadily erodes the habit
-# of trusting CI.
-#
-# The trigger for widening this is named rather than left as "when it gets big": when the frontend
-# consumes enough of the API that a contract change would go unnoticed until a screen breaks. That
-# is about coupling, not about file count. Add `apps/backend/**` here on that day, not before.
-#
-# The main `lint-typecheck-test-build` job keeps running on everything, so a backend PR still gets
-# the full non-browser suite — including the design-token contrast assertions.
 on:
+  # NO `paths:` FILTER HERE, AND IT IS NOT AN OVERSIGHT — DO NOT ADD ONE BACK (ADR-073, option A').
+  #
+  # A workflow-level `paths:` filter that does not match produces NO WORKFLOW RUN AT ALL — measured,
+  # `total_count: 0` — so `browser-e2e` was absent from a backend pull request rather than skipped.
+  # Absent is indistinguishable from green to a reader, and it is worse than that to branch
+  # protection: a required check that never reports blocks the merge PERMANENTLY, with every check
+  # on the page still green. That was measured on a throwaway protected branch, not read.
+  #
+  # A job skipped by a job-level `if:` inside a workflow that DID trigger still reports a
+  # conclusion. That is the entire difference, and it is what makes this check requirable.
+  #
+  # The condition did not disappear — ADR-041's reasoning stands and is restated on `decide` below.
+  # It moved from the trigger, where its silence was invisible, into a job, where it is a visible
+  # line somebody edits on purpose.
   pull_request:
-    paths:
-      - "apps/frontend/**"
-      - "apps/e2e/**"
-      - "packages/**"
-      - ".github/workflows/e2e.yml"
 
 jobs:
-  browser-e2e:
+  # ADR-041, unchanged in substance: the browser suite runs only for changes that could affect it.
+  # A slow check that runs on everything starts getting worked around, and a bypassed check is
+  # worse than an absent one.
+  #
+  # The trigger for widening this is still named rather than left as "when it gets big": when the
+  # frontend consumes enough of the API that a contract change would go unnoticed until a screen
+  # breaks. Add `apps/backend/` to PATHS on that day, not before.
+  decide:
     runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The decision is a diff against the base, so the history has to be there.
+          fetch-depth: 0
 
+      - name: Decide whether the browser suite applies to this change
+        id: check
+        run: |
+          set -uo pipefail
+          PATHS="apps/frontend/ apps/e2e/ packages/ .github/workflows/e2e.yml"
+
+          # FAILING CLOSED IS THE POINT. If the diff cannot be computed — a missing base ref, a
+          # shallow fetch, a force-push mid-run — the answer is RUN, never skip. A decision step
+          # that cannot decide must not be the reason a check went quiet; that is the class this
+          # whole change exists to close.
+          if ! CHANGED=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null) \
+            || [ -z "${CHANGED}" ]; then
+            echo "Could not compute the changed files against origin/${GITHUB_BASE_REF}."
+            echo "Running the browser suite rather than guessing."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "${CHANGED}"
+
+          for prefix in ${PATHS}; do
+            if echo "${CHANGED}" | grep -q "^${prefix}"; then
+              echo "Matched ${prefix} — the browser suite applies."
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "No change under: ${PATHS}"
+          echo "The browser suite does not apply; browser-e2e will report skipped."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+  browser-e2e:
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: ubuntu-latest
     env:
       # A database of its own, created by the harness's own prepare step. Separate from the unit
       # suite's `hospitality_os_test` so the two cannot interfere.
