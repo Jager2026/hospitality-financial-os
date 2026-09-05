@@ -18,5 +18,11 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["scripts/preflight-deploy.js", ".github/scripts/check-audit.js"]
+  "include": [
+    "*.js",
+    "scripts/**/*.js",
+    ".github/scripts/**/*.js",
+    "apps/backend/scripts/**/*.js",
+    "apps/frontend/scripts/**/*.mjs"
+  ]
 }
