@@ -96,11 +96,16 @@ describe("A disabled Membership (E2E, real HTTP, real database)", () => {
     }
   }
 
-  async function readDashboard(token: string): Promise<number> {
+  /**
+   * Returns the status AND the refusal reason. It used to return the status alone, which is what
+   * made `not.toBe(200)` the only assertion available here — and that passes on 500 and on the
+   * route having been deleted, neither of which is a disabled Membership being refused.
+   */
+  async function readDashboard(token: string): Promise<{ status: number; code?: string }> {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/dashboard?restaurantId=${restaurantId}`)
       .set("Authorization", `Bearer ${token}`);
-    return res.status;
+    return { status: res.status, code: (res.body as { error?: { code?: string } }).error?.code };
   }
 
   beforeAll(async () => {
@@ -179,7 +184,7 @@ describe("A disabled Membership (E2E, real HTTP, real database)", () => {
   });
 
   it("the Manager can read the dashboard while ACTIVE — the half that makes the denial mean something", async () => {
-    expect(await readDashboard(staffTokenBeforeDisable)).toBe(200);
+    expect((await readDashboard(staffTokenBeforeDisable)).status).toBe(200);
   });
 
   it("disabling the Membership really does set it INACTIVE in the database", async () => {
@@ -200,14 +205,22 @@ describe("A disabled Membership (E2E, real HTTP, real database)", () => {
       .send({ email: staffEmail, password: PASSWORD });
     expect(relogin.status).toBe(200);
 
-    const status = await readDashboard(relogin.body.data.accessToken as string);
-    expect(status, "a disabled Manager read the restaurant's dashboard").not.toBe(200);
+    const refusal = await readDashboard(relogin.body.data.accessToken as string);
+    expect(refusal.status, "a disabled Manager read the restaurant's dashboard").toBe(403);
+    expect(refusal.code, "refused, but not for the reason this test is about").toBe(
+      "PERMISSION_DENIED",
+    );
   });
 
   it("a DISABLED Membership must not still grant access — with the token they already held", async () => {
     // The Guard re-reads Memberships from the database on every request, so the old token is not
     // a stale-cache excuse: this is the same query, run after the write, returning the same row.
-    const status = await readDashboard(staffTokenBeforeDisable);
-    expect(status, "a disabled Manager read the dashboard with their existing token").not.toBe(200);
+    const refusal = await readDashboard(staffTokenBeforeDisable);
+    expect(refusal.status, "a disabled Manager read the dashboard with their existing token").toBe(
+      403,
+    );
+    expect(refusal.code, "refused, but not for the reason this test is about").toBe(
+      "PERMISSION_DENIED",
+    );
   });
 });

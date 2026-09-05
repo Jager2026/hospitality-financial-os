@@ -68,6 +68,39 @@ interface Actor {
   accessToken: string;
 }
 
+/**
+ * A refusal asserted by the status AND the reason, because in this suite the two answer different
+ * questions and only one of them is about permissions.
+ *
+ * **Why not `not.toBe(200)`, which is what every one of these assertions used to say.** It passes
+ * on 403, which is intended — and equally on 404, 500, 502, and on the route having been deleted.
+ * A regression turning a clean refusal into a crash passed. Removing the route passed. A test that
+ * still passes when the feature under test is deleted proves nothing about the feature.
+ *
+ * **Why the code and not only the status.** 403 and 404 are not interchangeable here, and which one
+ * is correct is a disclosure decision rather than a style choice (`THREAT_MODEL.md` entry 296):
+ *
+ *   - **403 `PERMISSION_DENIED`** — the caller can already see that the resource exists, because
+ *     they hold a Membership at that Restaurant. Nothing is disclosed by saying no; what is missing
+ *     is a Permission.
+ *   - **404 `PAYMENT_NOT_FOUND` / `NOT_FOUND`** — the caller may not read that Restaurant at all,
+ *     so *confirming the row exists is itself the disclosure*. The refusal must be
+ *     indistinguishable from the row not existing, which is the same answer the list already gives
+ *     by omitting it.
+ *
+ * Asserting the status alone would let a 404 for the wrong reason — a mistyped id, a route that
+ * quietly stopped existing — stand in for the deliberate one. The code pins the reason.
+ */
+function expectRefused(
+  res: { status: number; body: unknown },
+  status: 403 | 404,
+  code: "PERMISSION_DENIED" | "PAYMENT_NOT_FOUND" | "NOT_FOUND",
+): void {
+  const body = res.body as { error?: { code?: string } };
+  expect(res.status, `expected a refusal, got: ${JSON.stringify(res.body)}`).toBe(status);
+  expect(body.error?.code, `refused with the wrong reason: ${JSON.stringify(res.body)}`).toBe(code);
+}
+
 describe("Permission scope across Organizations (E2E, real HTTP, real database)", () => {
   const prisma = new PrismaService();
   let app: INestApplication;
@@ -246,14 +279,14 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
     const res = await request(app.getHttpServer())
       .get(`/api/v1/dashboard?restaurantId=${restaurantB}`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
-    expect(res.status, `leaked: ${JSON.stringify(res.body)}`).not.toBe(200);
+    expectRefused(res, 403, "PERMISSION_DENIED");
   });
 
   it("the same, for analytics revenue", async () => {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/analytics/revenue?restaurantId=${restaurantB}&from=2026-01-01&to=2026-12-31`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
-    expect(res.status, `leaked: ${JSON.stringify(res.body)}`).not.toBe(200);
+    expectRefused(res, 403, "PERMISSION_DENIED");
   });
 
   it("the same, for the transaction CSV export — asserted on the DATA, not the status code", async () => {
@@ -342,7 +375,7 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
       .set("Authorization", `Bearer ${dualRole.accessToken}`)
       .set("Idempotency-Key", randomUUID())
       .send({ restaurantId: restaurantB, amount: 1000, tipAmount: 0 });
-    expect(res.status, `leaked: ${JSON.stringify(res.body)}`).not.toBe(201);
+    expectRefused(res, 403, "PERMISSION_DENIED");
 
     // `not.toBe(201)` was the whole assertion until now, and it is not enough. This route's
     // service checks REACHABILITY, not the permission at the target restaurant, and the caller is
@@ -390,21 +423,21 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
     const res = await request(app.getHttpServer())
       .get(`/api/v1/payments/${paymentAtB}`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
-    expect(res.status, `leaked a payment: ${JSON.stringify(res.body)}`).not.toBe(200);
+    expectRefused(res, 404, "PAYMENT_NOT_FOUND");
   });
 
   it("nor is its status", async () => {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/payments/${paymentAtB}/status`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
-    expect(res.status, `leaked a payment status: ${JSON.stringify(res.body)}`).not.toBe(200);
+    expectRefused(res, 404, "PAYMENT_NOT_FOUND");
   });
 
   it("nor the transaction behind it", async () => {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/transactions/${transactionAtB}`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
-    expect(res.status, `leaked a transaction: ${JSON.stringify(res.body)}`).not.toBe(200);
+    expectRefused(res, 404, "NOT_FOUND");
   });
 
   it("but the SAME reads succeed at the caller's own restaurant — without this, the three above prove nothing", async () => {
@@ -435,6 +468,6 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
         restaurantId: restaurantB,
         roleId: waiterRole!.id,
       });
-    expect(res.status, `leaked: ${JSON.stringify(res.body)}`).not.toBe(201);
+    expectRefused(res, 403, "PERMISSION_DENIED");
   });
 });
