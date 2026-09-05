@@ -3,7 +3,11 @@ import type { OutboxEvent } from "@prisma/client";
 import { Interval } from "@nestjs/schedule";
 import { PinoLogger } from "nestjs-pino";
 import { AlertService } from "../common/alerting/alert.service";
-import { EMAIL_OUTBOX_EVENT_TYPE, EmailOutboxService } from "../email/email-outbox.service";
+import {
+  ABANDON_UNDELIVERED_AFTER_MS,
+  EMAIL_OUTBOX_EVENT_TYPE,
+  EmailOutboxService,
+} from "../email/email-outbox.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 
@@ -55,8 +59,24 @@ export class OutboxPollerService {
   // Tracked in IMPLEMENTATION_PLAN.md (Deferred), found while writing ADR-045.
   @Interval(POLL_INTERVAL_MS)
   async poll(): Promise<void> {
+    // ADR-075 option A: an email event past the retry window is abandoned — its body has been
+    // redacted, so there is nothing left to send, and continuing to select it would burn a batch
+    // slot forever on a row that can never publish. That crowding is the documented mechanism
+    // behind the outbox specs starving (IMPLEMENTATION_PLAN.md).
+    //
+    // Scoped to EMAIL events on purpose, and the asymmetry is deliberate rather than an oversight.
+    // A journal-entry event is a money projection: abandoning one silently would leave a Wallet
+    // permanently wrong, and nothing about this change has established that giving up on money is
+    // ever right. Those keep exactly today behaviour — retried forever, alerted at five.
+    const abandonedBefore = new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS);
     const unpublished = await this.prisma.outboxEvent.findMany({
-      where: { publishedAt: null },
+      where: {
+        publishedAt: null,
+        NOT: {
+          eventType: EMAIL_OUTBOX_EVENT_TYPE,
+          createdAt: { lt: abandonedBefore },
+        },
+      },
       orderBy: { createdAt: "asc" },
       take: BATCH_SIZE,
     });

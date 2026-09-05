@@ -1,7 +1,7 @@
 ---
 title: ADR-075 — The Outbox payload outlives what it carried, and one of its two dangers expires on its own
-version: 1.0.0
-status: Proposed
+version: 1.1.0
+status: Accepted
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,8 +9,9 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-075 — The Outbox payload outlives what it carried, and one of its two dangers expires on its own
 
-**Status:** Proposed (Sprint 15), 2026-09-06. **Three options, none chosen.** No code changes with
-this ADR.
+**Status:** Accepted (Sprint 15), 2026-09-06. **Option A, on the Founder's decision.** Options B and
+C are rejected, and C is rejected on ORDER rather than on merit — the distinction is the point and
+is recorded below rather than left as "not now".
 
 ---
 
@@ -139,6 +140,75 @@ and `AuditLog`.
 **Leaving it and relying on the erasure path.** That covers only people who ask to be erased, and
 the population most affected — invited staff whose invitation failed — are the least likely to know
 there is anything to ask about.
+
+---
+
+## Decision — option A, and why the other two were refused
+
+**A is built.** At the end of the retry window a failing email's payload is redacted with the same
+shape the success path uses: `{ to, subject, text }`, body replaced. **The fact survives and the
+content does not** — the event row, its type and aggregate, the recipient reachable through the
+Membership the invitation belongs to, and `EmailDelivery`'s status, subject and the provider's own
+error text.
+
+**B — deleting the row — is refused on what the Outbox is for.** In the Founder's terms: the row is
+the *trace of the event*, and deleting it removes the record that a message was owed and never
+arrived. **Redacting the body keeps the fact and removes the content**, which is the whole
+distinction B gives up. The analysis above already showed B does not even buy privacy —
+`EmailDelivery.to` holds the same address one table over — so it would cost the record and keep
+the exposure.
+
+**C — a retention period — is refused on ORDER, not on merit, and that difference must not be lost.**
+C is *correct*. It is also not a TTL value: it is the first retention mechanism this system would
+have, and `AuditLog` cannot take a single period because nothing in the schema separates its
+transaction-connected rows from its ordinary ones.
+
+> **Building a mechanism around a table that cannot say which period applies to which row would
+> hard-wire the wrong answer at the infrastructure level.**
+
+**So the order is fixed: the schema separates the populations first, the mechanism second.**
+Recorded in `IMPLEMENTATION_PLAN.md` with that precondition stated explicitly, so nobody starts at
+the mechanism.
+
+### What A actually required first: there was no permanent failure
+
+This ADR said A was really two changes, and it was. `MAX_ATTEMPTS_BEFORE_ALERT` only alerts;
+retries continued forever.
+
+**The terminal condition is elapsed time, not an attempt count**, and the reason is arithmetic: the
+poller runs every two seconds, so any attempt count large enough to be safe is a count of *seconds*
+— twenty attempts is forty seconds, which would abandon real messages during an ordinary provider
+blip. Permanence is a property of how long it has been, not of how often we asked.
+
+**The window is twenty-four hours, and the number is borrowed rather than chosen.** It is the
+lifetime of Resend's `Idempotency-Key` (ADR-069), and that key is the OutboxEvent id. Past it a
+retry is no longer deduplicated by the provider — **the guarantee that made retrying safe has
+expired**, so the send stops being the same send. That is a real boundary in the system rather than
+a round number.
+
+**Two consequences, both deliberate:**
+
+- **The poller stops selecting abandoned email events**, which also stops one of them burning a
+  batch slot forever — the documented mechanism behind the outbox specs starving.
+- **Scoped to email events only.** A journal-entry event is a money projection, and abandoning one
+  silently would leave a Wallet permanently wrong. Nothing here has established that giving up on
+  money is ever right, so those keep exactly today's behaviour: retried forever, alerted at five.
+
+**The one way this could have done harm, and the two locks against it.** Once a body is redacted, a
+retry that still reached the transport would deliver the marker itself to a real address. The
+poller excludes abandoned events, and the handler refuses to send one — asserted by a test that
+fails if the transport is called at all.
+
+### Falsification
+
+The pair is one discriminating test split in two: **the same failing send, inside and outside the
+window, must leave different rows.** A version that redacts only on success passes neither — checked
+by making `abandoned` constantly false, which fails the abandonment case by name.
+
+And the erasure sweep (ADR-052, same sprint) was extended to the shape A leaves behind. **The
+strengthening is by rows rather than by count**, because that sweep enumerates *columns*: a second
+Outbox row does not raise the total, so asserting `outbox_event.payload (2 rows)` is what proves the
+abandoned shape is in scope, where a bigger threshold would only have looked like it did.
 
 ---
 
