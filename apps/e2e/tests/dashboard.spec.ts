@@ -50,8 +50,15 @@ test("an owner logs in, lands on the dashboard, and reads figures the API comput
   const dashboard = page.getByTestId("dashboard");
   await expect(dashboard).toBeVisible();
 
-  // €150.50 = 12000 + 3050. Computed by the backend from the rows above, not by this test.
-  await expect(page.getByTestId("revenue")).toContainText("€150.50");
+  // 150,50 € = 12000 + 3050, computed by the backend from the rows above and written the way a
+  // Lithuanian venue writes money (DESIGN_SYSTEM.md: "1 240,00 € in lt-LT").
+  //
+  // THIS ASSERTION COULD NOT FAIL BEFORE. The fixture's venue carried default_customer_locale
+  // 'en', so it never looked Lithuanian, and the formatter had en-IE baked into a default
+  // parameter — a hardcoded locale asserted against a venue chosen to match it. The fixture is
+  // 'lt' now, which is what the target market actually is.
+  await expect(page.getByTestId("revenue")).toContainText(`150,50\u00a0\u20ac`);
+  await expect(page.getByTestId("revenue")).not.toContainText("€150.50");
 
   // The shift, not "today" (ADR-065): the screen must name the working day and when it opened.
   //
@@ -65,7 +72,24 @@ test("an owner logs in, lands on the dashboard, and reads figures the API comput
     shift.openedAtIso,
   );
   await expect(page.getByTestId("shift-line")).toContainText(expectedClock);
-  await expect(page.getByTestId("shift-line")).toContainText(shift.businessDate);
+
+  // "Sunday, 6 September", not "2026-09-06". Derived from the same business date the fixture
+  // wrote, in UTC, because the business date is a label rather than an instant (ADR-064).
+  const expectedDate = await page.evaluate(
+    (date) =>
+      new Date(`${date}T00:00:00Z`).toLocaleDateString("en-IE", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        timeZone: "UTC",
+      }),
+    shift.businessDate,
+  );
+  await expect(page.getByTestId("shift-line")).toContainText(expectedDate);
+  await expect(
+    page.getByTestId("shift-line"),
+    "the machine-shaped date must be gone, not merely accompanied",
+  ).not.toContainText(shift.businessDate);
 
   // And the empty-state explanation must NOT be showing — a screen that says "nothing sold yet"
   // over €150.50 would pass a naive "is there text" assertion.
@@ -113,9 +137,29 @@ test("a session that the API rejects does not leave a dashboard on display", asy
 
   await page.reload();
 
-  // The screen says it could not load, rather than showing a figure it cannot stand behind.
+  // THE REGRESSION THIS TEST NOW GUARDS. It used to assert only that SOME error block appeared,
+  // which is exactly the confusion that reached the Founder: an expired session and a broken
+  // server produced the same two sentences, and the title was repeated verbatim as the body. The
+  // one thing a reader can do about an expired session — sign in again — was never mentioned.
   await expect(page.getByTestId("dashboard-error")).toBeVisible();
   await expect(page.getByTestId("revenue")).toHaveCount(0);
+
+  await expect(page.getByTestId("dashboard-error")).toContainText("Your session has ended");
+  await expect(page.getByRole("link", { name: "Sign in again" })).toBeVisible();
+
+  // THE SECOND LINE MUST EXPLAIN, and this assertion had to be strengthened after failing to
+  // catch its own falsification. The first version compared the body against the CURRENT title
+  // and passed when the body was replaced by a DIFFERENT title — it tested for equality with one
+  // string rather than for the presence of an explanation. Naming the sentence a reader actually
+  // needs is what makes it discriminating.
+  await expect(page.getByTestId("dashboard-error-explain")).toContainText(
+    "signed out after fifteen minutes",
+  );
+  const heading = (await page.getByTestId("dashboard-error").locator("h1").innerText()).trim();
+  const explain = (await page.getByTestId("dashboard-error-explain").innerText()).trim();
+  expect(explain, "the explanation repeats a title instead of saying what happened").not.toBe(
+    heading,
+  );
 });
 
 test("an open shift with no sales explains itself in words instead of showing zeros", async ({

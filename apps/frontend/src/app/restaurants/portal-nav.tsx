@@ -20,10 +20,15 @@ export function PortalNav(): JSX.Element {
   return (
     <nav className="border-b border-rule">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-        <Link href="/restaurants" className="flex items-center gap-3">
+        {/* THE WAY BACK, VISIBLE. The wordmark was the only link and its label was
+            screen-reader-only, so on screen there was no way back to the list at all. Found by
+            looking at the page, which is the one thing no test here does. */}
+        <div className="flex items-center gap-4">
           <Wordmark />
-          <span className="sr-only">{t("dashboard.nav.restaurants")}</span>
-        </Link>
+          <Link href="/restaurants" className="text-small text-muted underline">
+            {t("dashboard.nav.backToRestaurants")}
+          </Link>
+        </div>
         <button
           type="button"
           onClick={() => {

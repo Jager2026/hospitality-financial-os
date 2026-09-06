@@ -170,6 +170,13 @@ export const en = {
   "dashboard.stripe.title": "Payouts are not switched on yet",
   "dashboard.stripe.explain":
     "Card payments can be taken, but money cannot reach your bank until Stripe finishes verifying this restaurant.",
+  "dashboard.error.explain":
+    "The figures could not be fetched. Nothing here is out of date — there is nothing here.",
+  "dashboard.expired.title": "Your session has ended",
+  "dashboard.expired.explain":
+    "You were signed out after fifteen minutes. Nothing is wrong with the restaurant or its figures — sign in again and they will be here.",
+  "dashboard.expired.action": "Sign in again",
+  "dashboard.nav.backToRestaurants": "All restaurants",
   "dashboard.error.title": "We could not load this dashboard",
   "dashboard.error.retry": "Try again",
   "dashboard.error.unreachable": "We can’t reach the server right now.",
