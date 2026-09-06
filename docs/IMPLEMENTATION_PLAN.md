@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.33.0
+version: 2.34.0
 status: Active
 classification: Critical
 priority: Highest
@@ -57,7 +57,7 @@ Every "Definition of Done" line below is a claim that the listed things actually
 
 If the session's environment cannot run something required for a Definition of Done line — no database, no Node, no network — say so explicitly in the report, rather than reporting the item as done or leaving it ambiguous. An honest "written but not run, here's exactly what's unverified" is a complete report. A Definition of Done line marked satisfied on the strength of the code merely looking correct is not, regardless of how confident the write-up sounds.
 
-**The local gate run before opening a pull request must be the same set of commands CI runs, and that set includes `build`.** Not a subset chosen by what seems relevant — lint, typecheck and tests passing locally while `build` was never run is how test code reached the production bundle unnoticed, and how a fixture import that could not compile got as far as CI. The build is the only step that enforces `rootDir`, and it is the only one whose output is what actually deploys. Run `pnpm run lint`, `pnpm run typecheck`, `pnpm run test` **and `pnpm run build`** before pushing.
+**The local gate run before opening a pull request must be the same set of commands CI runs, and that set includes `build`.** Not a subset chosen by what seems relevant — lint, typecheck and tests passing locally while `build` was never run is how test code reached the production bundle unnoticed, and how a fixture import that could not compile got as far as CI. The build is the only step that enforces `rootDir`, and it is the only one whose output is what actually deploys. **That gate is one command: `pnpm run gate`** (Sprint 15). It runs every step `.github/workflows/ci.yml` runs, in the same order, plus the browser suite and the dependency scan last — including the two checks that used to be reachable only from the workflow, `check-doc-index.js` and `check-audit.js`. Before it existed, "the whole gate" was a list of commands held in a head, and the two nobody could run were the two that were never run: that is precisely how #176 pushed a documentation version bump whose register row still named the old number, with every local check green. It takes no flags on purpose — a gate with a way past it becomes the way past it. The individual scripts (`pnpm run lint`, and so on) remain, for iterating on one thing rather than for deciding what to check.
 
 A pushed commit ("запушено", a commit hash) is not the same claim as a green CI run, and reporting the first must never stand in for the second. This is not hypothetical: CI failed on every run from the very first commit through Sprint 2, and it went unnoticed for that entire stretch because every session report confirmed the push had happened without separately checking whether GitHub's own CI run for that push actually passed. Any report claiming something is done must state the current CI status on GitHub for that commit, not just the fact that it was pushed.
 

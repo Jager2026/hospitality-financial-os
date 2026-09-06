@@ -18,6 +18,7 @@
  */
 import { PrismaClient, type Prisma } from "@prisma/client";
 import { hashPassword } from "../src/auth/password.util";
+import { deriveOnboardingStatus } from "../src/restaurant/onboarding-status.util";
 
 const DEMO_ORG_NAME = "Dashboard Demo (local only)";
 const DEMO_EMAIL = "demo-owner@local.invalid";
@@ -100,16 +101,30 @@ async function main(): Promise<void> {
       },
     });
 
-    // ORG-WIDE, so one login reaches all three Dashboards (ADR-005). The Restaurants list is still
-    // a stub, so the three addresses printed below are how a person moves between them.
+    // ORG-WIDE, so one login reaches all three Dashboards (ADR-005) — and, since #176, lands on
+    // the Restaurants list, which is how a person moves between them.
     await prisma.membership.create({
       data: { userId: owner.id, organizationId: organization.id, roleId: ownerRole.id },
     });
 
+    // Three venues, three Stripe states that can actually coexist with their own onboarding
+    // status — so the payout banner is still visible on one screen (Kaunas), and the Restaurants
+    // list's "card setup not started" flag on another (Klaipėda), without either screen being
+    // shown data the system could never produce.
     const restaurants: Restaurants = {
-      withSales: await restaurant(prisma, organization.id, "Vilnius — busy evening"),
-      quiet: await restaurant(prisma, organization.id, "Kaunas — quiet morning"),
-      acrossMidnight: await restaurant(prisma, organization.id, "Klaipėda — closed at 01:30"),
+      withSales: await restaurant(prisma, organization.id, "Vilnius — busy evening", STRIPE_LIVE),
+      quiet: await restaurant(
+        prisma,
+        organization.id,
+        "Kaunas — quiet morning",
+        STRIPE_PAYOUTS_HELD,
+      ),
+      acrossMidnight: await restaurant(
+        prisma,
+        organization.id,
+        "Klaipėda — closed at 01:30",
+        STRIPE_UNTOUCHED,
+      ),
     };
 
     const waiterMembership = await prisma.membership.create({
@@ -152,10 +167,49 @@ async function wipe(prisma: PrismaClient, organizationId: string): Promise<void>
   await prisma.organization.delete({ where: { id: organizationId } });
 }
 
+/**
+ * A venue's Stripe state, as the two capability statuses Stripe actually reports.
+ *
+ * **`onboardingStatus` is not a third, independent field, and treating it as one produced a
+ * fixture describing a state the system cannot reach.** The backend derives it from these two
+ * (`deriveOnboardingStatus`), so only certain pairs exist. This file used to write
+ * `NOT_STARTED` alongside `payoutsStatus: "restricted"` — impossible, because `NOT_STARTED` means
+ * Stripe has told us nothing yet, which is both capabilities null. The visible consequence was two
+ * screens contradicting each other about the same venue: the Restaurants list said card setup had
+ * not started while the Dashboard banner said card payments could be taken. The list was reading
+ * the data correctly; the data could not occur.
+ *
+ * So the status is no longer written here. It is computed by the same function the API calls —
+ * the rule `CLAUDE.md` already states for Roles and Permissions, applied to the field that has the
+ * same shape: **a fixture's value comes from the real code, never from a literal typed beside it.**
+ * A literal cannot be wrong at the moment it is written, and cannot stay right afterwards.
+ */
+interface StripeState {
+  cardPaymentsStatus: string | null;
+  payoutsStatus: string | null;
+}
+
+/** Charges and payouts both live. Derives to COMPLETE — no banner, no flag anywhere. */
+const STRIPE_LIVE: StripeState = { cardPaymentsStatus: "active", payoutsStatus: "active" };
+
+/**
+ * Can charge, cannot yet be paid out. Derives to RESTRICTED, and this is the state the Dashboard's
+ * payout banner exists for — its wording ("card payments can be taken, but money cannot reach your
+ * bank") is true here and was not true of the pair this file used to write.
+ */
+const STRIPE_PAYOUTS_HELD: StripeState = {
+  cardPaymentsStatus: "active",
+  payoutsStatus: "restricted",
+};
+
+/** Stripe has told us nothing: the venue cannot take a card at all. Derives to NOT_STARTED. */
+const STRIPE_UNTOUCHED: StripeState = { cardPaymentsStatus: null, payoutsStatus: null };
+
 async function restaurant(
   prisma: PrismaClient,
   organizationId: string,
   name: string,
+  stripe: StripeState,
 ): Promise<string> {
   const created = await prisma.restaurant.create({
     data: {
@@ -171,10 +225,12 @@ async function restaurant(
       defaultCustomerLocale: "lt",
       timezone: "Europe/Vilnius",
       address: "Gedimino pr. 1, Vilnius",
-      // Left NOT_STARTED on purpose for one of the three, so the payout banner is visible on at
-      // least one screen — it is part of what the Founder is looking at (ADR-063).
-      onboardingStatus: "NOT_STARTED",
-      payoutsStatus: name.startsWith("Vilnius") ? "active" : "restricted",
+      cardPaymentsStatus: stripe.cardPaymentsStatus,
+      payoutsStatus: stripe.payoutsStatus,
+      // Derived, never asserted — see StripeState above. Zero requirements, because this demo has
+      // no outstanding Stripe requirement to describe: that is precisely what makes the middle
+      // venue RESTRICTED rather than IN_PROGRESS.
+      onboardingStatus: deriveOnboardingStatus(stripe.cardPaymentsStatus, stripe.payoutsStatus, 0),
     },
   });
   return created.id;
@@ -342,12 +398,11 @@ function print(r: Restaurants): void {
     email     ${DEMO_EMAIL}
     password  ${DEMO_PASSWORD}
 
-  Then open one of these three — the Restaurants list is still a stub, so these are the way
-  between them:
+  Signing in lands on the Restaurants list, which links to all three. The direct addresses:
 
-    1. sales, tips, a named person   ${url(r.withSales)}
-    2. open shift, nothing sold      ${url(r.quiet)}
-    3. closed 01:30, after-midnight  ${url(r.acrossMidnight)}
+    1. sales, tips, a named person   ${url(r.withSales)}       (Stripe live)
+    2. open shift, nothing sold      ${url(r.quiet)}       (payouts held — banner)
+    3. closed 01:30, after-midnight  ${url(r.acrossMidnight)}       (Stripe untouched)
 
   Re-running this command resets all three.
 `);
