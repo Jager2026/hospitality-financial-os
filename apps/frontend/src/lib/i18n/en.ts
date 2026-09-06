@@ -136,9 +136,20 @@ export const en = {
   "agreement.unpublished":
     "This document hasn’t been written yet. Until it exists, no real restaurant should be signing up — and any acceptance recorded before then would be a record of agreement to nothing.",
 
-  // Destinations after login — stubs for now, real screens arrive with their own work
+  // Destinations after login. Create Your Restaurant is still a stub — it arrives with its own
+  // slice; the Restaurants list below is built.
   "createRestaurant.title": "Create your restaurant",
   "restaurants.title": "Your restaurants",
+  "restaurants.loading": "Loading your restaurants…",
+  "restaurants.error.title": "We could not load your restaurants",
+  "restaurants.error.explain":
+    "The list could not be fetched. Your restaurants are unaffected — this screen simply has nothing to show yet.",
+  "restaurants.flag.setupNotStarted": "Card setup not started",
+  "restaurants.flag.cannotTakeCards": "Cannot take cards yet",
+  "restaurants.empty.title": "Let’s add your first restaurant",
+  "restaurants.empty.explain":
+    "Your account is ready. A restaurant is where payments, staff and figures live, so it is the next thing to create — it takes a few minutes and you can change every detail later.",
+  "restaurants.empty.action": "Add a restaurant",
   "dashboard.title": "Dashboard",
   "screen.notBuilt":
     "This screen isn’t built yet. Logging in reached it, which is what is being tested.",

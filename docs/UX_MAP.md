@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.5.0
+version: 2.6.0
 status: Active
 classification: Internal
 owner: Founder
@@ -216,6 +216,20 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 **Deliberately reduced (Sprint 13 frontend review).** This card previously promised Today's Revenue, Today's Tips, Employee Count and Last Activity. None of those exists as a per-restaurant figure the list can fetch: the only source is the single-restaurant Dashboard call, so a chain of ten locations would mean ten of them — each one also computing a 7-day chart and a staff ranking the list has no use for. **Founder decision: ship the list with name and status first and find out whether the aggregates are actually missed.** If they are, the answer is one purpose-built summary endpoint, not ten Dashboard calls — but that endpoint should be designed against a real complaint rather than a guess about one.
 
 **What changed (ADR-005):** this screen is the view onto an Organization's Restaurants. Nothing about the card, or the "single-location businesses skip this completely" rule, changes — a business with one Restaurant still never sees this screen, exactly as before. What's new: an org-wide Owner (a Membership with no specific restaurant attached) lands here first after login, instead of a single Dashboard, since their role spans every location. A restaurant-scoped Manager still goes straight to that one Restaurant's Dashboard. "Add Restaurant" becomes a primary action here — adding a second location to the same Organization, not starting over.
+
+**Built in Sprint 15, and the row is Name · Address · a payments state.** What the row shows was settled by fact rather than preference: `GET /restaurants` was called against a running backend, and it already carries `name`, `address`, `status`, `onboardingStatus`, `cardPaymentsStatus` and `payoutsStatus`. So the payments state costs **nothing** — no second call, no call per row. The two candidates that are *not* in that response are an open shift and its revenue, and each would cost a `GET /dashboard` per restaurant: exactly the ten-calls-for-ten-locations shape the Sprint 13 reduction above already refused, arriving by a different door.
+
+**Why a payments state rather than the bare `Status` this card originally named.** The question an owner is actually asking on this screen is *which of these can take money right now* — and a venue that cannot is the one fact they would otherwise discover one click later, inside the Dashboard, as a banner. So the row says it in words: **Closed** when the venue is not `ACTIVE`, **Card setup not started** or **Cannot take cards yet** when it cannot take a card, and nothing at all when it can. A word, not a colour (ADR-072 — the accent carries no meaning): an owner whose second venue is mid-onboarding is not in an incident.
+
+**The state is our cached view of Stripe, deliberately.** Only `GET /restaurants/{id}` re-reads Stripe (`refreshStripeStatus`); the list reads what was last stored. Same reasoning as ADR-063 — a navigation screen must not hang or fail because Stripe is slow.
+
+**City is not a field.** `Restaurant` has a single free-text `address` (`DATABASE.md`); there is no `city` column to show, and adding one is a schema change rather than a list-screen decision. The row shows the address line that exists.
+
+**No money is rendered here.** Nothing on this screen formats an amount, so `formatMoney` / `venueMoneyLocale` (`lib/money.ts`) remain the *single* place that does — the one fixed in Sprint 15 after a Lithuanian venue was shown American-shaped money. If a revenue column is ever added, it calls that; it does not grow a second formatter.
+
+**No restaurants at all leads somewhere.** A brand-new owner sees an invitation to create their first restaurant, linking to `/onboarding/restaurant` — never an empty list, which would be the worst possible first screen of the product: nothing to read, nothing to do, and no evidence that signing up worked. In practice this state is a safety net rather than the main path, because the login fork already sends a User with zero Memberships straight to `/onboarding/restaurant`; the empty list is what a person reaches by navigating here deliberately.
+
+**The "single-location businesses skip this screen completely" rule above is not what happens for an org-wide Owner, and that divergence is open rather than resolved.** `destinationAfterLogin` sends *every* org-wide Membership here regardless of how many Restaurants the Organization holds, so an owner of one venue signs in and reads a list of one. A restaurant-scoped Membership does skip it, exactly as documented. Both answers have a real price and neither was chosen while building the list — they are recorded, with their costs, in `IMPLEMENTATION_PLAN.md` under "Deferred, Not Yet Scheduled".
 
 **Restaurant Details:** Overview · Employees · Transactions · Analytics · Settings
 

@@ -8,3 +8,10 @@ docs/**/*.md
 CLAUDE.md
 README.md
 pnpm-lock.yaml
+
+# Playwright's own output. Git already ignores it (apps/e2e/.gitignore), so CI never sees it on a
+# clean checkout — but locally it is written by every browser run and then fails `format`, which
+# turns "run the whole gate before pushing" into a step that reliably reports a problem nobody
+# introduced. A generated directory has no formatting to check.
+apps/e2e/test-results/
+apps/e2e/playwright-report/
