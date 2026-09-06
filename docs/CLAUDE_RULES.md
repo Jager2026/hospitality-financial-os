@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.18.0
+version: 2.19.0
 status: Active
 classification: Critical
 priority: Highest
@@ -210,6 +210,8 @@ Never refactor for ego. Refactor because future engineers deserve better.
 The asymmetry is what makes this worth a rule: a broken checker usually fails by **finding something**, and a finding is exactly what an audit is looking for, so nothing about the result feels wrong. **Before reporting what a tool you just wrote has found, run it against a case whose answer you already know** — one that must come back clean and one that must come back dirty. That is the same discriminating-pair standard the tests are held to, applied to the instrument rather than the subject.
 
 **Run the whole gate before pushing, not the part that looks relevant — and the whole gate includes `build`.** Lint, typecheck and tests are the ones a change *feels* like it needs; the build is the one that enforces `rootDir`, decides what actually deploys, and is therefore the one whose absence is invisible until CI. Skipping it let 50 compiled spec files ship in the production bundle unnoticed, and let a fixture import that could never compile reach CI instead of being caught in seconds. **A gate you run selectively is a gate you have already weakened.**
+
+**And the whole gate is one command — `pnpm run gate` — because until Sprint 15 it was not runnable at all.** Two of CI's checks (`check-doc-index.js`, `check-audit.js`) existed only inside the workflow; no `package.json` called them, so "I ran the gate" could not be true however carefully anyone tried. A gate assembled from memory each time is run selectively by construction, not by carelessness — which is how a documentation version reached CI with its register row still naming the old number while every local check was green. The command takes no flags on purpose: a gate with a way past it becomes the way past it. What it still cannot promise is the fresh, empty database CI starts from, so `pnpm run db:reset` remains the answer when a failure smells of accumulated rows.
 
 **Branch from `main` unless the work genuinely depends on code in an open pull request — and check what `main` actually is before branching, rather than assuming the previous PR merged.** A stack of branches built on unmerged PRs breaks against squash-merge **mechanically, regardless of content**: squashing puts a single new commit on `main`, every descendant still carries the originals, and each one goes `CONFLICTING` the moment its parent lands. Nothing about the code has to overlap for this to happen.
 
