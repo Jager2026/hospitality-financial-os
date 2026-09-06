@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hashPassword } from "../auth/password.util";
+import { ABANDONED_TEXT } from "../email/email-outbox.service";
 import { executeRedaction, planRedaction } from "./redact-user";
 
 /**
@@ -92,6 +93,28 @@ describe("erasure leaves nothing (ADR-052, schema-wide)", () => {
       data: { outboxEventId: event.id, to: email, subject: "You have been invited" },
     });
 
+    // ADR-075 option A leaves this shape behind: a message that was never delivered, whose BODY
+    // has been redacted at the end of the retry window and whose recipient is deliberately kept.
+    // The body going is what bounds the token; the address staying is what makes this row the
+    // erasure path is problem rather than the abandonment path is.
+    const abandonedEvent = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "MembershipInvitation",
+        aggregateId: user.id,
+        eventType: "email.send_requested",
+        payload: { to: email, subject: "You have been invited", text: ABANDONED_TEXT },
+      },
+    });
+    await prisma.emailDelivery.create({
+      data: {
+        outboxEventId: abandonedEvent.id,
+        to: email,
+        subject: "You have been invited",
+        status: "FAILED",
+        lastError: "Resend returned 422: domain is not verified",
+      },
+    });
+
     // THE CASE THAT MUST PASS BEFORE THE ONE THAT MUST FAIL. A sweep that found nothing would
     // report a perfect erasure of an address that was never stored — the vacuous green this
     // project has been bitten by more than once.
@@ -100,8 +123,14 @@ describe("erasure leaves nothing (ADR-052, schema-wide)", () => {
       before.length,
       "the sweep found the address nowhere BEFORE the erasure, so it proves nothing after it",
     ).toBeGreaterThanOrEqual(3);
-    expect(before.some((f) => f.startsWith("outbox_event."))).toBe(true);
-    expect(before.some((f) => f.startsWith("email_delivery."))).toBe(true);
+    // BOTH Outbox rows, not merely one: the live request and the abandoned one. The sweep counts
+    // COLUMNS, so a second row does not raise the total — asserting the row count is what proves
+    // the abandoned shape is actually in scope, and a bigger threshold would only have looked like
+    // it did.
+    expect(before, "the abandoned delivery row is not being seen by the sweep").toContain(
+      "outbox_event.payload (2 rows)",
+    );
+    expect(before).toContain("email_delivery.to (2 rows)");
 
     const plan = await planRedaction(prisma, email);
     await executeRedaction(prisma, plan, { clearRequestMetadata: true });

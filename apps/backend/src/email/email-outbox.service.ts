@@ -27,6 +27,33 @@ import { EmailSendError, EmailService } from "./email.service";
  */
 
 export const EMAIL_OUTBOX_EVENT_TYPE = "email.send_requested";
+
+/**
+ * How long an undelivered email keeps being retried before it is abandoned (ADR-075 option A).
+ *
+ * **Why a window rather than an attempt count.** The poller runs every two seconds, so a count
+ * large enough to be safe is a number of *seconds*: twenty attempts is forty seconds, which would
+ * abandon real messages during an ordinary provider blip. Permanence is a property of elapsed
+ * time, not of how often we happened to ask.
+ *
+ * **Why twenty-four hours specifically, and not a round number chosen for feeling right.** It is
+ * the lifetime of Resend's `Idempotency-Key` (ADR-069), and the key is the OutboxEvent id. Past
+ * that point a retry is no longer deduplicated by the provider, so the send stops being the same
+ * send and becomes a new one — the guarantee that made retrying safe has expired. Retrying after
+ * the window is a different act from retrying inside it, and this is where that changes.
+ */
+export const ABANDON_UNDELIVERED_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * What a payload says once delivery has been abandoned.
+ *
+ * Deliberately NOT the same string as the success marker, though it is the same SHAPE. Both leave
+ * `{ to, subject, text }`, so any reader parses one thing — but "redacted after delivery" and
+ * "redacted after abandoning delivery" are different facts about a person, and a table that cannot
+ * tell them apart forces the reader to join against `EmailDelivery.status` to learn whether the
+ * message ever arrived.
+ */
+export const ABANDONED_TEXT = "[redacted after abandoning delivery]";
 export const EMAIL_OUTBOX_AGGREGATE_TYPE = "EmailDelivery";
 
 /** What an email request carries. The BODY IS HERE, which is the uncomfortable part and is stated
@@ -113,6 +140,18 @@ export class EmailOutboxService {
       // this design exists to prevent.
       throw new Error(`OutboxEvent ${event.id} has no EmailDelivery record — refusing to send`);
     }
+    if (text === ABANDONED_TEXT) {
+      // Defence in depth against the one way this change could do harm. Once the body is redacted
+      // there is nothing left to send, and a retry that got this far would deliver the marker
+      // itself to a real address. The poller already excludes abandoned events from its batch;
+      // this is the second lock, on the other side of that decision.
+      this.logger.warn(
+        { eventId: event.id, deliveryId: delivery.id },
+        "Email event was abandoned and its body redacted — refusing to send (ADR-075)",
+      );
+      return;
+    }
+
     if (delivery.status === "SENT") {
       // A second dispatcher reaching an already-sent row. Nothing to do, and saying so is not the
       // same as pretending it never happened.
@@ -152,10 +191,37 @@ export class EmailOutboxService {
       // then the error is rethrown so the poller's existing attempt counter and its alert at five
       // failures still fire — this records what happened, it does not swallow it.
       const message = err instanceof EmailSendError ? err.message : String(err);
-      await this.prisma.emailDelivery.update({
-        where: { id: delivery.id },
-        data: { status: "FAILED", lastError: message.slice(0, 1000) },
+      const abandoned = Date.now() - event.createdAt.getTime() >= ABANDON_UNDELIVERED_AFTER_MS;
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.emailDelivery.update({
+          where: { id: delivery.id },
+          data: { status: "FAILED", lastError: message.slice(0, 1000) },
+        });
+
+        if (abandoned) {
+          // ADR-075 option A. The FACT survives — the event row, its type, its aggregate, its
+          // timestamps, and the EmailDelivery row carrying the recipient, the subject, the FAILED
+          // status and the provider's own words. Only the body goes.
+          //
+          // Before this, a message that never arrived kept its `text` forever, and for an
+          // invitation that text contains a token. The token itself stops working after seven days
+          // by ADR-070's expiry query, but the body also carries the address, and nothing bounded
+          // that at all.
+          await tx.outboxEvent.update({
+            where: { id: event.id },
+            data: { payload: { to, subject, text: ABANDONED_TEXT } },
+          });
+        }
       });
+
+      if (abandoned) {
+        this.logger.error(
+          { eventId: event.id, deliveryId: delivery.id, createdAt: event.createdAt },
+          "Email delivery abandoned after the retry window — body redacted, record kept (ADR-075)",
+        );
+      }
+
       throw err;
     }
   }

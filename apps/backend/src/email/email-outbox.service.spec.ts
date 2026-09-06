@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaService } from "../prisma/prisma.service";
-import { EMAIL_OUTBOX_EVENT_TYPE, EmailOutboxService } from "./email-outbox.service";
+import {
+  EMAIL_OUTBOX_EVENT_TYPE,
+  EmailOutboxService,
+  ABANDON_UNDELIVERED_AFTER_MS,
+  ABANDONED_TEXT,
+} from "./email-outbox.service";
 import { EmailSendError, type EmailService } from "./email.service";
 
 /**
@@ -204,5 +209,72 @@ describe("EmailOutboxService (real database)", () => {
 
     await expect(service.handle(malformed)).rejects.toThrow(/not a well-formed email request/);
     expect(calls).toHaveLength(0);
+  });
+  // ADR-075 option A. The pair below is one discriminating test split in two: the SAME failing
+  // send, inside and outside the retry window, must leave different rows. A version that redacts
+  // only on success passes neither.
+  it("keeps the body while a failing send is still inside the retry window", async () => {
+    const { service } = serviceWith("fail");
+    const { delivery, event } = await enqueueOne(service);
+
+    await expect(service.handle(event)).rejects.toThrow(EmailSendError);
+
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    const payload = after.payload as { to: string; subject: string; text: string };
+    expect(
+      payload.text,
+      "a message that may still be delivered must keep the body it would send",
+    ).toBe(NOISE);
+    expect(
+      (await prisma.emailDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status,
+    ).toBe("FAILED");
+  });
+
+  it("redacts the body once a failing send is past the retry window, and keeps the record of it", async () => {
+    const { service } = serviceWith("fail");
+    const { delivery, event } = await enqueueOne(service);
+
+    // The only difference from the test above. Backdating rather than waiting a day is the whole
+    // reason the window is read from `createdAt` instead of counted in attempts.
+    const aged = await prisma.outboxEvent.update({
+      where: { id: event.id },
+      data: { createdAt: new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS - 1000) },
+    });
+
+    await expect(service.handle(aged)).rejects.toThrow(EmailSendError);
+
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    const payload = after.payload as { to: string; subject: string; text: string };
+
+    // THE BODY GOES.
+    expect(payload.text, "the body of an abandoned message must not survive").toBe(ABANDONED_TEXT);
+
+    // THE FACT STAYS. Same shape as the success redaction, and the row is still unpublished —
+    // saying "published" about a message nobody received would be the lie this avoids.
+    expect(payload.to).toBe((after.payload as { to: string }).to);
+    expect(payload.subject).toBe("You have been invited");
+    expect(after.publishedAt, "an abandoned message was never published").toBeNull();
+
+    const record = await prisma.emailDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
+    expect(record.status).toBe("FAILED");
+    expect(record.lastError, "the provider's own words survive the redaction").toContain(
+      "domain is not verified",
+    );
+  });
+
+  it("refuses to send an abandoned event rather than delivering the redaction marker", async () => {
+    const { service, calls } = serviceWith("ok");
+    const { event } = await enqueueOne(service);
+    await prisma.outboxEvent.update({
+      where: { id: event.id },
+      data: { payload: { to: "someone@example.invalid", subject: "s", text: ABANDONED_TEXT } },
+    });
+
+    const abandoned = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    await service.handle(abandoned);
+
+    // The one way this change could do harm: a retry after redaction would put the marker itself
+    // in front of a real person. The transport must not have been called at all.
+    expect(calls, "an abandoned event must not reach the transport").toEqual([]);
   });
 });

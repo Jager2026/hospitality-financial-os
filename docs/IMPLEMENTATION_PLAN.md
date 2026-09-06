@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.30.0
+version: 2.31.0
 status: Active
 classification: Critical
 priority: Highest
@@ -493,6 +493,18 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Where it belongs:** the invitation accept screen does not exist yet either, and that is the natural home for the agreement checkbox — the same screen, one change. Doing it before that screen exists would mean recording a consent nobody was shown.
 
   Its own axis, deliberately not folded into ADR-070: that change was onboarding delivery, this one is consent capture, and a legal record is not something to land as a side effect of a mail feature.
+
+- **A retention mechanism — and the precondition is written first on purpose, so nobody starts at the mechanism.** ADR-075 option C, refused there on ORDER rather than on merit.
+
+  **PRECONDITION: `AuditLog` must separate its two populations in the SCHEMA before any purge job is written.** A row recording a payment is transaction-connected and falls under the ten-year accounting floor; a row recording a failed login is not, and falls under the general contract rule. Nothing in the schema distinguishes them today — `AuditLog` has an `entity` column that could, and no code reads it for this purpose (`PERSONAL_DATA_MAP.md` §6).
+
+  **Why that ordering is not a preference.** A retention mechanism is infrastructure: whatever shape it takes, every table asks it the same question. Building it around a table that **cannot say which period applies to which row** would hard-wire the wrong answer at the level where it is hardest to change afterwards — either unlawfully short for the financial rows or needlessly long for the rest, applied by a job nobody re-reads. **The schema question is the cheap one and it comes first.**
+
+  **What it is, so its size is not underestimated: this system has no retention mechanism at all.** Established by searching, 2026-09-06 — no scheduled deletion of any row anywhere; three `@Interval` jobs exist (Outbox poller, payment reconciliation, shift auto-close) and not one deletes anything; the only TTL constant in the codebase is `KEY_TTL_MS` for idempotency keys. This is a first, not an addition.
+
+  **What already waits on it**, and the list is the argument for doing it rather than the reason to defer again: `OutboxEvent` (ADR-075 — option A bounds the abandoned *body*, and nothing bounds the *address*), `EmailDelivery.to` (one row per message, kept), and `AuditLog` itself.
+
+  **Trigger: before the first venue onboards staff.** The same trigger the consent gap already carries (ADR-070), and for the same reason — that is when invitations start failing against real addresses and when the tables start holding people rather than test rows. **The precondition above must be met inside that window, not after it.**
 
 - **ADR-048's flag rule has no mechanism, and only half of it can get one.** Found in the block-closure correction to the seed entry above (2026-09-05), and split here because the two halves have genuinely different answers rather than different priorities.
 
