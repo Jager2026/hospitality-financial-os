@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.6.0
+version: 2.7.0
 status: Active
 classification: Internal
 owner: Founder
@@ -186,6 +186,20 @@ Questions answered: How much revenue today? How many transactions? How many tips
 If these questions cannot be answered within five seconds, the dashboard has failed.
 
 **New (ADR-009):** if this Restaurant's Stripe onboarding isn't complete — `cardPaymentsStatus` or `payoutsStatus` is not `active` — the Dashboard leads with a single, unmissable banner instead of competing with the sections below: "Finish payment setup to start accepting cards," naming the specific outstanding requirement, with one button to resolve it. Everything else on this screen is secondary until that banner is gone.
+
+**Built in Sprint 15, and the specification above was already right — the code had drifted from it.** The line "`cardPaymentsStatus` **or** `payoutsStatus` is not `active`" says to read both; the shipped condition read one, `payoutsStatus != null && payoutsStatus !== "active"`. For a venue whose Stripe onboarding was never started both capabilities are `null`, so the second half of that condition was false and **the venue least able to take money was the only one the Dashboard said nothing about** — while the Restaurants list, built later against the same data, said it plainly. Found by fixing the local demo fixture (#177), not by reading the code.
+
+**Three states, three messages, and the order of the two questions is the meaning.** Cards first, because a venue that cannot charge has nothing to be paid out:
+
+| State | What the screen says |
+|---|---|
+| `cardPaymentsStatus` not `active` | **Card payments are not switched on here yet** — Stripe has not finished verifying this restaurant, so no card can be taken at this venue, tips included. Completing the payment setup is what changes it. |
+| cards live, `payoutsStatus` not `active` | **Payouts are not switched on yet** — cards can be taken and the money is **held at Stripe rather than lost**; it reaches the bank once Stripe finishes verifying the payout details. |
+| both `active` | Nothing. Silence is the correct output, and the only one. |
+
+**A fourth case exists and is deliberately silent: we do not know.** ADR-063 makes the Stripe status a second request, so it can fail on its own. A banner announcing that cards do not work, caused by our own failed call, would be a fabrication the reader could not tell from the real thing — so a missing answer renders nothing (`stripe-state.ts` keeps "unknown" distinguishable from "live" for anyone reading a test).
+
+**Words, not colour** (ADR-072), and an explanation rather than a warning: a venue mid-onboarding is not in an incident, and a venue whose payouts are held has not lost anything. **What is NOT built is the button** this section promises — Connect Payments is its own screen and does not exist yet, so each message names the action in words instead of linking to a route that would 404. Naming the *specific outstanding requirement* also waits on that screen: `requirementsDue` is stored, and no screen reads it.
 
 **Dashboard Sections:** Today's Revenue · Today's Tips · Today's Transactions · Average Bill · Average Tip · Revenue Chart · Recent Payments · Top Staff · Quick Actions
 
