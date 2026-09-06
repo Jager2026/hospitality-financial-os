@@ -94,7 +94,7 @@ async function seed(
        country, currency, default_customer_locale, timezone, address, status,
        onboarding_status, created_at, updated_at
      ) VALUES ($1, $2, $3, $4, '300000000', 'LT100000000000', $5, '+37060000000',
-       'LT', 'EUR', 'en', 'Europe/Vilnius', 'Gedimino pr. 1, Vilnius', 'active',
+       'LT', 'EUR', 'lt', 'Europe/Vilnius', 'Gedimino pr. 1, Vilnius', 'active',
        'not_started', NOW(), NOW())`,
     [restaurantId, organizationId, name, `${name} UAB`, `contact-${restaurantId}@example.test`],
   );
