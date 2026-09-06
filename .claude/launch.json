@@ -6,6 +6,18 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "frontend", "run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "backend-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "backend", "run", "dev"],
+      "port": 3001
+    },
+    {
+      "name": "portal-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
     }
   ]
 }
