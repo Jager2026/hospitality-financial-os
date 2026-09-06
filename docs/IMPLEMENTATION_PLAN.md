@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.32.0
+version: 2.33.0
 status: Active
 classification: Critical
 priority: Highest
@@ -548,6 +548,18 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   This needs somewhere to **aggregate** — a rate over a window, per route, per error code — which is a different mechanism from a webhook POST and the strongest honest argument for a third-party tool. **Trigger: before the first pilot restaurant, or the first production payment, whichever comes first** — both are the moment "nobody has phoned" stops being evidence that nothing is wrong.
 
   The Founder's four conditions on Sentry stand and are recorded here so they survive the chat that produced them: no PII in events; the redaction list must have **one source shared by pino and Sentry**, because two lists diverge and the second one silently stops matching; the SDK is evaluated as a dependency like any other; and it is added as a *second sink for our policy*, never as the thing that defines it.
+
+- **An owner of exactly one restaurant lands on a list of one, and `UX_MAP.md` says they should not. Shown rather than decided (Sprint 15, Founder's instruction on the Restaurants list).**
+
+  **The fact first.** `destinationAfterLogin` sends *every* org-wide Membership to `/restaurants`, regardless of how many Restaurants the Organization holds — an org-wide Membership carries no count, and the login response has none to give. A single restaurant-scoped Membership already skips the list and goes straight to its Dashboard. So `UX_MAP.md`'s "single-location businesses skip this screen completely" is true for a scoped Manager and false for the owner of one venue — which is the shape almost every early customer will have.
+
+  **Option 1 — keep today's behaviour: everyone org-wide sees the list.** *Price:* the one-venue owner pays an extra screen and an extra click on every single sign-in, permanently, on the way to the only screen they use. *Buys:* one destination and one mental model; the landing page does not change under them the day they open a second venue; and `destinationAfterLogin` stays a pure function of Membership **shape**, needing no restaurant count — so nothing has to be added to the login response and nothing has to be fetched before the redirect can be computed.
+
+  **Option 2 — what the document says: skip the list when exactly one restaurant is reachable.** *Price:* the decision needs a number nobody currently has at login. Either the login response starts carrying the reachable Restaurants (a backend change), or the Portal calls `GET /restaurants` *before* deciding where to go — which puts a round trip in front of every sign-in and a visible second redirect in front of every owner. The destination also becomes dynamic: the morning after a second venue opens, signing in stops going where it went yesterday, with no explanation. And the list still has to exist and stay reachable from the nav, so this removes a click, not a screen. *Buys:* the common owner lands on the screen they actually want, several times a day.
+
+  **Option 3, named so it is rejected on the record rather than rediscovered.** Redirect *from the list itself* once the data arrives and holds exactly one row — no extra call, since the list already fetched it. It breaks the back button into a loop (Dashboard → back → list → redirect → Dashboard) and makes the nav's own "All restaurants" link appear to do nothing. Cheapest to build, worst to use.
+
+  **Trigger: the first customer who opens a second venue.** That is when the difference stops being cosmetic — it is the moment Option 2's "the destination changed under you" cost becomes real for somebody, and the moment Option 1's extra click starts buying something instead of only costing. Until then the answer is one click for a handful of people, and either choice is defensible.
 
 ---
 
