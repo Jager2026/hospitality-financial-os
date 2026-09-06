@@ -1,9 +1,20 @@
 import type { JSX } from "react";
-import { t } from "../../../lib/i18n";
-import { Stub } from "../../_stub";
+import { DashboardView } from "./dashboard-view";
 
-/** One Restaurant's Dashboard — where a single restaurant-scoped Membership lands (`UX_MAP.md`).
- * Not built yet; the Dashboard itself is the screen DESIGN_SYSTEM.md's Hierarchy Law describes. */
-export default function RestaurantDashboardPage(): JSX.Element {
-  return <Stub title={t("dashboard.title")} />;
+/**
+ * One Restaurant's Dashboard — where a restaurant-scoped Membership lands after login
+ * (`UX_MAP.md`, `destination.ts`).
+ *
+ * **The screen lives at `/restaurants/:id` rather than at `/dashboard`, and that is the existing
+ * decision rather than a new one.** A Dashboard is always exactly one Restaurant's view: the API's
+ * own query DTO requires `restaurantId` for that reason, and an org-wide Owner lands on the
+ * Restaurants list instead. A bare `/dashboard` would have to guess which venue is meant.
+ */
+export default async function RestaurantDashboardPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<JSX.Element> {
+  const { id } = await params;
+  return <DashboardView restaurantId={id} />;
 }

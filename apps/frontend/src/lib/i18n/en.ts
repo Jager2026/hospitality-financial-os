@@ -143,6 +143,45 @@ export const en = {
   "screen.notBuilt":
     "This screen isn’t built yet. Logging in reached it, which is what is being tested.",
 
+  // ── The Dashboard, first real Portal screen ──────────────────────────────────────────────
+  // Every caption says SHIFT rather than "today" (ADR-065): a screen that shows shift-scoped
+  // figures under a calendar-day word is the exact ambiguity that ADR exists to remove.
+  "dashboard.nav.restaurants": "Restaurants",
+  "dashboard.nav.signOut": "Sign out",
+  "dashboard.shift.openedAt": "Shift opened",
+  "dashboard.shift.closedAt": "Shift closed",
+  "dashboard.shift.open": "Open now",
+  "dashboard.shift.businessDate": "Business day",
+  "dashboard.revenue": "Shift revenue",
+  "dashboard.revenueNote": "Before platform fee deduction",
+  "dashboard.tips": "Tips to staff",
+  "dashboard.averageBill": "Average bill",
+  "dashboard.averageTip": "Average tip",
+  "dashboard.transactions": "Sales",
+  "dashboard.afterMidnight.title": "Of that, after midnight",
+  "dashboard.afterMidnight.explain":
+    "This shift was still open past midnight, so part of its money belongs to the next calendar day. That is why this total and a bank statement can disagree — both are right.",
+  "dashboard.empty.title": "The shift is open. Nothing has been sold yet.",
+  "dashboard.empty.explain":
+    "This is what a normal morning looks like. Figures appear here as sales are taken — nothing is wrong, and nothing is being hidden.",
+  "dashboard.noShift.title": "No shift has been opened here yet.",
+  "dashboard.noShift.explain":
+    "A shift opens with the first sale of the working day, or when someone opens it. Until then there is no working day to report on.",
+  "dashboard.stripe.title": "Payouts are not switched on yet",
+  "dashboard.stripe.explain":
+    "Card payments can be taken, but money cannot reach your bank until Stripe finishes verifying this restaurant.",
+  "dashboard.error.title": "We could not load this dashboard",
+  "dashboard.error.retry": "Try again",
+  "dashboard.error.unreachable": "We can’t reach the server right now.",
+  "dashboard.error.forbidden": "This account cannot read this restaurant’s figures.",
+  "dashboard.loading": "Loading the current shift…",
+  "notFound.title": "That page does not exist",
+  "notFound.explain": "The link may be old, or the address may have a typo in it.",
+  "notFound.home": "Go to Restaurants",
+  "error.title": "Something went wrong",
+  "error.explain": "The screen stopped rather than showing you a figure it could not stand behind.",
+  "error.retry": "Try again",
+
   // Sample content used by the specimen — real strings, never lorem
   "dashboard.todayRevenue": "Today’s revenue",
   "dashboard.todayRevenueNote": "Before platform fee deduction",

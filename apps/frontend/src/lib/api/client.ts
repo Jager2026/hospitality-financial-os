@@ -20,10 +20,36 @@ export async function apiPost<T>(path: string, body: unknown): Promise<ApiResult
   return await send<T>(path, { method: "POST", body: JSON.stringify(body) });
 }
 
-/** Reads a public resource. No credentials — the two callers so far (the terms version a person
- * must be able to see before they have an account) precede any session. */
+/** Reads a public resource. No credentials — its callers (the terms version a person must be able
+ * to see before they have an account) precede any session. */
 export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
   return await send<T>(path, { method: "GET" });
+}
+
+/**
+ * Reads a resource that requires a session.
+ *
+ * **Separate from `apiGet` deliberately, rather than an optional flag on it.** Whether a request
+ * carries credentials is the difference between a public document and a person is money, and a
+ * boolean argument makes that difference easy to get wrong by omission — the failure would be a
+ * screen silently reading nothing, or a token attached to a route that should never see one.
+ * Two names cannot be confused by forgetting an argument.
+ *
+ * Returns `SESSION_MISSING` rather than sending an unauthenticated request. A 401 from the server
+ * and "we never had a token" are different facts, and a screen that cannot tell them apart cannot
+ * word them differently.
+ */
+export async function apiGetAuthed<T>(
+  path: string,
+  accessToken: string | null,
+): Promise<ApiResult<T>> {
+  if (accessToken === null || accessToken === "") {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+  return await send<T>(path, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
 }
 
 async function send<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
@@ -31,7 +57,9 @@ async function send<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
   try {
     response = await fetch(`${BASE_URL}/api/v1${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json" },
+      // init.headers last: a caller-supplied Authorization must survive, and spreading it after
+      // the default is what makes that true rather than hoped for.
+      headers: { "Content-Type": "application/json", ...init.headers },
     });
   } catch {
     // The network itself failed — no response to read a code from. Distinguished from an API

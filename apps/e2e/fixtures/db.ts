@@ -42,3 +42,33 @@ export async function execute(sql: string, params: unknown[] = []): Promise<void
     await client.end();
   }
 }
+
+/**
+ * Several writes inside ONE transaction.
+ *
+ * **Why this exists rather than calling `execute` three times.** `execute` opens its own
+ * connection and commits on its own, so three calls are three transactions. That is invisible until
+ * a constraint is DEFERRED — and `ledger_line`'s balance trigger is (ADR-002): it sums debits and
+ * credits per journal entry **at COMMIT**. Seeding a posting one statement at a time therefore
+ * fails on the first line, correctly, because at that moment the entry really is unbalanced.
+ *
+ * The trigger caught the fixture rather than the fixture working around the trigger, which is the
+ * right way round and is why this helper is narrow: it makes a balanced posting expressible, not
+ * an unbalanced one possible.
+ */
+export async function executeAll(statements: { sql: string; params?: unknown[] }[]): Promise<void> {
+  const client = new Client({ connectionString: E2E_DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query("BEGIN");
+    for (const statement of statements) {
+      await client.query(statement.sql, statement.params ?? []);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
