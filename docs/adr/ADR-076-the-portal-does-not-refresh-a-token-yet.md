@@ -1,7 +1,7 @@
 ---
 title: ADR-076 — The Portal does not refresh a token yet, and the cheaper option is the one with a race
-version: 1.0.0
-status: Proposed
+version: 1.1.0
+status: Accepted
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,8 +9,9 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-076 — The Portal does not refresh a token yet, and the cheaper option is the one with a race
 
-**Status:** Proposed (Sprint 15), 2026-09-06. **Two options, neither chosen.** The Dashboard slice
-ships without either; what it does instead is stated below and is deliberately not one of them.
+**Status:** Accepted (Sprint 15), 2026-09-06. **Option A, with the single-flight guard, on the
+Founder's decision — and the guard is part of the option rather than an addition to it.** B is
+not built as a stepping stone: it is a subset of A's own error handling, so A includes it.
 
 ---
 
@@ -82,6 +83,54 @@ something that looks like it worked.
 **Leaving it as it is.** The failure today is indistinguishable from the server being down, so the
 one thing the person can do about it — sign in again — is the one thing the screen does not suggest.
 Whichever of A or B is chosen, the wording of that state changes with it.
+
+---
+
+## Decision — A, and the guard is not optional
+
+**Built.** `authedGet` carries the session, and on a 401 renews once and replays. Concurrent
+callers share **one** in-flight refresh; the promise is the lock, so there is nothing to remember
+to hold.
+
+**The guard is part of the option because of what rotation does, not because concurrency is
+untidy.** Two refreshes rotate twice, and the second presents a token the first has already
+rotated away — which is the signature of a stolen credential, so the backend revokes the whole
+family. A naive implementation converts an ordinary expiry into a forced global logout, more
+reliably the more a screen fetches in parallel. This Dashboard fetches twice by design (ADR-063).
+
+**Three details that are decisions rather than mechanics:**
+
+- **The token is read at call time, never passed in.** A component that captured it on mount would
+  keep sending the old one after a renewal and refresh again on every request. `DashboardView` no
+  longer hands the token down at all.
+- **A 403 does not renew.** It is an authorization decision about a valid session; renewing would
+  change nothing and would spend a rotation.
+- **A fresh token refused immediately ends the session.** Retrying once more is the infinite loop
+  this exists to avoid: the renewal worked and the answer is still no.
+
+### The tests move the clock, because nothing else would have caught this
+
+The rule this project wrote after the last incident is that **a test cannot catch a defect whose
+only trigger is a variable it never moves** — and the whole suite was green while the Dashboard
+broke fifteen minutes after every sign-in. So the harness now runs the backend with a **six-second**
+access token (`playwright.config.ts`), and a test waits through a real expiry rather than
+simulating one.
+
+Falsified in both places:
+
+| Probe | Result |
+|---|---|
+| single-flight removed (unit) | the two-concurrent-requests test fails, naming two refreshes |
+| single-flight removed (browser) | **only** the concurrency test fails; the others still pass |
+
+The browser result is the useful half: silent renewal keeps working without the guard, which is
+exactly why the guard needed its own test. A screen that recovers is not evidence that it recovered
+once.
+
+**One consequence for the existing suite, worth naming because it inverts a previous test.**
+Breaking the access token alone used to end a session and now does not — the Portal renews and
+carries on. The test that asserted the ended-session screen now breaks **both** tokens, which is
+the real condition.
 
 ---
 

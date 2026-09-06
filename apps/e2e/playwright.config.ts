@@ -57,6 +57,14 @@ const backendEnv: Record<string, string> = {
   STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET,
   RESEND_API_KEY,
+  // SHORT ON PURPOSE, AND IT IS THE POINT OF THE REFRESH TESTS.
+  //
+  // Production runs 900 seconds. A suite that never lets a token expire cannot test what happens
+  // when one does — and that is precisely the defect that reached the Founder: the Dashboard broke
+  // fifteen minutes after signing in, every test was green, and no test anywhere moved the clock.
+  // Six seconds is short enough for a test to wait through and long enough that a screen finishes
+  // loading inside it.
+  JWT_ACCESS_TTL_SECONDS: "6",
   DEFAULT_PLATFORM_FEE_BASIS_POINTS: "100",
   CORS_ORIGIN: `http://localhost:${FRONTEND_PORT}`,
   FRONTEND_URL: `http://localhost:${FRONTEND_PORT}`,
