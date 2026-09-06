@@ -113,7 +113,7 @@ test("without a session, the dashboard is not shown and the browser ends up on L
   await expect(page.getByTestId("dashboard")).toHaveCount(0);
 });
 
-test("a session that the API rejects does not leave a dashboard on display", async ({
+test("a session whose REFRESH is refused ends, rather than looping or showing figures", async ({
   page,
   request,
 }) => {
@@ -125,13 +125,15 @@ test("a session that the API rejects does not leave a dashboard on display", asy
   await logIn(page, user.email, user.password);
   await expect(page.getByTestId("dashboard")).toBeVisible();
 
-  // A token the server will refuse — the shape of an expired one, which is the case the Portal
-  // does not yet handle (options recorded in the pull request, none chosen).
+  // BOTH tokens are broken, and that is what changed. Breaking the access token alone is no
+  // longer a session ending — the Portal renews and carries on, which is the whole point of this
+  // pull request. A session is over only when the refresh is refused too.
   await page.evaluate((key) => {
     const raw = window.localStorage.getItem(key);
     if (raw === null) throw new Error("no session to tamper with");
-    const session = JSON.parse(raw) as { accessToken: string };
+    const session = JSON.parse(raw) as { accessToken: string; refreshToken: string };
     session.accessToken = `${session.accessToken.slice(0, -4)}zzzz`;
+    session.refreshToken = `${session.refreshToken.slice(0, -4)}zzzz`;
     window.localStorage.setItem(key, JSON.stringify(session));
   }, SESSION_KEY);
 
@@ -182,4 +184,90 @@ test("an open shift with no sales explains itself in words instead of showing ze
   // must be absent, not merely accompanied by a sentence.
   await expect(page.getByTestId("revenue")).toHaveCount(0);
   await expect(page.getByTestId("dashboard")).not.toContainText("€0.00");
+});
+
+/**
+ * THE TESTS THAT MOVE TIME.
+ *
+ * The harness runs the backend with a six-second access token (playwright.config.ts) so a test can
+ * wait through an expiry. Production runs 900 seconds, and the defect that reached the Founder
+ * lived entirely in that gap: the Dashboard stopped working fifteen minutes after signing in, and
+ * every test was green because no test anywhere let a token die.
+ */
+const ACCESS_TTL_SECONDS = 6;
+
+test("an access token that has genuinely expired is renewed without the screen flinching", async ({
+  page,
+  request,
+}) => {
+  await resetRateLimits();
+  const user = await registerUser(request);
+  const { restaurantId } = await seedRestaurantScopedMember(user.email);
+  const shift = await seedOpenShift(restaurantId, "16:00");
+  await seedCapturedSale(restaurantId, shift.shiftId, 5_000n, 150n);
+
+  await logIn(page, user.email, user.password);
+  await expect(page.getByTestId("dashboard")).toBeVisible();
+
+  const before = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? "{}").accessToken as string,
+    SESSION_KEY,
+  );
+
+  // Real elapsed time, not a mocked clock: the token the server issued actually stops being valid.
+  await page.waitForTimeout((ACCESS_TTL_SECONDS + 2) * 1000);
+
+  await page.reload();
+
+  // The figures come back, so the renewal happened and was replayed.
+  await expect(page.getByTestId("dashboard")).toBeVisible();
+  await expect(page.getByTestId("revenue")).toContainText(`50,00\u00a0\u20ac`);
+
+  // AND THE SCREEN DID NOT FLINCH. The expired state must never have been rendered — a renewal
+  // that shows "your session has ended" first and recovers afterwards is not silent.
+  await expect(page.getByTestId("dashboard-error")).toHaveCount(0);
+
+  const after = await page.evaluate(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? "{}").accessToken as string,
+    SESSION_KEY,
+  );
+  expect(after, "the stored token was never replaced, so nothing was actually renewed").not.toBe(
+    before,
+  );
+});
+
+test("two requests expiring together renew the session once, not twice", async ({
+  page,
+  request,
+}) => {
+  await resetRateLimits();
+  const user = await registerUser(request);
+  const { restaurantId } = await seedRestaurantScopedMember(user.email);
+  const shift = await seedOpenShift(restaurantId, "16:00");
+  await seedCapturedSale(restaurantId, shift.shiftId, 5_000n, 150n);
+
+  await logIn(page, user.email, user.password);
+  await expect(page.getByTestId("dashboard")).toBeVisible();
+
+  // Count what the browser actually sends. The Dashboard fires two authenticated requests at once
+  // (ADR-063), so an unshared renewal produces two refreshes — and the second presents a token the
+  // first has already rotated away, which the backend reads as a stolen credential and answers by
+  // revoking the family.
+  const refreshes: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/auth/refresh")) refreshes.push(r.url());
+  });
+
+  await page.waitForTimeout((ACCESS_TTL_SECONDS + 2) * 1000);
+  await page.reload();
+  await expect(page.getByTestId("dashboard")).toBeVisible();
+  await expect(page.getByTestId("revenue")).toContainText(`50,00\u00a0\u20ac`);
+
+  expect(refreshes, "each request renewed on its own").toHaveLength(1);
+
+  // The family survived: a third read still works, which it would not if the backend had revoked
+  // the family over a replayed token.
+  await page.reload();
+  await expect(page.getByTestId("dashboard")).toBeVisible();
+  await expect(page.getByTestId("dashboard-error")).toHaveCount(0);
 });

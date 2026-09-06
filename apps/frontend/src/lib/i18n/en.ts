@@ -153,7 +153,11 @@ export const en = {
   "dashboard.shift.open": "Open now",
   "dashboard.shift.businessDate": "Business day",
   "dashboard.revenue": "Shift revenue",
-  "dashboard.revenueNote": "Before platform fee deduction",
+  // Option (b), Founder decision. The API sends "Before platform fee deduction" (ADR-026), which
+  // tells an owner something will be taken and not how much — a caveat that raises a question the
+  // screen cannot answer, because GET /dashboard carries no fee figure. This says what the number
+  // IS rather than what it is not. Naming the amount is option (a), waiting on that field.
+  "dashboard.revenueNote": "All sales taken on this shift",
   "dashboard.tips": "Tips to staff",
   "dashboard.averageBill": "Average bill",
   "dashboard.averageTip": "Average tip",

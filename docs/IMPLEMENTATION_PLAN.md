@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.31.0
+version: 2.32.0
 status: Active
 classification: Critical
 priority: Highest
@@ -493,6 +493,16 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Where it belongs:** the invitation accept screen does not exist yet either, and that is the natural home for the agreement checkbox — the same screen, one change. Doing it before that screen exists would mean recording a consent nobody was shown.
 
   Its own axis, deliberately not folded into ADR-070: that change was onboarding delivery, this one is consent capture, and a legal record is not something to land as a side effect of a mail feature.
+
+- **The Dashboard's hero caption names the fee, once there is a fee figure to name.** Founder decision, option (a) of three; option (b) shipped in the meantime.
+
+  **What the caption used to say and why it was wrong:** `BEFORE PLATFORM FEE DEDUCTION`, taken verbatim from the API (ADR-026). It tells an owner that something will be taken and does not say how much — a caveat that raises a question the screen cannot answer. DESIGN_SYSTEM.md is right that the caveat is what makes the number honest; it is the *incompleteness* that is the problem, not the disclosure.
+
+  **What ships now (b):** *"All sales taken on this shift"* — what the number IS, rather than what it is not. No backend change, no arithmetic implied, and the fee stays disclosed where it is actually charged.
+
+  **What (a) needs, and it is one field:** `GET /dashboard` returns the bill total and no fee. With a `shiftPlatformFee` on the response the caption becomes *"€338.50 before our fee of €10.15"*, which answers the question instead of raising it.
+
+  **Trigger: when `GET /dashboard` carries a platform-fee figure.** Deliberately phrased as the field arriving rather than as a sprint — the caption is a few lines once the number exists, and nothing else about it is waiting on a decision. **The screen keeps (b) until then rather than reverting to the API's own note**, which is a divergence from ADR-026's expectation that the frontend renders that constant, and is recorded here so it is a choice rather than a drift.
 
 - **A retention mechanism — and the precondition is written first on purpose, so nobody starts at the mechanism.** ADR-075 option C, refused there on ORDER rather than on merit.
 

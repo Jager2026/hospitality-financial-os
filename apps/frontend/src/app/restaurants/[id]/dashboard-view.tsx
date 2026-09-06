@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import type { JSX } from "react";
-import { apiGetAuthed } from "../../../lib/api/client";
+import { authedGet } from "../../../lib/auth/authed-fetch";
 import { RequireSession } from "../../../lib/auth/require-session";
 import { t } from "../../../lib/i18n";
 import { formatBasisPoints, formatMoney, venueMoneyLocale } from "../../../lib/money";
@@ -20,7 +20,9 @@ interface DashboardSummary {
     afterMidnightRevenue: string;
   } | null;
   shiftRevenue: string;
-  shiftRevenueNote: string;
+  // `shiftRevenueNote` is deliberately absent: the API sends one (ADR-026) and this screen no
+  // longer renders it. The interface says what the screen READS, so carrying a field nobody reads
+  // would make it a description of the endpoint instead.
   shiftTips: string;
   averageTipBasisPoints: string | null;
   shiftTransactions: number;
@@ -49,14 +51,13 @@ interface RestaurantSummary {
 const READING_LOCALE = "en-IE";
 
 export function DashboardView({ restaurantId }: { restaurantId: string }): JSX.Element {
-  return (
-    <RequireSession>
-      {(session) => <Loaded token={session.accessToken} id={restaurantId} />}
-    </RequireSession>
-  );
+  // The gate still decides whether to render at all; the token itself is deliberately NOT handed
+  // down. `authedGet` reads it at call time, because a component that captured it on mount would
+  // keep sending the old one after a renewal and refresh again on every request.
+  return <RequireSession>{() => <Loaded id={restaurantId} />}</RequireSession>;
 }
 
-function Loaded({ token, id }: { token: string; id: string }): JSX.Element {
+function Loaded({ id }: { id: string }): JSX.Element {
   // A REFUSAL IS NOT A BLIP. TanStack retries a failed query three times by default, which is
   // right for a dropped connection and wrong for 401 or 403: an authorization decision does not
   // become a different decision by being asked again, and the retries only delay the moment the
@@ -75,7 +76,7 @@ function Loaded({ token, id }: { token: string; id: string }): JSX.Element {
   const summary = useQuery({
     queryKey: ["dashboard", id],
     queryFn: async () => {
-      const result = await apiGetAuthed<DashboardSummary>(`/dashboard?restaurantId=${id}`, token);
+      const result = await authedGet<DashboardSummary>(`/dashboard?restaurantId=${id}`);
       if (!result.ok) throw result.error;
       return result.data;
     },
@@ -85,7 +86,7 @@ function Loaded({ token, id }: { token: string; id: string }): JSX.Element {
   const restaurant = useQuery({
     queryKey: ["restaurant", id],
     queryFn: async () => {
-      const result = await apiGetAuthed<RestaurantSummary>(`/restaurants/${id}`, token);
+      const result = await authedGet<RestaurantSummary>(`/restaurants/${id}`);
       if (!result.ok) throw result.error;
       return result.data;
     },
@@ -230,7 +231,12 @@ function Figures({
         <p className="text-hero font-semibold tabular-nums">
           {formatMoney(data.shiftRevenue, currency, locale)}
         </p>
-        <p className="text-micro uppercase text-faint">{data.shiftRevenueNote}</p>
+        {/* OPTION (b), Founder decision. The API sends "Before platform fee deduction"
+            (ADR-026), which tells an owner something will be taken and not how much — a caveat
+            that raises a question the screen cannot answer, because GET /dashboard carries no fee
+            figure. This says what the number IS instead of what it is not. Naming the amount is
+            option (a), recorded in IMPLEMENTATION_PLAN with the field it waits on. */}
+        <p className="text-micro uppercase text-faint">{t("dashboard.revenueNote")}</p>
       </section>
 
       <section className="grid gap-6 sm:grid-cols-3">
