@@ -7,6 +7,7 @@ import { authedGet } from "../../../lib/auth/authed-fetch";
 import { RequireSession } from "../../../lib/auth/require-session";
 import { t } from "../../../lib/i18n";
 import { formatBasisPoints, formatMoney, venueMoneyLocale } from "../../../lib/money";
+import { stripeBannerState, type StripeBannerState } from "../../../lib/stripe-state";
 
 /** The subset of `DashboardSummary` this screen reads. Money arrives as minor-unit strings. */
 interface DashboardSummary {
@@ -37,6 +38,7 @@ interface RestaurantSummary {
   currency: string;
   country: string;
   defaultCustomerLocale: string;
+  cardPaymentsStatus: string | null;
   payoutsStatus: string | null;
 }
 
@@ -111,9 +113,7 @@ function Loaded({ id }: { id: string }): JSX.Element {
   return (
     <div className="space-y-8" data-testid="dashboard">
       <Header name={restaurant.data?.name ?? null} shift={data.shift} />
-      {restaurant.data?.payoutsStatus != null && restaurant.data.payoutsStatus !== "active" ? (
-        <PayoutsBanner />
-      ) : null}
+      <StripeBanner state={stripeBannerState(restaurant.data)} />
       {data.shift === null ? (
         <Explanation titleKey="dashboard.noShift.title" explainKey="dashboard.noShift.explain" />
       ) : data.shiftTransactions === 0 ? (
@@ -305,14 +305,58 @@ function Explanation({
   );
 }
 
-function PayoutsBanner(): JSX.Element {
+/**
+ * What this venue can do with money, in words — one message per state, and never a colour.
+ *
+ * ADR-072: the accent carries no meaning, and a red banner would be wrong here anyway. A venue
+ * mid-onboarding is not in an incident, and a venue whose payouts are held has not lost anything.
+ * Each message therefore ends with the thing that changes the state, because an explanation the
+ * reader cannot act on is just a worry.
+ *
+ * **A separate `data-testid` per state, deliberately.** One shared id would let a test assert
+ * "a banner appeared" while the screen showed the wrong one of the two — which is precisely the
+ * failure this change repairs, so it must not be the failure the tests are blind to.
+ */
+function StripeBanner({ state }: { state: StripeBannerState }): JSX.Element | null {
+  if (state === "CANNOT_TAKE_CARDS") {
+    return (
+      <Banner
+        testId="stripe-banner-cards"
+        title={t("dashboard.stripe.cards.title")}
+        explain={t("dashboard.stripe.cards.explain")}
+      />
+    );
+  }
+  if (state === "PAYOUTS_HELD") {
+    return (
+      <Banner
+        testId="stripe-banner-payouts"
+        title={t("dashboard.stripe.payouts.title")}
+        explain={t("dashboard.stripe.payouts.explain")}
+      />
+    );
+  }
+  // LIVE and UNKNOWN both render nothing, for different reasons: one has nothing to say, the
+  // other does not know. `stripe-state.ts` keeps them distinguishable where it matters.
+  return null;
+}
+
+function Banner({
+  testId,
+  title,
+  explain,
+}: {
+  testId: string;
+  title: string;
+  explain: string;
+}): JSX.Element {
   return (
     <section
       className="max-w-prose space-y-1 rounded-portal border border-rule bg-surface-2 p-4"
-      data-testid="payouts-banner"
+      data-testid={testId}
     >
-      <p className="text-small font-medium">{t("dashboard.stripe.title")}</p>
-      <p className="text-small text-muted">{t("dashboard.stripe.explain")}</p>
+      <p className="text-small font-medium">{title}</p>
+      <p className="text-small text-muted">{explain}</p>
     </section>
   );
 }

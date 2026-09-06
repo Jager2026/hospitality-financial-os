@@ -107,3 +107,48 @@ async function seed(
 
   return { organizationId, restaurantId, membershipId };
 }
+
+/**
+ * The three Stripe states a venue can really be in, as the pair of capability statuses Stripe
+ * reports plus the coarse status our own backend derives from that pair.
+ *
+ * **Written as whole triples, never as one column at a time**, because the pair is not free: the
+ * backend computes `onboarding_status` from the two capabilities (`deriveOnboardingStatus`), so
+ * `not_started` alongside a non-null capability is a row the system cannot produce. A fixture that
+ * writes one anyway proves things about a system that does not exist — the class `CLAUDE.md`
+ * records, and the exact bug that hid this Dashboard gap for a sprint (#177): the demo data said a
+ * venue had not started Stripe *and* had a payouts status, so the list and the Dashboard
+ * disagreed about the same restaurant and neither looked wrong on its own.
+ *
+ * The derivation is mirrored here rather than imported: `apps/e2e` does not depend on
+ * `apps/backend`, and adding that dependency to share three constants would be a heavier coupling
+ * than the thing it protects. `onboarding-status.util.ts` is the source; if it changes, this
+ * changes with it.
+ */
+export type StripeState = "not_started" | "payouts_held" | "live";
+
+const STRIPE_STATES: Record<
+  StripeState,
+  { card: string | null; payouts: string | null; onboarding: string }
+> = {
+  /** Stripe was never started: both capabilities null, which is the ONLY way to `not_started`. */
+  not_started: { card: null, payouts: null, onboarding: "not_started" },
+  /** Charges live, payouts held — `restricted`, since nothing is outstanding for the owner to do. */
+  payouts_held: { card: "active", payouts: "restricted", onboarding: "restricted" },
+  /** Both capabilities live, which is the only way to `complete`. */
+  live: { card: "active", payouts: "active", onboarding: "complete" },
+};
+
+/** Puts a seeded Restaurant into one of those states. No `stripe_account_id` is set, so
+ * `refreshStripeStatus` returns the row untouched and what is written here is what the API
+ * returns — checked in the service, not assumed. */
+export async function setStripeState(restaurantId: string, state: StripeState): Promise<void> {
+  const { card, payouts, onboarding } = STRIPE_STATES[state];
+  await execute(
+    `UPDATE restaurant
+        SET card_payments_status = $2, payouts_status = $3,
+            onboarding_status = $4::"onboarding_status", updated_at = NOW()
+      WHERE id = $1`,
+    [restaurantId, card, payouts, onboarding],
+  );
+}

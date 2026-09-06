@@ -182,9 +182,12 @@ export const en = {
   "dashboard.noShift.title": "No shift has been opened here yet.",
   "dashboard.noShift.explain":
     "A shift opens with the first sale of the working day, or when someone opens it. Until then there is no working day to report on.",
-  "dashboard.stripe.title": "Payouts are not switched on yet",
-  "dashboard.stripe.explain":
-    "Card payments can be taken, but money cannot reach your bank until Stripe finishes verifying this restaurant.",
+  "dashboard.stripe.cards.title": "Card payments are not switched on here yet",
+  "dashboard.stripe.cards.explain":
+    "Stripe has not finished verifying this restaurant, so no card can be taken at this venue — tips included. Completing this restaurant’s payment setup with Stripe is the one thing that changes it. Everything else on this screen works normally.",
+  "dashboard.stripe.payouts.title": "Payouts are not switched on yet",
+  "dashboard.stripe.payouts.explain":
+    "Card payments can be taken, and the money is being held at Stripe rather than lost. It reaches your bank account once Stripe finishes verifying this restaurant’s payout details.",
   "dashboard.error.explain":
     "The figures could not be fetched. Nothing here is out of date — there is nothing here.",
   "dashboard.expired.title": "Your session has ended",

@@ -107,23 +107,25 @@ async function main(): Promise<void> {
       data: { userId: owner.id, organizationId: organization.id, roleId: ownerRole.id },
     });
 
-    // Three venues, three Stripe states that can actually coexist with their own onboarding
-    // status — so the payout banner is still visible on one screen (Kaunas), and the Restaurants
-    // list's "card setup not started" flag on another (Klaipėda), without either screen being
-    // shown data the system could never produce.
+    // Three venues, three Stripe states — and each state paired with the venue whose OWN FIGURES
+    // agree with it, which is a second kind of coherence the first pass missed. It was invisible
+    // until the Dashboard learned to speak about cards: the untouched venue was the one with 293 €
+    // of sales, so the screen said no card can be taken here directly above the money that had
+    // been taken. Same class as the impossible status pair this file already fixed — a fixture
+    // describing something the world cannot produce — one layer up, between tables rather than
+    // inside a row.
+    //
+    // So: the venue that cannot charge is the one that has sold nothing (Kaunas), and the money
+    // held at Stripe is held for a venue that actually took it (Klaipėda). All three banner states
+    // stay visible, which is what this demo exists for.
     const restaurants: Restaurants = {
       withSales: await restaurant(prisma, organization.id, "Vilnius — busy evening", STRIPE_LIVE),
-      quiet: await restaurant(
-        prisma,
-        organization.id,
-        "Kaunas — quiet morning",
-        STRIPE_PAYOUTS_HELD,
-      ),
+      quiet: await restaurant(prisma, organization.id, "Kaunas — quiet morning", STRIPE_UNTOUCHED),
       acrossMidnight: await restaurant(
         prisma,
         organization.id,
         "Klaipėda — closed at 01:30",
-        STRIPE_UNTOUCHED,
+        STRIPE_PAYOUTS_HELD,
       ),
     };
 
@@ -401,8 +403,8 @@ function print(r: Restaurants): void {
   Signing in lands on the Restaurants list, which links to all three. The direct addresses:
 
     1. sales, tips, a named person   ${url(r.withSales)}       (Stripe live)
-    2. open shift, nothing sold      ${url(r.quiet)}       (payouts held — banner)
-    3. closed 01:30, after-midnight  ${url(r.acrossMidnight)}       (Stripe untouched)
+    2. open shift, nothing sold      ${url(r.quiet)}       (Stripe untouched — cards banner)
+    3. closed 01:30, after-midnight  ${url(r.acrossMidnight)}       (payouts held — payouts banner)
 
   Re-running this command resets all three.
 `);
