@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execute, queryOne } from "./db";
+import { deriveOnboardingStatus } from "../../backend/src/restaurant/onboarding-status.util";
 
 /**
  * Creates an Organization, a Restaurant and a Membership **directly in the database**, because
@@ -35,12 +36,20 @@ export interface SeededOrg {
   membershipId: string;
 }
 
-async function ownerRoleId(): Promise<string> {
+/**
+ * A seeded Role by name, and it is looked up rather than written.
+ *
+ * `CLAUDE.md`: a fixture's Role and Permissions come from the seed, never from a literal typed in
+ * the spec. A test that says "Manager" must mean the Manager the product actually grants — the
+ * one whose permission set decides whether the screen under test offers an action, and whose
+ * permissions the login response then carries to the browser.
+ */
+async function roleIdByName(name: string): Promise<string> {
   const role = await queryOne<{ id: string }>(
     "SELECT id FROM role WHERE LOWER(name) = $1 LIMIT 1",
-    ["owner"],
+    [name.toLowerCase()],
   );
-  if (!role) throw new Error("the seeded Owner role is missing from the e2e database");
+  if (!role) throw new Error(`the seeded ${name} role is missing from the e2e database`);
   return role.id;
 }
 
@@ -71,13 +80,29 @@ export async function seedRestaurantScopedMember(
   return seed(email, name, { orgWide: false });
 }
 
+/**
+ * A Membership at a seeded Restaurant holding a named Role — Manager and Waiter, not only Owner.
+ *
+ * Needed because a permission check can only be tested by somebody who fails it. Both of these
+ * reach the venue perfectly well and neither holds `restaurant.create`, which is the whole point:
+ * reach and permission are two questions, and a screen that conflates them offers a button that
+ * the server will refuse.
+ */
+export async function seedMemberWithRole(
+  email: string,
+  roleName: string,
+  name = "Fixture Restaurant",
+): Promise<SeededOrg> {
+  return seed(email, name, { orgWide: false, role: roleName });
+}
+
 async function seed(
   email: string,
   name: string,
-  options: { orgWide: boolean },
+  options: { orgWide: boolean; role?: string },
 ): Promise<SeededOrg> {
   const userId = await userIdByEmail(email);
-  const roleId = await ownerRoleId();
+  const roleId = await roleIdByName(options.role ?? "Owner");
   const organizationId = randomUUID();
   const restaurantId = randomUUID();
   const membershipId = randomUUID();
@@ -120,30 +145,33 @@ async function seed(
  * venue had not started Stripe *and* had a payouts status, so the list and the Dashboard
  * disagreed about the same restaurant and neither looked wrong on its own.
  *
- * The derivation is mirrored here rather than imported: `apps/e2e` does not depend on
- * `apps/backend`, and adding that dependency to share three constants would be a heavier coupling
- * than the thing it protects. `onboarding-status.util.ts` is the source; if it changes, this
- * changes with it.
+ * **The derived status is now computed by the backend's own function rather than written out.**
+ * The previous version of this comment said `apps/e2e` does not depend on `apps/backend` and that
+ * importing it would be heavier coupling than the thing it protects. That was simply false, and
+ * checkable in one line: `fixtures/api.ts` has imported `PLATFORM_TERMS_PLACEHOLDER` straight from
+ * `apps/backend/src` since the harness was built. The dependency already existed; the mirrored
+ * triple was a copy nobody needed. Corrected here rather than left standing, because a comment
+ * that justifies a copy with a false constraint is how the copy survives its next review.
  */
 export type StripeState = "not_started" | "payouts_held" | "live";
 
-const STRIPE_STATES: Record<
-  StripeState,
-  { card: string | null; payouts: string | null; onboarding: string }
-> = {
-  /** Stripe was never started: both capabilities null, which is the ONLY way to `not_started`. */
-  not_started: { card: null, payouts: null, onboarding: "not_started" },
-  /** Charges live, payouts held — `restricted`, since nothing is outstanding for the owner to do. */
-  payouts_held: { card: "active", payouts: "restricted", onboarding: "restricted" },
-  /** Both capabilities live, which is the only way to `complete`. */
-  live: { card: "active", payouts: "active", onboarding: "complete" },
+const STRIPE_CAPABILITIES: Record<StripeState, { card: string | null; payouts: string | null }> = {
+  /** Stripe was never started: both capabilities null, which is the ONLY way to `NOT_STARTED`. */
+  not_started: { card: null, payouts: null },
+  /** Charges live, payouts held — nothing outstanding for the owner, so `RESTRICTED`. */
+  payouts_held: { card: "active", payouts: "restricted" },
+  /** Both capabilities live, which is the only way to `COMPLETE`. */
+  live: { card: "active", payouts: "active" },
 };
 
 /** Puts a seeded Restaurant into one of those states. No `stripe_account_id` is set, so
  * `refreshStripeStatus` returns the row untouched and what is written here is what the API
  * returns — checked in the service, not assumed. */
 export async function setStripeState(restaurantId: string, state: StripeState): Promise<void> {
-  const { card, payouts, onboarding } = STRIPE_STATES[state];
+  const { card, payouts } = STRIPE_CAPABILITIES[state];
+  // Zero requirements: none of these three states has an outstanding item to describe, and that
+  // is exactly what separates RESTRICTED from IN_PROGRESS in the real derivation.
+  const onboarding = deriveOnboardingStatus(card, payouts, 0).toLowerCase();
   await execute(
     `UPDATE restaurant
         SET card_payments_status = $2, payouts_status = $3,
@@ -151,4 +179,25 @@ export async function setStripeState(restaurantId: string, state: StripeState): 
       WHERE id = $1`,
     [restaurantId, card, payouts, onboarding],
   );
+}
+
+/**
+ * Gives a seeded Restaurant a Stripe account id, so a refusal can be attributed.
+ *
+ * **This exists because of an assertion that could not fail.** `createOnboardingLink` answers 404
+ * for a caller without `restaurant.create` AND for a venue with no Stripe account — one status,
+ * one error code, two causes. A fixture venue has no account id, so a test asserting 404 for a
+ * Manager passed whether or not the permission check existed: remove it and the request simply
+ * falls through to the next 404.
+ *
+ * With an account id set, the permission check is the only thing between the caller and a live
+ * Stripe call, so 404 means the permission refused it and nothing else can produce that answer.
+ * The id is deliberately not a real one: if the check is ever removed, the request reaches Stripe
+ * and fails loudly, which is exactly the signal the test needs.
+ */
+export async function setStripeAccountId(restaurantId: string, accountId: string): Promise<void> {
+  await execute("UPDATE restaurant SET stripe_account_id = $2, updated_at = NOW() WHERE id = $1", [
+    restaurantId,
+    accountId,
+  ]);
 }

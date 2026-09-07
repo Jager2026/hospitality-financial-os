@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.7.0
+version: 2.8.0
 status: Active
 classification: Internal
 owner: Founder
@@ -165,6 +165,22 @@ Stripe hosts the actual identity and bank-account collection; this screen's whol
 | Active | Confirmation, then straight on to the Dashboard |
 
 **Postponing is allowed and must be visible.** "I'll do this later" leads to the Dashboard. This is the state ADR-009 requires be handled explicitly rather than treated as an error — a Restaurant that exists but cannot yet accept cards is normal for hours or days, not a failure.
+
+**Built in Sprint 15** at `/restaurants/{id}/onboarding`, and the four states above map exactly onto our own derived `onboardingStatus` — which is why this screen reads that field while the Dashboard banner reads the two Stripe capabilities. They answer different questions: the banner asks *can this venue take money right now*, this screen asks *where is this venue in setup*, and only the derived value separates "Stripe is waiting on the owner" (`IN_PROGRESS`) from "Stripe is reviewing" (`RESTRICTED`). Telling somebody to go and finish a form when nothing is asked of them is the worse of the two errors.
+
+**The link is requested on a click, never on load, and that is a correctness rule rather than a preference.** A Stripe Account Link is single-use and lives about five minutes — measured against a real account (#125), not read in documentation — and mail clients that follow links to scan them burn one with nobody intending it. So "the owner has a link" and "the link still works" are different facts. Minting one per screen load would spend a budget of ten per hour on links nobody uses.
+
+**Three refusals the screen must be able to say out loud**, because each one otherwise reads as the product being broken:
+
+| What happened | What the screen does |
+|---|---|
+| Ten links already requested this hour (the route's throttle, #125) | Explains the limit and that it is a wait. The state stays readable; a rate limit is a pause, not a dead end. |
+| The caller does not hold `restaurant.create` — Owner and Administrator do, Manager and Waiter do not | The action is not offered at all, and the screen says setting up payments is the owner's to do. **The browser check is presentation only**; `restaurant.service.ts` refuses the request whatever the screen showed. |
+| Stripe cannot be reached, or the venue has no Stripe account yet | Says the link could not be created and that nothing about the restaurant has changed. |
+
+**Stripe's own two return addresses are screens now.** `${FRONTEND_URL}/restaurants/{id}/onboarding/complete` and `.../onboarding/refresh` are built by the backend and handed to Stripe; neither existed in the Portal, so **finishing onboarding used to end on a 404**. `complete` re-reads the venue rather than trusting the arrival — coming back is not the same as being verified — and `refresh` is Stripe's way of saying the link is no longer usable, so it says the link expired and offers a fresh one instead of silently rendering the same page.
+
+**"Which specific requirements are outstanding" is NOT built, and the reason is a fact rather than a preference.** `requirementsDue` holds Stripe's `requirements.entries[]` (ADR-009's revision captured the real shape from a live response), the backend types it `unknown` and asserts nothing about it, and **no row in this system has ever held a non-empty one**: of 349 restaurants in the development database, four carry a value and all four are `[]`, written by specs with a faked Stripe. Rendering a named requirement would mean rendering a shape this product has never once received. Until it has, the screen lists what Stripe asks of every business — identity, business details, bank account — which is true without pretending to know this venue's outstanding items.
 
 ## Restaurant created, payments not yet live
 

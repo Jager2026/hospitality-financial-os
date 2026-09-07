@@ -182,6 +182,44 @@ export const en = {
   "dashboard.noShift.title": "No shift has been opened here yet.",
   "dashboard.noShift.explain":
     "A shift opens with the first sale of the working day, or when someone opens it. Until then there is no working day to report on.",
+  // Connect Payments (UX_MAP.md). Four states, and the two that ask for nothing say so plainly.
+  "connect.loading": "Loading this restaurant’s payment setup…",
+  "connect.error.title": "We could not load the payment setup",
+  "connect.error.explain":
+    "This restaurant’s Stripe status could not be fetched. Nothing about the restaurant has changed — this screen simply has nothing to show yet.",
+  "connect.start.title": "Set up card payments",
+  "connect.start.explain":
+    "Stripe verifies every business that takes card payments, and hosts that step itself — we never see or store the documents. It usually takes a few minutes, and you can leave and come back.",
+  "connect.resume.title": "Finish setting up card payments",
+  "connect.resume.explain":
+    "Stripe still needs something from you before this restaurant can take cards. Continuing takes you back to where you left off.",
+  "connect.asks.identity": "Who you are — an identity document for the person responsible.",
+  "connect.asks.business": "The business — registration and tax details for this restaurant.",
+  "connect.asks.bank": "Where money goes — the bank account payouts are sent to.",
+  "connect.action.start": "Continue to Stripe",
+  "connect.action.resume": "Continue where you left off",
+  "connect.action.working": "Opening Stripe…",
+  "connect.later": "I’ll do this later",
+  "connect.expired.explain":
+    "That setup link had expired — they are single-use and last a few minutes, and email apps sometimes open them in the background. Nothing was lost; start again below.",
+  "connect.returned.explain":
+    "You’re back from Stripe. What Stripe has told us so far is below — if verification is still running, this will change on its own.",
+  "connect.review.title": "Stripe is reviewing this restaurant",
+  "connect.review.explain":
+    "Nothing is needed from you. Stripe is checking what has already been sent, which can take a little time. This screen will show the result when there is one — there is nothing to fill in meanwhile.",
+  "connect.complete.title": "Card payments are set up",
+  "connect.complete.explain":
+    "Stripe has verified this restaurant. Cards can be taken and payouts reach your bank — there is nothing left to do here.",
+  "connect.complete.action": "Go to the dashboard",
+  "connect.notAllowed.explain":
+    "Setting up payments is the owner’s to do. Your account can see where this restaurant stands, and the person who owns it can finish the setup.",
+  "connect.refused.rateLimited":
+    "Too many setup links have been requested for this restaurant in the last hour. Nothing is wrong — links expire quickly, so there is a limit on how many can be made. Wait a few minutes and try again.",
+  "connect.refused.notAllowed":
+    "Stripe setup could not be started for this restaurant from this account. Setting up payments needs an owner’s account, and this restaurant needs a Stripe account of its own before setup can begin.",
+  "connect.refused.unavailable":
+    "The setup link could not be created just now. Nothing has changed for this restaurant — try again in a moment.",
+  "dashboard.stripe.action": "Set up payments",
   "dashboard.stripe.cards.title": "Card payments are not switched on here yet",
   "dashboard.stripe.cards.explain":
     "Stripe has not finished verifying this restaurant, so no card can be taken at this venue — tips included. Completing this restaurant’s payment setup with Stripe is the one thing that changes it. Everything else on this screen works normally.",
