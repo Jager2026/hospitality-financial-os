@@ -1,6 +1,6 @@
 ---
 title: ADR-078 — A claim about a temporary state is written in the present tense and never expires
-version: 1.0.0
+version: 1.1.0
 status: Proposed
 classification: Critical
 owner: Founder
@@ -171,3 +171,37 @@ and it is 85% noise with a silent miss on this very incident.
 
 **Trigger for revisiting: the third instance of this class.** Two are a pattern; three would mean
 the convention is not holding, and D's cost stops looking like ceremony.
+
+---
+
+## Amendment (2026-09-08) — the trigger fired on the same day, and D is built
+
+The recommendation above is kept as written, because **how it failed is the finding**.
+
+**The third condition arrived hours after the deferral was written**, in the same conversation: the
+cost and duration of registering a UAB, on which the whole path to the first customer depends. The
+Founder asked whether that estimate had ever been verified. It had not — and an exhaustive search
+established something worse than staleness: **the figure appears in no document, no code comment,
+and none of ~180 pull requests' commit messages.** It exists only in conversation.
+
+**Why the count was wrong, and it is not arithmetic.** The deferral rested on "only two such
+conditions exist". That number came from counting the conditions this repository had *written
+down*. The most expensive one was invisible to that count **precisely because it was unwritten** —
+so the measure used to decide whether a register was worth building was a measure that a register
+would have fixed. **A count of recorded conditions cannot tell you how many conditions there are.**
+
+**A refinement to this document's own thesis.** ADR-078 framed the class as *a claim about a
+temporary state, written in the present tense, with no date*. OC-1 shows a strictly worse member of
+the family: **a load-bearing estimate that was never written at all.** A recorded claim can go
+stale and be found; an unrecorded one cannot go stale, because nothing fixed it to a date, and
+cannot be checked, because nobody can say what was claimed. The remedy is the same file, which is
+why option D covers both.
+
+**Built:** `docs/OPEN_CONDITIONS.md`, four rows and a closed-conditions history. **Still not built,
+and still costed rather than assumed:** the CI check that reports rows older than N days. The
+register is read because somebody opens it; nothing enforces that, and this document should not
+pretend otherwise.
+
+**What does not change:** B stays rejected on its measurement, and options 1 and 2 (write the date;
+reference a live signal rather than transcribing its value) remain the cheap half that needs no
+classification.

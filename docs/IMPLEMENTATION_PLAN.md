@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.35.0
+version: 2.36.0
 status: Active
 classification: Critical
 priority: Highest
@@ -12,6 +12,43 @@ supersedes: IMPLEMENTATION_PLAN v1.0 — see ARCHITECTURE_DECISIONS.md for the r
 # IMPLEMENTATION PLAN
 
 > "A great product is built one correct decision at a time."
+
+---
+
+# Five Branches, Sorted by What Each One Waits On
+
+**This is not a priority order. It is a dependency order**, and the difference is the whole point:
+a branch's position here says what has to be true before it can move, not how much it matters.
+Recorded on 2026-09-08 from the Founder's own roadmap, which existed as a file outside this
+repository — which is exactly why it is being written down here, so the next session does not ask
+for it again.
+
+| # | Waits on | What is in it |
+|---|---|---|
+| **1** | **Nothing.** | The Portal, payout, debts, design. Anything here can move today, and everything shipped in Sprint 15 came from here. |
+| **2** | **The UAB** — see **OC-1** | The customer-facing texts (the `[LEGAL ENTITY]` placeholders), translation, the DPA, the trademark. |
+| **3** | **The regulator** — see **OC-4** | Model B, tax, the waiter's wallet. |
+| **4** | **Money** | Terminals, filming, a lawyer. |
+| **5** | **Nothing — and it is not being done.** | Talking to a restaurant. |
+
+**Branch 2 is the path to the first customer, and it is the one measured by a single phone call.**
+`[LEGAL ENTITY]` in the texts → publishing the Terms and Privacy Policy → lifting the registration
+gate (ADR-055) → a pilot. Every step of that chain is behind one unverified estimate, recorded as
+**OC-1** in `OPEN_CONDITIONS.md` with the five sub-questions that separate it — including the one
+that could shorten the whole schedule: **the estimate may describe Model B's requirements while the
+pilot runs on Model A**, in which case the blocked branch is not the branch the pilot needs.
+
+**Branch 5 costs nothing, is blocked by nothing, and has not been done.** It is written down in
+those words deliberately. The other four all have an answer to *why not yet* — a registration, a
+regulator, a budget. Branch 5 has none, and it is the only branch that produces evidence about
+whether any of the rest is worth building. **A branch with no blocker and no progress is a priority
+statement, not a schedule.**
+
+**The honest reading of Sprint 15 against this table:** five Portal slices and a diagnostic block,
+all from branch 1, while branch 2 stood on a number nobody had checked. Branch 1 work was correct
+in itself and wrong in sequence — the cheapest measurement in the project went unmade for weeks
+because nothing in this document said which branch was load-bearing. This table is the fix, and
+`OPEN_CONDITIONS.md` is where its blockers live.
 
 ---
 
