@@ -39,6 +39,21 @@ export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
  * and "we never had a token" are different facts, and a screen that cannot tell them apart cannot
  * word them differently.
  */
+export async function apiPostAuthed<T>(
+  path: string,
+  accessToken: string | null,
+  body: unknown,
+): Promise<ApiResult<T>> {
+  if (accessToken === null || accessToken === "") {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+  return await send<T>(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function apiGetAuthed<T>(
   path: string,
   accessToken: string | null,

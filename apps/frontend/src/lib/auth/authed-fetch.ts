@@ -1,4 +1,4 @@
-import { apiGetAuthed, apiPost, type ApiResult } from "../api/client";
+import { apiGetAuthed, apiPost, apiPostAuthed, type ApiResult } from "../api/client";
 import { clearSession, readSession, saveSession, type StoredSession } from "./session";
 
 /**
@@ -103,6 +103,39 @@ export async function authedGet<T>(path: string): Promise<ApiResult<T>> {
   if (!second.ok && second.error.status === 401) {
     // A fresh token refused immediately. Retrying again is the infinite loop this guards against:
     // the renewal worked and the answer is still no, so the session is over.
+    clearSession();
+    return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
+  }
+  return second;
+}
+
+/**
+ * A POST that carries the session, with the same single renewal and replay as `authedGet`.
+ *
+ * **The replay is what needs care here, and it is safe for exactly one reason: the only caller
+ * asks for a Stripe onboarding link, and asking twice mints two links rather than charging
+ * anything twice.** That is not a general property of POST. A request that moves money, or that
+ * creates something the caller counts, must not be replayed blindly on a 401 — it needs an
+ * idempotency key, or a caller that decides for itself. When the second such caller arrives, that
+ * decision belongs to it, not to this function.
+ */
+export async function authedPost<T>(path: string, body: unknown = {}): Promise<ApiResult<T>> {
+  const session = readSession();
+  if (session === null) {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+
+  const first = await apiPostAuthed<T>(path, session.accessToken, body);
+  if (first.ok || first.error.status !== 401) return first;
+
+  const renewed = await refreshOnce();
+  if (renewed === null) {
+    clearSession();
+    return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
+  }
+
+  const second = await apiPostAuthed<T>(path, renewed.accessToken, body);
+  if (!second.ok && second.error.status === 401) {
     clearSession();
     return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
   }

@@ -113,7 +113,7 @@ function Loaded({ id }: { id: string }): JSX.Element {
   return (
     <div className="space-y-8" data-testid="dashboard">
       <Header name={restaurant.data?.name ?? null} shift={data.shift} />
-      <StripeBanner state={stripeBannerState(restaurant.data)} />
+      <StripeBanner state={stripeBannerState(restaurant.data)} restaurantId={id} />
       {data.shift === null ? (
         <Explanation titleKey="dashboard.noShift.title" explainKey="dashboard.noShift.explain" />
       ) : data.shiftTransactions === 0 ? (
@@ -317,13 +317,24 @@ function Explanation({
  * "a banner appeared" while the screen showed the wrong one of the two — which is precisely the
  * failure this change repairs, so it must not be the failure the tests are blind to.
  */
-function StripeBanner({ state }: { state: StripeBannerState }): JSX.Element | null {
+function StripeBanner({
+  state,
+  restaurantId,
+}: {
+  state: StripeBannerState;
+  restaurantId: string;
+}): JSX.Element | null {
+  // The banner named an action and gave nothing to press, because Connect Payments did not exist
+  // (#178 recorded that as the gap). It exists now, so the words become a route.
+  const setUp = `/restaurants/${restaurantId}/onboarding`;
+
   if (state === "CANNOT_TAKE_CARDS") {
     return (
       <Banner
         testId="stripe-banner-cards"
         title={t("dashboard.stripe.cards.title")}
         explain={t("dashboard.stripe.cards.explain")}
+        href={setUp}
       />
     );
   }
@@ -333,6 +344,7 @@ function StripeBanner({ state }: { state: StripeBannerState }): JSX.Element | nu
         testId="stripe-banner-payouts"
         title={t("dashboard.stripe.payouts.title")}
         explain={t("dashboard.stripe.payouts.explain")}
+        href={setUp}
       />
     );
   }
@@ -345,18 +357,27 @@ function Banner({
   testId,
   title,
   explain,
+  href,
 }: {
   testId: string;
   title: string;
   explain: string;
+  href: string;
 }): JSX.Element {
   return (
     <section
-      className="max-w-prose space-y-1 rounded-portal border border-rule bg-surface-2 p-4"
+      className="max-w-prose space-y-2 rounded-portal border border-rule bg-surface-2 p-4"
       data-testid={testId}
     >
       <p className="text-small font-medium">{title}</p>
       <p className="text-small text-muted">{explain}</p>
+      <Link
+        href={href}
+        className="inline-block rounded-portal border border-rule px-3 py-1 text-small"
+        data-testid="stripe-banner-action"
+      >
+        {t("dashboard.stripe.action")}
+      </Link>
     </section>
   );
 }

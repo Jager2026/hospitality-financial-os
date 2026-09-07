@@ -12,6 +12,20 @@ export interface SessionMembership {
   organizationId: string;
   /** `null` means the Membership is organization-wide rather than scoped to one Restaurant. */
   restaurantId: string | null;
+  /**
+   * The Role and its Permissions, exactly as the login response has always sent them
+   * (`auth.service.ts`, `toAuthResult`). **The API was never the missing part — this type was**:
+   * it described three of the four fields, so nothing in the Portal could ask what a person is
+   * allowed to do, and every screen either showed an action to everyone or hid it from everyone.
+   *
+   * Optional on the type because a session stored by an older build of the Portal will not have
+   * it, and a screen reading a stale `localStorage` entry must degrade rather than throw.
+   */
+  role?: {
+    id: string;
+    name: string;
+    permissions: string[];
+  };
 }
 
 export const CREATE_RESTAURANT_PATH = "/onboarding/restaurant";

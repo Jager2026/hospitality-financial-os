@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.21.0
+version: 2.22.0
 status: Active
 classification: Internal
 owner: Founder
@@ -162,6 +162,10 @@ There is no reopen endpoint yet. It is planned as its own change; nothing here f
 
 ## Restaurant Onboarding Link
 POST /restaurants/{id}/onboarding-link — generates a fresh Stripe Account Link (ADR-014) for the restaurant's Connect account and returns `{ url }` for the frontend to redirect the owner to. Short-lived (Stripe expires these links quickly); callers must not cache the URL.
+
+**Requires `restaurant.create`** — Owner and Administrator, not Manager or Waiter. Not a new Permission: `POST /restaurants` is the call that creates the Stripe Connect account, and finishing that account is the same act continued (#118/#125). **Throttled at 10 per hour per IP**, which is the part a permission cannot do: an Owner legitimately holds the right and could otherwise mint an unbounded series, and links get burned without anyone's intent — mail clients follow links to scan them. The measured lifetime of a link is about **five minutes**, and it is single-use.
+
+**Three different situations answer `404 RESTAURANT_NOT_FOUND`, deliberately** — the venue is not reachable by this caller, the caller lacks `restaurant.create`, or the venue has no Stripe account yet. One code, because confirming that a venue exists is itself a disclosure (#109's form). Documented here because a client cannot tell them apart and must therefore word the refusal without claiming to know which fired.
 
 ---
 
