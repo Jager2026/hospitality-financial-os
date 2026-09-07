@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.47.0
+version: 1.48.0
 status: Active — ADR-001..056; ADR-057 onward in docs/adr/
 classification: Internal
 owner: Founder
@@ -747,7 +747,7 @@ The honest consequence, stated rather than glossed: a synthetic seed proves less
 | `CORS_ORIGIN` | |
 | Public domain | |
 
-**Decision 4 — a separate Stripe sandbox, not a shared one.** The shared option is cheaper in setup and worse in practice: staging's test connected accounts and webhook traffic would interleave with the very sandbox whose `invalid_v2_key` failure this project is actively diagnosing with Stripe support. Sharing would make that diagnosis harder, not easier. A second sandbox means a second `STRIPE_SECRET_KEY`, a second webhook endpoint, and a second signing secret — accepted.
+**Decision 4 — a separate Stripe sandbox, not a shared one.** The shared option is cheaper in setup and worse in practice: staging's test connected accounts and webhook traffic would interleave with the very sandbox whose `invalid_v2_key` failure this project is actively diagnosing with Stripe support *(as of 2026-08-24 — that diagnosis is closed; see the Amendment)*. Sharing would make that diagnosis harder, not easier. A second sandbox means a second `STRIPE_SECRET_KEY`, a second webhook endpoint, and a second signing secret — accepted.
 
 **Decision 5 — JWT secrets are strictly separate, and this one is not a trade-off at all.** A shared signing secret means a token minted in staging authenticates against production. That is not a convenience with a downside; it is an authentication bypass with extra steps.
 
@@ -757,9 +757,19 @@ The honest consequence, stated rather than glossed: a synthetic seed proves less
 
 **Decision 8 — `CORS_ORIGIN` is staging's own frontend origin**, following ADR-028's own rule that this is never silently defaulted.
 
-**Why this is decided now but built later.** Not cost: the entire production stack (four services, two volumes) bills at roughly **$1.83/month** at current near-zero traffic — a duplicated idle environment is a rounding error, and it would be dishonest to present money as the reason. The real reasons are two: **it is blocked**, since Decision 4 requires a second Stripe sandbox and Stripe integration is currently non-functional against `invalid_v2_key`, so half of staging could not be exercised even if it existed; and **it is premature**, because staging's whole purpose is to stop us from touching a database holding customer data, and there is no customer data yet. Deferred with a named trigger rather than a vague intention — see `IMPLEMENTATION_PLAN.md`.
+**Why this is decided now but built later.** Not cost: the entire production stack (four services, two volumes) bills at roughly **$1.83/month** at current near-zero traffic — a duplicated idle environment is a rounding error, and it would be dishonest to present money as the reason. The real reasons are two: **it is blocked**, since Decision 4 requires a second Stripe sandbox and Stripe integration is currently non-functional against `invalid_v2_key`, so half of staging could not be exercised even if it existed *(as of 2026-08-24 — this half has expired; see the Amendment)*; and **it is premature**, because staging's whole purpose is to stop us from touching a database holding customer data, and there is no customer data yet. Deferred with a named trigger rather than a vague intention — see `IMPLEMENTATION_PLAN.md`.
 
 **Consequences:** No infrastructure created, no environment provisioned, no cost incurred by this ADR. `IMPLEMENTATION_PLAN.md` gains the deferred entry and its trigger. The prohibition in Decision 2 is binding from the moment staging exists, not from the moment someone remembers it. ADR-034's config-as-code work is a direct prerequisite that already landed: it is what keeps a future staging environment from silently drifting away from production's build configuration.
+
+**Amendment (2026-09-07) — half of the deferral's justification has expired; the decision has not changed.** The original text above is kept as written, because what expired and how is more useful than a tidied paragraph.
+
+**What expired.** "It is blocked" rested on Stripe integration being non-functional against `invalid_v2_key`. The cause was a `STRIPE_SECRET_KEY` truncated by one character in Railway (ADR-038), **corrected on 2026-08-30**. Measured by execution on 2026-09-07 rather than inferred: `POST /restaurants` returns **201** with a real Stripe Connect account created, and `POST /restaurants/{id}/onboarding-link` returns **200** with a live `connect.stripe.com` link. The probe account was closed afterwards, and its closure verified by a read-back returning 403 rather than by trusting the close call's own 200.
+
+**What stands, unchanged.** "It is premature" — staging exists to keep us away from a database holding customer data, and there is still none. Decision 4 (a *separate* Stripe sandbox) also stands on its own merits: interleaving staging's connected accounts and webhook traffic with the sandbox we develop against was never only about that one incident.
+
+**So the deferral holds on one reason instead of two, and its trigger is unchanged** — before the first real pilot restaurant. Worth noticing that the surviving reason is the one that expires *on the trigger*, which makes the entry self-consistent again: when the trigger fires, the last reason to defer is gone.
+
+**Why this is an amendment rather than an edit.** The sentence was true when written and false fourteen days later, and nothing re-read it — the class ADR-078 examines. Deleting it would remove the only evidence of how long a present-tense claim can outlive its truth in this repository while every reader treats it as current.
 
 ---
 
@@ -838,6 +848,8 @@ The third is the one that matters for design, because it is the one no amount of
 What made it expensive is not that it broke, but *where* it broke: the corrupted value passed `env.validation.ts` (`z.string().min(1)`), the app booted cleanly, health checks went green, and the failure surfaced only later on a real business call — as `invalid_v2_key`, an error that points at the *permissions of the key*, not at its *integrity*. Every hypothesis it invited was wrong: v2 API not enabled, wrong Stripe sandbox, account-level restriction, SDK version, IP allowlisting, network path. Stripe's own message was literally accurate the whole time — *"ensure you provided the full key"* — and was read as boilerplate.
 
 **The generalisable failure, stated so it outlives this particular secret:** a configuration error that a process cannot detect at startup becomes a *business* error at runtime, and business errors point at business causes. The distance between the corruption and its symptom is what costs days, not the corruption itself.
+
+**Outcome, recorded because this ADR explained the cause and then said nothing about the ending.** The key was replaced in Railway on **2026-08-30** and `invalid_v2_key` has not recurred; the Stripe ticket continued only about offboarding and was closed. Re-measured by execution on 2026-09-07 — `POST /restaurants` returns 201 with a real connected account, and the onboarding link mints — so the failure this ADR is about is closed, not merely diagnosed. Its absence here is itself an instance of the problem: two other documents went on asserting the outage in the present tense for a fortnight, and the ADR that knew the answer never said whether it had been applied.
 
 **Decision 1 (recommended, low cost, no trade-off worth arguing) — validate the *shape* of every known secret at boot.** `env.validation.ts` already validates everything else meaningfully (`JWT_*` ≥ 32 chars, `DEFAULT_PLATFORM_FEE_BASIS_POINTS` an integer 0–10 000, `ALERT_WEBHOOK_URL` a real URL); the Stripe secrets are the only ones still at `min(1)`, which is exactly why they are the ones that broke. Add, for each:
 - a required prefix (`sk_test_`/`sk_live_`/`rk_…` for the API key, `whsec_` for the webhook secret) — catches corruption #1 and #2 outright, at boot, with a message naming the variable;

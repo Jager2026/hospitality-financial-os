@@ -4,7 +4,14 @@ import { deriveOnboardingStatus } from "../../backend/src/restaurant/onboarding-
 
 /**
  * Creates an Organization, a Restaurant and a Membership **directly in the database**, because
- * `POST /restaurants` makes a live Stripe Connect call that this harness cannot make.
+ * `POST /restaurants` makes a live Stripe Connect call that this harness **must not** make.
+ *
+ * The distinction matters and the earlier wording ("cannot") got it wrong: the endpoint works —
+ * measured on 2026-09-07, it returns 201 with a real connected account. What forbids it here is a
+ * rule, not a breakage. ADR-041 permits replacing only a literal outbound third-party call, no
+ * test in this codebase makes a live network call, and CI holds a generated placeholder key rather
+ * than a real one. A comment that says "cannot" invites somebody to try it the day the thing is
+ * fixed; one that says "must not" names the rule they would be breaking.
  *
  * ── The rule this is allowed under, stated narrowly on purpose ─────────────────────────────────
  *
