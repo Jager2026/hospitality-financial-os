@@ -160,25 +160,39 @@ async function seed(
  * triple was a copy nobody needed. Corrected here rather than left standing, because a comment
  * that justifies a copy with a false constraint is how the copy survives its next review.
  */
-export type StripeState = "not_started" | "payouts_held" | "live";
+export type StripeState = "not_started" | "requirements_due" | "payouts_held" | "live";
 
-const STRIPE_CAPABILITIES: Record<StripeState, { card: string | null; payouts: string | null }> = {
+const STRIPE_CAPABILITIES: Record<
+  StripeState,
+  { card: string | null; payouts: string | null; requirements: number }
+> = {
   /** Stripe was never started: both capabilities null, which is the ONLY way to `NOT_STARTED`. */
-  not_started: { card: null, payouts: null },
+  not_started: { card: null, payouts: null, requirements: 0 },
+  /**
+   * **The state a real venue is actually in seconds after it is created**, and the one no fixture
+   * could produce until now: Stripe has answered, with requirements outstanding, so the derived
+   * status is `IN_PROGRESS` — while nobody has been handed a link. Measured on a live account
+   * (Sprint 15): 18 requirement entries, `card_payments: restricted`.
+   *
+   * It exists because it is the case that discriminates. A screen reading only
+   * `onboardingStatus` says "continue" here; one reading whether a link was ever minted says
+   * "start". Every other state answers the same either way.
+   */
+  requirements_due: { card: "restricted", payouts: "restricted", requirements: 18 },
   /** Charges live, payouts held — nothing outstanding for the owner, so `RESTRICTED`. */
-  payouts_held: { card: "active", payouts: "restricted" },
+  payouts_held: { card: "active", payouts: "restricted", requirements: 0 },
   /** Both capabilities live, which is the only way to `COMPLETE`. */
-  live: { card: "active", payouts: "active" },
+  live: { card: "active", payouts: "active", requirements: 0 },
 };
 
 /** Puts a seeded Restaurant into one of those states. No `stripe_account_id` is set, so
  * `refreshStripeStatus` returns the row untouched and what is written here is what the API
  * returns — checked in the service, not assumed. */
 export async function setStripeState(restaurantId: string, state: StripeState): Promise<void> {
-  const { card, payouts } = STRIPE_CAPABILITIES[state];
-  // Zero requirements: none of these three states has an outstanding item to describe, and that
-  // is exactly what separates RESTRICTED from IN_PROGRESS in the real derivation.
-  const onboarding = deriveOnboardingStatus(card, payouts, 0).toLowerCase();
+  const { card, payouts, requirements } = STRIPE_CAPABILITIES[state];
+  // The requirement count is what separates RESTRICTED from IN_PROGRESS in the real derivation,
+  // so it is part of the state rather than a constant zero.
+  const onboarding = deriveOnboardingStatus(card, payouts, requirements).toLowerCase();
   await execute(
     `UPDATE restaurant
         SET card_payments_status = $2, payouts_status = $3,
@@ -207,4 +221,18 @@ export async function setStripeAccountId(restaurantId: string, accountId: string
     restaurantId,
     accountId,
   ]);
+}
+
+/**
+ * Marks a venue as having had a Stripe onboarding link minted for it.
+ *
+ * The column the product writes when `POST /restaurants/:id/onboarding-link` succeeds. Set here
+ * directly because the endpoint cannot be reached from this harness — minting a real link is a
+ * live Stripe call, and the harness key is a placeholder by design (ADR-041).
+ */
+export async function setOnboardingLinkRequested(restaurantId: string, at: Date): Promise<void> {
+  await execute(
+    "UPDATE restaurant SET onboarding_link_first_requested_at = $2, updated_at = NOW() WHERE id = $1",
+    [restaurantId, at.toISOString()],
+  );
 }

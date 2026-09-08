@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.0.0
+version: 1.1.0
 status: Active
 classification: Critical
 owner: Founder
@@ -139,6 +139,38 @@ consecutive reports, which is itself the argument for a register rather than a r
 OC-1 and two rows from an earlier count. This is a fourth, included because branch 3 of the roadmap
 is *defined* as "waiting on the regulator" and a register that omits the thing branch 3 waits on
 would be incomplete on its first day. Remove it if that is not wanted.
+
+---
+
+## OC-5 — The Stripe-agreement route is protected only transitively
+
+| | |
+|---|---|
+| **Status** | Open. Not a defect today; a defect on a specific future date. |
+| **Open since** | 2026-09-08 (when `POST /restaurants` began writing a `STRIPE_CONNECTED_ACCOUNT` acceptance) |
+| **What closes it** | Publishing the platform terms — which is also **what makes it dangerous**. See below. |
+| **Owner** | Founder |
+
+`POST /restaurants` now records the Stripe connected-account agreement (ADR-049), and
+`CURRENT_STRIPE_AGREEMENT_VERSION` is still the placeholder `UNPUBLISHED-no-terms-document-exists-yet`.
+By ADR-055's own reasoning that row would be a **false** record — asserting a business agreed to a
+document nobody can produce — and ADR-055 exists because a gate written about a *screen* protected
+nothing while the route kept writing.
+
+**This route has no gate. It does not need one today**, because the path is closed one step
+earlier: `assertPlatformTermsPublished` refuses `POST /auth/register` in production, nobody can
+create a restaurant without an account, and so no false row is reachable.
+
+**The trigger is the unusual part and the reason this is a row rather than a comment.** The
+condition ends when the platform terms are published — and that is the exact moment the transitive
+protection disappears: registration opens, real people create restaurants, and the Stripe constant
+may still be a placeholder if the second document is published later than the first. **The
+protection and the danger have the same trigger.**
+
+Three options, costed in `UX_MAP.md` and not decided: extend the existing gate to this route (its
+message says *"Registration is not open yet"* — wrong words here), write a sibling gate with its
+own wording, or keep the reliance and accept that publishing one document without the other opens
+the hole. **Whoever publishes the platform terms must read this row on the same day.**
 
 ---
 

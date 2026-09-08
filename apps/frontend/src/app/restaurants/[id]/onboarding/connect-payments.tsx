@@ -29,14 +29,24 @@ import { t } from "../../../../lib/i18n";
  * from a budget of ten per hour, and mostly produce links nobody uses. It is minted when a person
  * asks for it and used immediately.
  *
- * ── The four states are `onboardingStatus`, and that is a different question from the banner's ──
+ * ── Three sources, three questions, and none of them answers another's ─────────────────────────
  *
- * The Dashboard banner reads the two Stripe capabilities, because it answers *can this venue take
- * money right now*. This screen reads our derived `onboardingStatus`, because it answers *where is
- * this venue in setup* — and that is precisely what the derived value encodes: `IN_PROGRESS` means
- * Stripe is waiting on the owner, `RESTRICTED` means it is not. The capabilities alone cannot tell
- * those two apart, and telling somebody to go and finish a form when nothing is asked of them is
- * the worse of the two errors.
+ * The Dashboard banner reads the two Stripe **capabilities**, because it asks *can this venue take
+ * money right now*.
+ *
+ * This screen reads `onboardingStatus` for two of its states, because that derived value is the
+ * only thing that separates *Stripe is waiting on the owner* (`IN_PROGRESS`) from *Stripe is
+ * reviewing and wants nothing* (`RESTRICTED`) — and telling somebody to go and finish a form when
+ * nothing is asked of them is the worse of the two errors.
+ *
+ * And it reads **our own `onboardingLinkFirstRequestedAt`** to choose between starting and
+ * continuing, because no Stripe field can. A venue seconds old is already `IN_PROGRESS`: creation
+ * requests card_payments, so Stripe attaches requirements immediately. Choosing on the status told
+ * every new owner to resume something they had never begun.
+ *
+ * This comment previously said the screen's states *are* `onboardingStatus`. That was true when
+ * written and stopped being true here; it is corrected rather than left, because a file's own
+ * header is the last place anyone checks for a stale claim.
  */
 interface RestaurantOnboarding {
   id: string;
@@ -45,6 +55,8 @@ interface RestaurantOnboarding {
   onboardingStatus: string;
   cardPaymentsStatus: string | null;
   payoutsStatus: string | null;
+  /** When a Stripe link was first minted for this venue; `null` means never. See below. */
+  onboardingLinkFirstRequestedAt: string | null;
 }
 
 export function ConnectPayments({
@@ -130,7 +142,23 @@ function Loaded({
     );
   }
 
-  const resuming = venue.onboardingStatus === "IN_PROGRESS";
+  /**
+   * Start or continue — and this reads OUR column, not Stripe's status, because Stripe's status
+   * cannot answer it.
+   *
+   * `onboardingStatus` is `IN_PROGRESS` on a venue seconds old: `POST /restaurants` requests
+   * card_payments, so Stripe attaches requirements immediately (18 of them, measured on a real
+   * account). Deriving "continue where you left off" from that told every new owner to resume
+   * something they had never begun. `NOT_STARTED` cannot rescue it either — that value is
+   * unreachable for anything this product creates, surviving only on rows never refreshed.
+   *
+   * The distinguishing fact is ours: a link was minted for this venue, or it was not.
+   *
+   * **What this still does not know**, and the wording stays inside that limit: whether the link
+   * was opened, whether Stripe's form was reached, whether anything was filled in. It knows the
+   * form was handed over. "Asked for a link" and "started onboarding" are different questions.
+   */
+  const resuming = venue.onboardingLinkFirstRequestedAt !== null;
 
   return (
     <Panel

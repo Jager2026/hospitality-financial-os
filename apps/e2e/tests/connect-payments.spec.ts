@@ -4,6 +4,7 @@ import {
   seedMemberWithRole,
   setStripeAccountId,
   seedOrgWideOwner,
+  setOnboardingLinkRequested,
   setStripeState,
   type StripeState,
 } from "../fixtures/org";
@@ -129,6 +130,56 @@ test("an exhausted rate limit is explained in words, not shown as a breakage", a
   // Still on the screen: a rate limit is a pause, not a dead end, and the person must be able to
   // read where the venue stands while they wait.
   await expect(page.getByTestId("connect-payments")).toBeVisible();
+});
+
+test("a venue that has never been sent to Stripe is asked to start, not to continue", async ({
+  page,
+  request,
+}) => {
+  await resetRateLimits();
+  const owner = await registerUser(request);
+  const org = await seedOrgWideOwner(owner.email, "Never sent — Vilnius");
+
+  // THE STATE THAT DISCRIMINATES, and the one a real venue is in seconds after creation: Stripe
+  // has answered with requirements outstanding, so `onboardingStatus` is IN_PROGRESS — while no
+  // link has ever been minted. An implementation reading only the status calls this "continue".
+  await setStripeState(org.restaurantId, "requirements_due" satisfies StripeState);
+
+  await logIn(page, owner.email, owner.password);
+  await openConnect(page, org.restaurantId);
+
+  const panel = page.getByTestId("connect-payments");
+  await expect(panel).toBeVisible();
+  await expect(
+    panel,
+    "a venue nobody has been sent to Stripe for was told to continue",
+  ).toContainText("Set up card payments");
+  await expect(panel).not.toContainText("Continue setting up");
+  await expect(page.getByTestId("connect-continue")).toBeVisible();
+});
+
+test("a venue that has been sent to Stripe before is asked to continue", async ({
+  page,
+  request,
+}) => {
+  await resetRateLimits();
+  const owner = await registerUser(request);
+  const org = await seedOrgWideOwner(owner.email, "Sent before — Kaunas");
+
+  // Same Stripe state as the test above — the ONLY difference is our own column. That is what
+  // makes the pair discriminating rather than two tests of the same thing.
+  await setStripeState(org.restaurantId, "requirements_due" satisfies StripeState);
+  await setOnboardingLinkRequested(org.restaurantId, new Date(Date.now() - 60 * 60 * 1000));
+
+  await logIn(page, owner.email, owner.password);
+  await openConnect(page, org.restaurantId);
+
+  const panel = page.getByTestId("connect-payments");
+  await expect(panel).toContainText("Continue setting up card payments");
+  // The wording stops at what the column knows: a link was handed over, not that anyone used it.
+  await expect(panel, "the screen claimed to know how far they got").not.toContainText(
+    "where you left off",
+  );
 });
 
 test("a restaurant whose onboarding is complete is not invited to start again", async ({

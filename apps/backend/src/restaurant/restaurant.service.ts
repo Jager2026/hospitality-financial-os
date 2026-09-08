@@ -221,11 +221,26 @@ export class RestaurantService {
       throw new AppException("RESTAURANT_NOT_FOUND", "Restaurant has no Stripe account.", 404);
     }
     const frontendUrl = this.config.getOrThrow<string>("FRONTEND_URL");
-    return this.stripe.createOnboardingLink(
+    const url = await this.stripe.createOnboardingLink(
       restaurant.stripeAccountId,
       `${frontendUrl}/restaurants/${restaurant.id}/onboarding/refresh`,
       `${frontendUrl}/restaurants/${restaurant.id}/onboarding/complete`,
     );
+
+    // AFTER the link exists, never before. The column's whole job is to say whether this venue has
+    // ever been handed the form; recording an attempt that Stripe refused would tell a person to
+    // "continue" something they were never given.
+    //
+    // `updateMany` with `null` in the WHERE rather than read-then-write: two requests arriving
+    // together would both read null and both write, and the second would move the timestamp
+    // forward. Here the second matches nothing and changes nothing — FIRST request, decided by the
+    // database rather than by ordering.
+    await this.prisma.restaurant.updateMany({
+      where: { id: restaurant.id, onboardingLinkFirstRequestedAt: null },
+      data: { onboardingLinkFirstRequestedAt: new Date() },
+    });
+
+    return url;
   }
 
   /** Webhooks entry point (Sprint 5, account.updated): the webhook only tells us WHICH account

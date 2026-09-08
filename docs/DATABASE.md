@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.18.0
+version: 2.19.0
 status: Active
 classification: Internal
 owner: Founder
@@ -63,7 +63,7 @@ Restaurant
 ############################################################
 **Purpose:** One hospitality business location — the legal and tax entity.
 
-**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, tip_presets, created_at, updated_at, shift_auto_close_minutes
+**Fields:** id, organization_id, name, legal_name, company_number, vat_number, email, phone, country, currency, default_customer_locale, timezone, address, logo_url, status, stripe_account_id, onboarding_status, card_payments_status, payouts_status, requirements_due, onboarding_link_first_requested_at, tip_presets, created_at, updated_at, shift_auto_close_minutes
 
 **Shift auto-close (ADR-064).** `shift_auto_close_minutes` is the minute of the venue's own local day at which a still-open Shift closes automatically — the **safety net**, never the main path, which is the button. Per Restaurant rather than per Organization: different venues keep different hours. Not nullable, with a CHECK holding it inside `0..1439`, because a net that can be switched off is not a net and a value outside the day is the net silently absent. The default of `300` (05:00) is a placeholder so it is never missing; the number is the Founder's to set.
 
@@ -72,6 +72,8 @@ Restaurant
 **Rules:** Restaurant carries `vat_number` and `company_number` because it is the tax entity, and for MVP owns its own Stripe Connect account (ADR-009, ADR-014 — Accounts v2, `dashboard: "full"`) — connected accounts are attached per location, not per Organization. `country` / `currency` mirror the connected account's fixed values; changing a restaurant's operating country means a new Stripe account, never an edit to this row. `default_customer_locale` is what the payment terminal shows before a customer touches anything — the customer has no account to store a preference in, so this is the only place it can live (ADR-013). Restaurant is never physically deleted. `currency` references `Currency.code`.
 
 `card_payments_status` and `payouts_status` mirror Stripe's own v2 capability-status strings (`configuration.merchant.capabilities.card_payments.status` and `configuration.merchant.capabilities.stripe_balance.payouts.status` respectively — confirmed against a real API response, ADR-009's revision) — not booleans, and deliberately not a Postgres enum either, since this vocabulary belongs to Stripe and can grow without a migration on our side. `requirements_due` stores Stripe's real `requirements.entries[]` array as-is (JSON) — a list of requirement objects, not requirement-name strings.
+
+`onboarding_link_first_requested_at` (Sprint 15) records when a Stripe onboarding link was **first** minted for this venue; NULL means never. It exists because `onboarding_status` cannot answer the question a screen needs to ask. `POST /restaurants` requests the card_payments capability at account creation, so Stripe answers `restricted` with requirements attached immediately — measured on a live account, eighteen entries seconds after creation — and `deriveOnboardingStatus` reads that as IN_PROGRESS. A venue nobody has touched therefore looks identical to one somebody abandoned, and **NOT_STARTED is unreachable for anything this product creates**, surviving only on rows whose status was never refreshed. Nothing Stripe returns separates the two: `requested_reasons` is `routine_onboarding`, `awaiting_action_from` is `user`, `identity` is null, and the account object carries no onboarding-state field. **A timestamp rather than a counter** — a count answers "how often", which ADR-028 already bounds, and would climb with every link a mail client burns by scanning it. Written only after Stripe returns a link, and only when the column is still NULL, so it means *first*, not *latest*. **It does not record that the link was opened, that Stripe's form was reached, or that anything was entered** — "asked for a link" and "started onboarding" are different questions.
 
 `tip_presets` (Sprint 6, ADR-022): an array of integer percentages (e.g. `[10, 15, 20]`) shown to the customer at Tip Selection (UX_MAP.md) — display configuration only, never a validation rule on `Payment.tip_amount`, which is a plain minor-units amount the terminal computes from whichever preset or Custom value the customer picks. Defaults to `[10, 15, 20]` (`API_Contract.md`'s own example), editable per Restaurant via `PATCH /restaurants/{id}/settings/tips`.
 

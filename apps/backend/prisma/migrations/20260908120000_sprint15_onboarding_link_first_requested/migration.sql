@@ -1,0 +1,34 @@
+-- ============================================================================
+-- One column, recording the one fact this system had and discarded: when a Stripe onboarding link
+-- was FIRST minted for a venue.
+--
+-- Why it is needed. Sprint 15 established by measurement that `onboarding_status` cannot separate
+-- "created, nothing started" from "started and abandoned". `POST /restaurants` requests the
+-- card_payments capability at account creation, so Stripe answers `restricted` and attaches its
+-- requirements immediately — a real account measured through the product came back with 18
+-- entries seconds after it existed. `deriveOnboardingStatus` reads requirements > 0 as
+-- IN_PROGRESS, so a brand-new venue derives to the same value as one somebody abandoned, and
+-- NOT_STARTED is unreachable for anything this product creates.
+--
+-- Nothing Stripe returns distinguishes the two: on a fresh account every requirement carries
+-- `requested_reasons: routine_onboarding` and `awaiting_action_from: user`, `identity` is null,
+-- and the account object has no onboarding-state field at all. Whether those change once somebody
+-- starts and abandons the flow is UNMEASURED — it needs a half-finished account, which cannot be
+-- produced to order.
+--
+-- A TIMESTAMP, NOT A COUNTER, and the difference is the question being asked. A count answers
+-- "how often", which ADR-028's 10-per-hour throttle already bounds, and it would climb with every
+-- link burned by a mail client scanning it (#125) — measuring scanning as much as intent. First
+-- request answers "has this person ever been handed the form", which is what the screen asks.
+--
+-- WHAT IT DOES NOT ANSWER. Whether the link was opened, whether Stripe's form was reached,
+-- whether anything was typed. It records that we minted a link. Written down here as well as in
+-- the schema because a column name is read far more often than a comment, and
+-- "onboarding_link_first_requested_at" could be mistaken for "onboarding was started".
+--
+-- Nullable with no default and no backfill: NULL means never, which is true of every row that
+-- exists today — no venue has ever had this recorded, because nothing wrote it.
+-- ============================================================================
+
+ALTER TABLE "restaurant"
+  ADD COLUMN "onboarding_link_first_requested_at" TIMESTAMP(3);

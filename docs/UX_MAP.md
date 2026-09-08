@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.10.0
+version: 2.11.0
 status: Active
 classification: Internal
 owner: Founder
@@ -244,7 +244,19 @@ Established by measurement on 2026-09-08, and it changes what the four states me
 
 Whether those values change once somebody starts and abandons Stripe's flow is **unmeasured** — it would take an account left half-finished, which one session cannot produce.
 
-**What would distinguish them is a fact we already have and discard:** `createOnboardingLink` mints a link and records nothing. "A link has been requested for this venue at least once" is the difference between the two states, and it costs one column. Not built here — this slice's axis was consent — and recorded so the next reader does not re-derive it.
+**What distinguishes them is a fact we had and discarded — now recorded.** `Restaurant.onboardingLinkFirstRequestedAt` (Sprint 15) is written when `POST /restaurants/{id}/onboarding-link` first succeeds, and the screen reads **that**, not `onboardingStatus`, to choose between starting and continuing:
+
+| State | Screen |
+|---|---|
+| no link ever minted | **Set up card payments** — what Stripe will ask, and why |
+| a link was minted before | **Continue setting up card payments** |
+| `COMPLETE` | nothing |
+
+**A timestamp, not a counter.** A count answers "how often", which ADR-028's 10-per-hour throttle already bounds, and it would climb with every link burned by a mail client scanning it (#125) — measuring scanning as much as intent. It is written **after** Stripe returns a link, never before: recording a refused attempt would tell somebody to continue something they were never handed. And it is written with `UPDATE … WHERE first_requested_at IS NULL`, so two simultaneous requests cannot move it — *first*, decided by the database rather than by ordering.
+
+**The limit of what it knows, kept in the wording.** It records that a link was handed over — not that it was opened, not that Stripe's form was reached, not that anything was typed. So the copy says *"you've been sent to Stripe for this restaurant before"* and stops there; "where you left off" stays out of the product, because we do not know that. **"Asked for a link" and "started onboarding" are different questions, and only the first is closed.**
+
+**Still unmeasured, and it is the reason the second question stays open:** whether Stripe's own signals change once somebody starts and abandons the flow. That needs a half-finished account, which cannot be produced to order.
 
 **The copy was corrected**, because one wording is true in both cases and the old one was false in the case that actually occurs: *"Card payments need a few more details — Stripe needs some details about this business before it can take cards"* replaces *"Finish setting up… continuing takes you back to where you left off"*. That is the only change made here; the distinction itself stays open.
 
