@@ -40,7 +40,21 @@ function run(env: Record<string, string | undefined>): { code: number; output: s
   }
 }
 
-describe("check-public-env — the frontend build guard", () => {
+/**
+ * The timeout is on the suite because the cost is a property of the FILE, not of one test.
+ *
+ * Every case here spawns real node processes — six in the loopback-spelling case, five in the
+ * `ALLOW_LOOPBACK_API_URL` one, four in the `NODE_ENV` one — and vitest's 5s default is per test,
+ * not per spawn. Across recorded gate runs the file has taken 5.5s, 7.2s, 9.5s and 13.7s, so the
+ * default was always inside the noise; it finally failed on a run where nothing about the guard had
+ * changed, which is the signature of a budget that never matched the work.
+ *
+ * Stated as a suite option rather than raised globally, deliberately: a global `testTimeout` would
+ * hide the same defect in tests that do far less, and the subprocess-per-case design here is not
+ * something to fix — it is the point (see the file docstring above; importing the guard would test
+ * a rearranged copy of it).
+ */
+describe("check-public-env — the frontend build guard", { timeout: 30_000 }, () => {
   it("refuses a build with no NEXT_PUBLIC_API_URL, and accepts one with a real URL", () => {
     const missing = run({});
     expect(missing.code).toBe(1);

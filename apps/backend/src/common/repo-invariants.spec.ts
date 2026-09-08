@@ -662,7 +662,24 @@ describe("repository invariants", () => {
         ),
     );
 
-    const SKIP = new Set(["node_modules", "dist", ".next", ".git", "coverage", "test-results"]);
+    // `.claude` holds nested git WORKTREES — a second, complete checkout of this repository, put
+    // there by the desktop app when a background task starts. Walking into one makes every file in
+    // the repository appear twice, and the copy is judged against the ORIGINAL's tsconfig include
+    // patterns, which are relative and therefore never match it. The result is this invariant
+    // failing with eight findings that are all the same eight files it just passed on.
+    //
+    // It is local-only — CI checks out once — which is exactly why it matters: the rule is to run
+    // the whole gate before pushing, and a gate that fails whenever a background task exists is a
+    // gate that gets run selectively instead.
+    const SKIP = new Set([
+      "node_modules",
+      "dist",
+      ".next",
+      ".git",
+      "coverage",
+      "test-results",
+      ".claude",
+    ]);
     const scripts: string[] = [];
     (function walk(dir: string) {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
