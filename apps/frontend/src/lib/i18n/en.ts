@@ -163,6 +163,12 @@ export const en = {
   "createRestaurant.ambiguous.title": "Which business is this restaurant for?",
   "createRestaurant.ambiguous.explain":
     "Your account covers more than one business, and this screen cannot yet ask which one a new restaurant belongs to. Adding it to the wrong one is not something that can be undone, so it does not guess. Choosing between businesses is not built yet.",
+  "createRestaurant.agreement.agree":
+    "I accept the Stripe connected-account agreement on behalf of this business.",
+  "createRestaurant.error.agreementRequired":
+    "Please accept the Stripe agreement before creating the restaurant — the account cannot be opened without it.",
+  "createRestaurant.error.agreementUnavailable":
+    "We can’t load the Stripe agreement right now, so we can’t record that you accepted it. Reload the page in a moment — nothing was created.",
   "createRestaurant.error.refused":
     "The restaurant was not created. Nothing has been set up, and nothing was charged — the details above are still here, so you can correct them and try again.",
   "createRestaurant.error.rejected":
@@ -224,9 +230,13 @@ export const en = {
   "connect.start.title": "Set up card payments",
   "connect.start.explain":
     "Stripe verifies every business that takes card payments, and hosts that step itself — we never see or store the documents. It usually takes a few minutes, and you can leave and come back.",
-  "connect.resume.title": "Finish setting up card payments",
+  // Worded so it is true on the venue's first minute as well as its third day. It used to say
+  // "continuing takes you back to where you left off", which is false for the state a real new
+  // venue is actually in: Stripe reports outstanding requirements the moment the account exists,
+  // so `IN_PROGRESS` is what a brand-new restaurant derives to — nobody has left off anything.
+  "connect.resume.title": "Card payments need a few more details",
   "connect.resume.explain":
-    "Stripe still needs something from you before this restaurant can take cards. Continuing takes you back to where you left off.",
+    "Stripe needs some details about this business before it can take cards. Continuing opens Stripe, where you can fill them in — anything already provided is kept.",
   "connect.asks.identity": "Who you are — an identity document for the person responsible.",
   "connect.asks.business": "The business — registration and tax details for this restaurant.",
   "connect.asks.bank": "Where money goes — the bank account payouts are sent to.",

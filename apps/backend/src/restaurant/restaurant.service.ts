@@ -2,6 +2,8 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma, type Restaurant } from "@prisma/client";
 import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
+import type { RequestContext } from "../auth/auth.service";
+import { CURRENT_STRIPE_AGREEMENT_VERSION } from "../common/agreements/agreement-versions";
 import { AppException } from "../common/exceptions/app.exception";
 import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
@@ -35,10 +37,27 @@ export class RestaurantService {
     dto: CreateRestaurantDto,
     userId: string,
     organizationId: string | null,
+    context: RequestContext = {},
   ): Promise<Restaurant> {
     const currency = await this.prisma.currency.findUnique({ where: { code: dto.currency } });
     if (!currency) {
       throw new AppException("VALIDATION_ERROR", `Unsupported currency: ${dto.currency}`, 400);
+    }
+
+    // ADR-049, and checked against the server's own value exactly as registration does: a client
+    // could otherwise record agreement to any string, and a tab left open records agreement to a
+    // revision that has since changed. Refused rather than silently corrected — correcting it
+    // would write down that a business accepted something it was never shown.
+    //
+    // Before the Stripe call on purpose. Every check that can refuse this request belongs ahead of
+    // the one step that has an external side effect: past that line a refusal costs a connected
+    // account nobody can reach (see the transaction below).
+    if (dto.acceptedStripeAgreementVersion !== CURRENT_STRIPE_AGREEMENT_VERSION) {
+      throw new AppException(
+        "TERMS_VERSION_MISMATCH",
+        "The agreement has changed since this page was opened. Please reload and read it again.",
+        409,
+      );
     }
 
     const stripeAccountId = await this.stripe.createConnectAccount({
@@ -65,7 +84,7 @@ export class RestaurantService {
         });
       }
 
-      return tx.restaurant.create({
+      const restaurant = await tx.restaurant.create({
         data: {
           organizationId: orgId,
           name: dto.name,
@@ -84,6 +103,23 @@ export class RestaurantService {
           onboardingStatus: "NOT_STARTED",
         },
       });
+
+      // The same transaction as the Restaurant, for the same reason registration writes its
+      // acceptance beside the User: a Restaurant with a Stripe account and no record of having
+      // agreed to the agreement that account is governed by is precisely the gap ADR-049 exists to
+      // close. `restaurantId` alone, `userId` null — the CHECK constraint enforces that pairing,
+      // so a write with the wrong subject fails in the database rather than sitting there wrong.
+      await tx.agreementAcceptance.create({
+        data: {
+          agreement: "STRIPE_CONNECTED_ACCOUNT",
+          version: dto.acceptedStripeAgreementVersion,
+          restaurantId: restaurant.id,
+          ipAddress: context.ipAddress ?? null,
+          userAgent: context.userAgent ?? null,
+        },
+      });
+
+      return restaurant;
     });
   }
 
