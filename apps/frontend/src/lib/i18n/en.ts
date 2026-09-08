@@ -139,6 +139,40 @@ export const en = {
   // Destinations after login. Create Your Restaurant is still a stub — it arrives with its own
   // slice; the Restaurants list below is built.
   "createRestaurant.title": "Create your restaurant",
+  "createRestaurant.explain":
+    "This is the business that takes the payments — the details below are the ones Stripe and your invoices need. It takes a couple of minutes, and everything except the country and currency can be changed later.",
+  "createRestaurant.field.name": "Restaurant name",
+  "createRestaurant.field.legalName": "Registered company name",
+  "createRestaurant.hint.legalName":
+    "As it appears in the company register, not the name on the door.",
+  "createRestaurant.field.companyNumber": "Company registration number",
+  "createRestaurant.field.vatNumber": "VAT number",
+  "createRestaurant.field.email": "Contact email",
+  "createRestaurant.hint.email": "Where Stripe writes about this restaurant’s account.",
+  "createRestaurant.field.phone": "Phone",
+  "createRestaurant.field.address": "Address",
+  "createRestaurant.field.timezone": "Time zone",
+  "createRestaurant.hint.timezone":
+    "Used to decide which working day a late-night payment belongs to.",
+  "createRestaurant.fixed":
+    "Country: Lithuania. Currency: euro. Both are fixed when the Stripe account is created and cannot be changed afterwards — a different country or currency means a separate restaurant.",
+  "createRestaurant.action.create": "Create restaurant",
+  "createRestaurant.action.working": "Creating…",
+  "createRestaurant.action.check": "Check what was created",
+  "createRestaurant.action.checking": "Checking…",
+  "createRestaurant.ambiguous.title": "Which business is this restaurant for?",
+  "createRestaurant.ambiguous.explain":
+    "Your account covers more than one business, and this screen cannot yet ask which one a new restaurant belongs to. Adding it to the wrong one is not something that can be undone, so it does not guess. Choosing between businesses is not built yet.",
+  "createRestaurant.error.refused":
+    "The restaurant was not created. Nothing has been set up, and nothing was charged — the details above are still here, so you can correct them and try again.",
+  "createRestaurant.error.rejected":
+    "Some of these details were not accepted. Nothing was created. Check the registration number, VAT number and email, then try again.",
+  "createRestaurant.error.notAllowed":
+    "This account cannot create a restaurant for that business. Creating one needs an owner’s account.",
+  "createRestaurant.error.unknownOutcome":
+    "We did not get an answer, so we cannot tell whether the restaurant was created. Trying again could create a second one, which is why there is no second attempt offered here — check first.",
+  "createRestaurant.error.verifiedAbsent":
+    "Checked: no restaurant was created. Nothing was left behind, so it is safe to try again.",
   "restaurants.title": "Your restaurants",
   "restaurants.loading": "Loading your restaurants…",
   "restaurants.error.title": "We could not load your restaurants",
