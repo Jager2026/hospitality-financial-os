@@ -8,7 +8,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import type { CreateRestaurantDto } from "./dto/create-restaurant.schema";
 import { RestaurantService } from "./restaurant.service";
-import { seededRole } from "../../test/fixtures/authenticated-user";
+import { callerWithSeededRole, seededRole } from "../../test/fixtures/authenticated-user";
 
 // Real database, real RestaurantService, real Prisma transaction — only StripeService is faked
 // (no real Stripe network call from an automated test). Seeds exactly the Role/Permission rows
@@ -86,6 +86,35 @@ describe("RestaurantService (real database)", () => {
       acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
       ...overrides,
     };
+  }
+
+  /**
+   * The caller `createOnboardingLink` expects: an org-wide Owner at this venue, holding the
+   * Permissions the seed actually grants an Owner.
+   *
+   * Built through `callerWithSeededRole` rather than by hand. The first draft of this helper wrote
+   * the Owner's name beside a one-entry permission list, which is exactly the drift
+   * `repo-invariants.spec.ts` refuses — and it refused this one. An Owner holding one of its ten
+   * Permissions proves things about a system that does not exist.
+   *
+   * The reworded comment is deliberate too: quoting the forbidden literal here tripped the same
+   * invariant a second time. Its matcher is a regular expression over source text, and text cannot
+   * tell code from prose (`CLAUDE.md`: a search can only prove a string is present).
+   */
+  async function ownerFor(
+    userId: string,
+    restaurant: { organizationId: string },
+  ): Promise<AuthenticatedUser> {
+    const membership = await prisma.membership.findFirstOrThrow({
+      where: { userId, organizationId: restaurant.organizationId },
+    });
+    return await callerWithSeededRole(prisma, {
+      roleName: "Owner",
+      organizationId: restaurant.organizationId,
+      restaurantId: null,
+      userId,
+      membershipId: membership.id,
+    });
   }
 
   async function createTestUser(): Promise<string> {
@@ -391,5 +420,48 @@ describe("RestaurantService (real database)", () => {
     await expect(service.createOnboardingLink(restaurant.id, owner)).resolves.toContain(
       "connect.stripe.com",
     );
+  });
+
+  // The column that separates "never sent to Stripe" from "sent and not finished". Sprint 15
+  // established that no Stripe field answers that question, and that our own answer was being
+  // discarded: the link was minted and nothing recorded.
+  it("records when an onboarding link was FIRST minted, and does not move it on later requests", async () => {
+    const userId = await createTestUser();
+    const restaurant = await service.create(baseDto(), userId, null);
+    const owner = await ownerFor(userId, restaurant);
+
+    const before = await prisma.restaurant.findUniqueOrThrow({ where: { id: restaurant.id } });
+    expect(before.onboardingLinkFirstRequestedAt, "a venue nobody asked for a link for").toBeNull();
+
+    await service.createOnboardingLink(restaurant.id, owner);
+    const first = await prisma.restaurant.findUniqueOrThrow({ where: { id: restaurant.id } });
+    expect(first.onboardingLinkFirstRequestedAt).not.toBeNull();
+
+    // FIRST, not latest. A second request must leave the answer alone — otherwise the column says
+    // "recently asked" rather than "has ever been sent", and a person burning links would look
+    // like a person who just started.
+    await service.createOnboardingLink(restaurant.id, owner);
+    const second = await prisma.restaurant.findUniqueOrThrow({ where: { id: restaurant.id } });
+    expect(second.onboardingLinkFirstRequestedAt?.getTime()).toBe(
+      first.onboardingLinkFirstRequestedAt?.getTime(),
+    );
+  });
+
+  // THE DISCRIMINATING HALF. Recording the attempt rather than the link would pass the test above
+  // — the column would be set, once, at the right moment. It would also tell somebody to continue
+  // an onboarding they were never handed, which is the exact defect this column exists to end.
+  it("does not record a request that Stripe refused", async () => {
+    const userId = await createTestUser();
+    const restaurant = await service.create(baseDto(), userId, null);
+    const owner = await ownerFor(userId, restaurant);
+
+    fakeStripe.createOnboardingLink.mockRejectedValueOnce(new Error("Stripe said no"));
+    await expect(service.createOnboardingLink(restaurant.id, owner)).rejects.toThrow();
+
+    const after = await prisma.restaurant.findUniqueOrThrow({ where: { id: restaurant.id } });
+    expect(
+      after.onboardingLinkFirstRequestedAt,
+      "a link that was never minted was recorded as sent",
+    ).toBeNull();
   });
 });

@@ -230,18 +230,24 @@ export const en = {
   "connect.start.title": "Set up card payments",
   "connect.start.explain":
     "Stripe verifies every business that takes card payments, and hosts that step itself — we never see or store the documents. It usually takes a few minutes, and you can leave and come back.",
-  // Worded so it is true on the venue's first minute as well as its third day. It used to say
-  // "continuing takes you back to where you left off", which is false for the state a real new
-  // venue is actually in: Stripe reports outstanding requirements the moment the account exists,
-  // so `IN_PROGRESS` is what a brand-new restaurant derives to — nobody has left off anything.
-  "connect.resume.title": "Card payments need a few more details",
+  // Shown only when a link has actually been minted for this venue before (Sprint 15's own
+  // column). It used to be chosen by `onboardingStatus === IN_PROGRESS`, which is true of a venue
+  // seconds old — so a new owner was told to resume something they had never begun. Now that the
+  // two states are distinguishable, this one can say what it means again.
+  //
+  // "Where you left off" is deliberately absent even here: the column records that a link was
+  // handed over, not that anybody opened it or typed anything.
+  "connect.resume.title": "Continue setting up card payments",
   "connect.resume.explain":
-    "Stripe needs some details about this business before it can take cards. Continuing opens Stripe, where you can fill them in — anything already provided is kept.",
+    "You’ve been sent to Stripe for this restaurant before. Continuing opens it again — anything already provided is kept, and Stripe will only ask for what is still missing.",
   "connect.asks.identity": "Who you are — an identity document for the person responsible.",
   "connect.asks.business": "The business — registration and tax details for this restaurant.",
   "connect.asks.bank": "Where money goes — the bank account payouts are sent to.",
   "connect.action.start": "Continue to Stripe",
-  "connect.action.resume": "Continue where you left off",
+  // Not "continue where you left off": the column says a link was handed over, never that anybody
+  // opened it. The test asserting the absence of that phrase caught this string after the heading
+  // and body had already been corrected — three places said it, and two fixes read as done.
+  "connect.action.resume": "Continue to Stripe",
   "connect.action.working": "Opening Stripe…",
   "connect.later": "I’ll do this later",
   "connect.expired.explain":

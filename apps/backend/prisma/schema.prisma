@@ -212,6 +212,28 @@ model Restaurant {
   // impact, minimum_deadline, requested_reasons), stored as-is. Not a flat array of strings.
   requirementsDue      Json?                 @map("requirements_due")
 
+  /// When a Stripe onboarding link was FIRST minted for this venue. Null means never.
+  ///
+  /// **The one fact this system had and threw away.** Sprint 15 established by measurement that
+  /// `onboarding_status` cannot separate "created, nothing started" from "started and abandoned":
+  /// `POST /restaurants` requests card_payments, so Stripe answers `restricted` with requirements
+  /// attached the moment an account exists, and the derived status is `IN_PROGRESS` on a venue
+  /// seconds old. Nothing Stripe returns distinguishes the two — `requested_reasons` is
+  /// `routine_onboarding`, `awaiting_action_from` is `user`, `identity` is null, on a fresh
+  /// account and (presumably) on an abandoned one.
+  ///
+  /// **A timestamp rather than a counter, deliberately.** A count answers "how often", which
+  /// ADR-028's 10/hour throttle already bounds, and it would grow with every burned link — mail
+  /// clients follow links to scan them (#125), so a count measures scanning as much as intent.
+  /// First-request time answers the question the screen actually asks: has this person ever been
+  /// handed the form?
+  ///
+  /// **What it does NOT answer, stated so nobody reads more into it than it holds:** whether they
+  /// opened the link, or reached Stripe's form, or filled in anything. It records that we minted a
+  /// link. "Requested a link" and "started onboarding" are different questions, and only the first
+  /// is closed here.
+  onboardingLinkFirstRequestedAt DateTime? @map("onboarding_link_first_requested_at")
+
   // Sprint 6, ADR-022: percentage presets shown to the customer at Tip Selection (UX_MAP.md) —
   // display configuration only, never a validation rule on Payment.tip_amount.
   tipPresets Int[] @default([10, 15, 20]) @map("tip_presets")
