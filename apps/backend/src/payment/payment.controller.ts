@@ -27,8 +27,22 @@ import {
 import { PaymentService } from "./payment.service";
 
 // API_Contract.md, PAYMENTS.
+/**
+ * `PermissionsGuard` on the class, for the same reason as `TransactionController`: two routes here
+ * — `GET /payments/:id` and `GET /payments/:id/status` — carried `@RequirePermission("reports.view")`
+ * with nothing in scope to read it. The guard is deliberately not global, so a decorator without a
+ * `@UseGuards` naming it is inert.
+ *
+ * Neither route was open (`PaymentService.assertPermittedAtRestaurant` checks the same permission),
+ * but the pre-filter that catches a service forgetting is what was missing, and it is not
+ * theoretical: #108 measured a zero-permission Waiter reading a restaurant's payment data.
+ *
+ * The two per-method `@UseGuards(PermissionsGuard)` lines are gone as duplicates of this one. The
+ * guard passes any route declaring no permission, so class scope costs nothing and covers routes
+ * added later — which is precisely how the two inert ones came to exist.
+ */
 @Controller("payments")
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class PaymentController {
   constructor(private readonly paymentService: PaymentService) {}
 
@@ -44,7 +58,6 @@ export class PaymentController {
   // request pipeline, so even a legitimate idempotent retry with the same Idempotency-Key still
   // consumes throttle budget — an accepted tradeoff, not a claimed exemption.
   @Post()
-  @UseGuards(PermissionsGuard)
   @RequirePermission("payments.manage")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @UseInterceptors(IdempotencyInterceptor)
@@ -59,7 +72,6 @@ export class PaymentController {
 
   // ADR-043, same reasoning as the Transactions list: a Payment is the restaurant's takings.
   @Get()
-  @UseGuards(PermissionsGuard)
   @RequirePermission("reports.view")
   findAll(
     @Query(new ZodValidationPipe(paymentHistoryQuerySchema)) query: PaymentHistoryQueryDto,

@@ -120,6 +120,7 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
   // on the first attempt — four fields that do not exist on the model. Caught by the database
   // rejecting it, which is the only reason it did not become a fixture describing a system that
   // is not this one.
+  let pureWaiter: Actor; // ONLY a zero-permission Waiter at B — holds reports.view nowhere
   let stranger: Actor; // Owner of Restaurant B, used to create B's own rows through the real API
   let paymentAtB: string;
   let transactionAtB: string;
@@ -155,7 +156,6 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
         currency: "EUR",
         defaultCustomerLocale: "en",
         timezone: "Europe/Vilnius",
-        acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
         acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
         address: "Gedimino pr. 1, Vilnius",
       });
@@ -238,6 +238,57 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
       relogin.body.data.memberships.length,
       "the subject must genuinely hold two Memberships for this test to mean anything",
     ).toBe(2);
+
+    // A THIRD subject, and the only one who holds `reports.view` nowhere at all.
+    //
+    // `dualRole` cannot measure the guard: they are an Owner in Organization A, so the coarse
+    // filter passes them and every refusal below comes from a service. This person's single
+    // Membership is the zero-permission Waiter at Restaurant B — the actor ADR-079's table used,
+    // and the only one whose answer changes if the guard is unwired.
+    //
+    // Registered WITHOUT the usual `registerAndLogin`, and the reason is a 429 this fixture hit on
+    // its first run. `/api/v1/auth/*` allows ten calls a minute per IP, the whole suite shares one
+    // IP through Redis (ADR-042), and `auth-throttle.integration.spec.ts` deliberately exhausts
+    // that budget from a parallel worker. A third subject took this file's own setup from five
+    // auth calls to eight and the collision became likely rather than possible.
+    //
+    // The budget is reset again here — the same mechanism this file already uses once, applied at
+    // the point the calls are actually made — and the login this subject does not need is dropped:
+    // `registerAndLogin` signs in immediately, but the only token wanted is the one issued AFTER
+    // the invitation is accepted, since a token minted before it carries no Membership.
+    await resetRateLimits();
+    const waiterEmail = `scope-waiter-only-${randomUUID()}@example.com`;
+    const waiterRegistration = await request(app.getHttpServer())
+      .post("/api/v1/auth/register")
+      .send({
+        email: waiterEmail,
+        password: OWNER_PASSWORD,
+        displayName: "waiter-only",
+        locale: "en",
+        acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
+      });
+    expect(waiterRegistration.status, JSON.stringify(waiterRegistration.body)).toBe(201);
+    pureWaiter = { email: waiterEmail, accessToken: "" };
+    const inviteWaiter = await request(app.getHttpServer())
+      .post("/api/v1/memberships")
+      .set("Authorization", `Bearer ${stranger.accessToken}`)
+      .send({ email: pureWaiter.email, restaurantId: restaurantB, roleId: waiterRole!.id });
+    expect(inviteWaiter.status, JSON.stringify(inviteWaiter.body)).toBe(201);
+    const acceptWaiter = await request(app.getHttpServer())
+      .post("/api/v1/memberships/invitations/accept")
+      .send({
+        email: pureWaiter.email,
+        token: (await readInvitationEmail(prisma, pureWaiter.email)).token,
+      });
+    expect(acceptWaiter.status, JSON.stringify(acceptWaiter.body)).toBe(200);
+    const waiterLogin = await request(app.getHttpServer())
+      .post("/api/v1/auth/login")
+      .send({ email: pureWaiter.email, password: OWNER_PASSWORD });
+    expect(
+      waiterLogin.body.data.memberships.length,
+      "exactly one Membership, or this subject is not the one the measurement needs",
+    ).toBe(1);
+    pureWaiter.accessToken = waiterLogin.body.data.accessToken as string;
 
     // Created through the REAL endpoint by B's own Owner. `Payment.idempotencyKey` is a foreign
     // key into the idempotency table, so a hand-seeded row is not merely inconvenient — it cannot
@@ -394,15 +445,29 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
     ).toContain(res.status);
   });
 
-  // ─── The by-id reads: three routes carrying NO @RequirePermission at all ─────────────────────
+  // ─── The by-id reads, and a comment that outlived the state it described ────────────────────
   //
-  // `GET /payments/:id`, `GET /payments/:id/status` and `GET /transactions/:id` are guarded by
-  // JwtAuthGuard alone and scoped by reachability inside their services. There is no coarse
-  // permission check above them to be "doubled" — reachability is the entire rule.
+  // This block used to open "three routes carrying NO @RequirePermission at all", and go on to say
+  // they were "guarded by JwtAuthGuard alone" with "no coarse permission check above them to be
+  // doubled". Both halves stopped being true, at different moments, and nothing noticed either.
   //
-  // ADR-043 closed exactly this shape for the LIST routes, having found that a Waiter saw a
-  // restaurant's full payment history, amounts and tips included. The by-id routes were not part
-  // of that change and have never been covered by any test.
+  // The decorator arrived with #108's fix, which gave all three `@RequirePermission("reports.view")`
+  // — so the first half was already false when it was last read. The second half was true for a
+  // worse reason: the decorator was there and **nothing read it**. `PermissionsGuard` is not
+  // global, and neither controller named it in a `@UseGuards`, so the route advertised a
+  // requirement the framework never imposed. ADR-079 measured that; this PR wired the guard onto
+  // both controllers.
+  //
+  // The comment is rewritten rather than deleted because its being wrong is the finding: prose
+  // describing a protection is exactly the artefact that cannot be trusted to age, which is why
+  // the enforcement question now belongs to an invariant (`repo-invariants.spec.ts`) and to the
+  // executable test at the end of this file rather than to a paragraph.
+  //
+  // What holds today: reachability inside the services is still the decision (ADR-043) — the
+  // guard is a coarse pre-filter that asks only whether the caller holds `reports.view` on ANY
+  // Membership. The three tests below are unchanged and still pass, because their subject is an
+  // Owner in Organization A and therefore clears the coarse filter; what refuses them is the
+  // service, exactly as before.
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
   // These three were `it.fails` for exactly one PR, and the mechanism worked as designed.
@@ -459,6 +524,57 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
       .get(`/api/v1/payments/${own.body.data.id as string}`)
       .set("Authorization", `Bearer ${dualRole.accessToken}`);
     expect(res.status, JSON.stringify(res.body)).toBe(200);
+  });
+
+  // ─── The guard itself, measured rather than read ─────────────────────────────────────────────
+  //
+  // Everything above is answered by a service. This is the one test in the file whose answer comes
+  // from `PermissionsGuard`, and it exists because the decorator on these three routes spent an
+  // unknown number of sprints doing nothing while every audit reported them as guarded (ADR-079).
+  //
+  // **Why it is not redundant with the repository invariant.** That invariant reads source text
+  // and can only ever prove a `@UseGuards` is WRITTEN. This one issues a request and proves it
+  // RUNS — the distinction the whole finding turned on.
+  //
+  // Both ways of breaking it were executed, and the second corrected what this comment claimed on
+  // its first draft. Unwire the class guard: 403 becomes **404**, the service refusing instead.
+  // Remove `@RequirePermission` and keep the guard: also **404**, for the same reason — the guess
+  // written here first was 200, and it was wrong, because `PaymentService` checks `reports.view`
+  // at the restaurant itself (ADR-043) and needs no decorator to refuse.
+  //
+  // So what this pins is not "the route is closed": it was closed throughout ADR-079's whole
+  // measurement, which is exactly why an inert decorator leaked nothing. It pins **which layer
+  // closes it** — a 403 means the coarse pre-filter ran, a 404 means only the service stood
+  // between this caller and the data. Nothing else in the suite can tell those two apart.
+  it("refuses a caller who holds `reports.view` on no Membership — the guard, not the service", async () => {
+    for (const route of [
+      `/api/v1/payments/${paymentAtB}`,
+      `/api/v1/payments/${paymentAtB}/status`,
+      `/api/v1/transactions/${transactionAtB}`,
+    ]) {
+      const res = await request(app.getHttpServer())
+        .get(route)
+        .set("Authorization", `Bearer ${pureWaiter.accessToken}`);
+      expectRefused(res, 403, "PERMISSION_DENIED");
+    }
+  });
+
+  it("and refuses identically for an id that does not exist — the 403 is about the caller, not the row", async () => {
+    // The half that makes the test above safe rather than merely green. 403 where 404 used to be
+    // is a real change in what a refused caller is told, and this file's own doctrine says the two
+    // are not interchangeable: 403 concedes that the resource exists, 404 does not.
+    //
+    // It is not a disclosure HERE, and the reason is that the guard runs before the service and
+    // never looks at the id. A nonexistent id must therefore produce the same 403, byte for byte —
+    // if it ever produced 404 instead, the pair would become an existence oracle for a caller with
+    // no permission at all, and this assertion is what would fail.
+    const ghost = randomUUID();
+    for (const route of [`/api/v1/payments/${ghost}`, `/api/v1/transactions/${ghost}`]) {
+      const res = await request(app.getHttpServer())
+        .get(route)
+        .set("Authorization", `Bearer ${pureWaiter.accessToken}`);
+      expectRefused(res, 403, "PERMISSION_DENIED");
+    }
   });
 
   it("the same, for inviting staff into someone else's restaurant", async () => {

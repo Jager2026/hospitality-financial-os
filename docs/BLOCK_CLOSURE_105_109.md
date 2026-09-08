@@ -1,6 +1,6 @@
 ---
 title: BLOCK_CLOSURE_105_109
-version: 1.0.0
+version: 1.1.0
 status: Active — closure report, findings shown not fixed
 classification: Internal
 owner: Founder
@@ -75,6 +75,31 @@ Found while reconciling row counts during §1, not by looking for it. Production
 **The parser was validated before its output was believed.** The first attempt in #109 read decorators in the wrong order and produced a page of phantom findings — the same bug `repo-invariants.spec.ts` already records. Rewritten to scan *forward* from each route decorator to the method signature, and checked against a known-answer pair in both directions: `analytics revenue/export` must come back guarded (it does), `auth/login` must come back unguarded (it does).
 
 **Result: 21 of 57 routes carry `@RequirePermission`. 36 do not.**
+> **Amendment, 2026-09-09 (ADR-079, PR #187) — marked, not rewritten.**
+>
+> **This census is correct, and it was produced by a question that could not have detected the
+> defect it looks like it rules out.** "Carries `@RequirePermission`" is a statement about a
+> decorator's *presence*. Whether anything **reads** that decorator is a separate fact, and nothing
+> in this section measured it.
+>
+> Three of the 21 — `GET /transactions/{id}`, `GET /payments/{id}`, `GET /payments/{id}/status` —
+> sat in controllers naming `JwtAuthGuard` alone, and `PermissionsGuard` is deliberately not global.
+> Their decorators were inert. This report counted them as coverage.
+>
+> **Nothing leaked, and that is why the conclusion stands: by luck.** All three were closed by their
+> services against the same `reports.view` the dead decorator named. Had one service been written
+> without that check, this section would have reported the route as guarded anyway.
+>
+> **The parser validation described above was not the weak point — the question was.** A known-answer
+> pair proves a parser answers *its own* question correctly in both directions. It cannot notice that
+> the question leaves out the guard. That is the more useful half of the finding, because the same
+> validation discipline is still right and would pass again tomorrow.
+>
+> Closed in PR #187: the guard is wired onto both controllers, and the question is now asked by
+> something that executes — `repo-invariants.spec.ts` fails any route claiming a permission with no
+> `PermissionsGuard` in scope, and `permission-scope.e2e.spec.ts` puts it to the running API.
+
+
 
 ## The 36, with a reason for each
 
