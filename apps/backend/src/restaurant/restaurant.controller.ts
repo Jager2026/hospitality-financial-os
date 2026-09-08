@@ -8,8 +8,10 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from "@nestjs/common";
+import type { Request } from "express";
 import { Throttle } from "@nestjs/throttler";
 import { AuditEntity } from "../common/decorators/audit-entity.decorator";
 import { RequirePermission } from "../auth/decorators/require-permission.decorator";
@@ -44,8 +46,13 @@ export class RestaurantController {
   create(
     @Body(new ZodValidationPipe(createRestaurantSchema)) dto: CreateRestaurantDto,
     @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
   ) {
-    return this.restaurantService.create(dto, user.id, null);
+    // ADR-049: the acceptance row records where it came from, the same context registration passes.
+    return this.restaurantService.create(dto, user.id, null, {
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
   }
 
   // Explicit path for an existing chain adding a location (API_Contract.md, Add Restaurant to
@@ -64,6 +71,7 @@ export class RestaurantController {
     @Param("organizationId") organizationId: string,
     @Body(new ZodValidationPipe(createRestaurantSchema)) dto: CreateRestaurantDto,
     @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
   ) {
     const isOrgWideMember = user.memberships.some(
       (m) => m.organizationId === organizationId && m.restaurantId === null,
@@ -71,7 +79,10 @@ export class RestaurantController {
     if (!isOrgWideMember) {
       throw new AppException("ORGANIZATION_NOT_FOUND", "Organization not found.", 404);
     }
-    return this.restaurantService.create(dto, user.id, organizationId);
+    return this.restaurantService.create(dto, user.id, organizationId, {
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
   }
 
   @Get("restaurants")

@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.22.0
+version: 2.23.0
 status: Active
 classification: Internal
 owner: Founder
@@ -135,6 +135,10 @@ PATCH /organizations/{id}
 
 ## Create Restaurant
 POST /restaurants — creates a new Organization automatically if the user has none yet. This is the default path for a single-location business; the owner never sees "Organization" as a concept.
+
+**`acceptedStripeAgreementVersion` (ADR-049) — required, on both create routes.** The revision of the Stripe connected-account agreement the person was shown, taken from `GET /agreements/current` rather than from a constant in the client. Compared against the server's own value: a mismatch is **409 `TERMS_VERSION_MISMATCH`** and nothing is created — **not even the Stripe account**, because the check runs before the one step with an external side effect. On success an `agreement_acceptance` row is written **in the same transaction** as the Restaurant, with subject `restaurant_id` and `user_id` null (a CHECK constraint enforces that pairing), carrying the request's IP and user-agent.
+
+Added in Sprint 15. Before it, the schema, the enum value, the constraint and the constant all existed and **nothing ever wrote a row**: the field to carry a version did not exist on this route, so the second half of ADR-049 was built and unreachable.
 
 ## Add Restaurant to Existing Organization
 POST /organizations/{id}/restaurants — explicit path for adding a location to an existing chain. Distinguishes "I'm opening a new, independent restaurant" from "I'm adding a location to mine."

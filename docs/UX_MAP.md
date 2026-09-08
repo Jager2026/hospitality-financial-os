@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.9.0
+version: 2.10.0
 status: Active
 classification: Internal
 owner: Founder
@@ -157,6 +157,17 @@ Country and Currency are **permanent**. They are fixed at Stripe account creatio
 
 **Two org-wide Memberships stop the screen rather than prompting a guess.** There is no organization picker anywhere in the Portal, and writing a Restaurant into the wrong business is not an edit anyone can undo. The screen says so and does nothing.
 
+**The second agreement is collected here (ADR-049), and until Sprint 15 it was not collected anywhere.** The table has carried a `restaurant_id` subject, a `stripe_connected_account` type and a CHECK constraint enforcing that pairing since Sprint 14; the constant existed with a comment saying it is *"accepted when its Stripe connected account is created"*; and **no row had ever been written**, because the DTO had no field to carry one. A schema built for a record nobody makes is worse than no schema — it reads as though the record exists.
+
+The shape is the one registration settled: **an unticked checkbox**, never pre-ticked; the version **fetched** from `GET /agreements/current` rather than compiled into the build, and submitted back; the server comparing it against its own constant and refusing a mismatch with 409 rather than silently correcting it. The acceptance is written **in the same transaction as the Restaurant** — a venue with a Stripe account and no record of agreeing to the agreement that account is governed by is the exact gap ADR-049 exists to close — and the refusal happens **before** the Stripe call, so a rejected request never costs a connected account nobody can reach.
+
+**The gate question, shown rather than decided.** `CURRENT_STRIPE_AGREEMENT_VERSION` is the same placeholder string as the platform terms: `UNPUBLISHED-no-terms-document-exists-yet`. By ADR-055's own reasoning an acceptance naming a document that does not exist is **a false record, not a missing one** — so on the face of it this route deserves the same production refusal registration has. Two facts complicate that, and both are established rather than assumed:
+
+- **The path is already closed transitively.** `assertPlatformTermsPublished` is called on `POST /auth/register` only, but nobody can create a restaurant without an account, and nobody can get an account in production while that gate stands. A false Stripe-agreement row is therefore unreachable today.
+- **Stripe collects its own attestation regardless.** Two of the 18 requirements on a fresh account are `identity.attestations.terms_of_service.account.date` and `.ip` — Stripe's hosted onboarding records the account holder's acceptance itself, with a date and an IP. Our row is the record of what **we** showed them, which is what ADR-049 asks for; it is not the only record that the agreement was accepted.
+
+So the options are: extend the existing gate to this route (a second call, and a message that currently says *"Registration is not open yet"* — wrong words for this route); write a sibling gate with its own wording; or rely on the transitive closure and record that reliance. **Not decided here.** What settles it is a decision about publishing the documents, which is what both constants are waiting on.
+
 **A failure whose outcome is unknown offers a check, never a second attempt.** `POST /restaurants` creates the Stripe account **before** it opens its transaction, so a failure inside that transaction leaves an account with no row pointing at it — measured on 2026-09-07 by forcing the transaction to throw: HTTP 500, zero rows, and one orphaned account that took a hand-written API call to close. The API's own message on that 500 is *"please try again"*, and trying again mints a second account. So the screen distinguishes a refusal it can read (400/403/404 — nothing was created, retry is safe) from a 5xx or a lost connection (**may have succeeded**), and in the second case removes the submit button entirely, offering only to ask `GET /restaurants` what exists.
 
 ### The field count is a real cost, and the split is not decided here
@@ -214,7 +225,28 @@ requested_reasons:[ { code: "routine_onboarding" } ]
 
 **`description` is Stripe's own field name, not something a restaurant owner can act on.** Turning eighteen of those into instructions needs a mapping from Stripe's field paths to human words that we do not have — and that Stripe's hosted onboarding already performs, which is where the person is being sent anyway. So the screen still lists what Stripe asks of every business (identity, business details, bank account), now because naming the eighteen would require inventing translations rather than because the data was missing.
 
-**One consequence for the wording, recorded and not fixed:** a venue created seconds ago already has 18 outstanding requirements and derives to `IN_PROGRESS`, so a brand-new owner lands on *"Finish setting up card payments — continuing takes you back to where you left off"* having left off nothing. No test covers that state, because no fixture reaches Stripe; it was seen on the real path.
+### `NOT_STARTED` is unreachable, and "not started" cannot be told from "abandoned"
+
+Established by measurement on 2026-09-08, and it changes what the four states mean.
+
+**Where the status comes from.** `deriveOnboardingStatus` returns `NOT_STARTED` **only when both capability statuses are null**. But `POST /restaurants` requests `card_payments` at account creation, so Stripe reports `restricted` immediately and attaches its requirements — a fresh account measured through the real path came back with **18 entries** and `card_payments: restricted`. Requirements > 0 means `IN_PROGRESS`.
+
+**So no venue created by this product is ever `NOT_STARTED`.** That value survives only on rows whose status was never refreshed — a Restaurant with no `stripeAccountId`, which today means a fixture. The state the product's own screens were written around does not occur in production, and the state a real new venue lands in is the one whose copy assumed prior work.
+
+**Is "created, nothing started" distinguishable from "started and abandoned"? No — and the missing signal is ours, not Stripe's.** A newly created account carries nothing that separates them:
+
+| Signal on a fresh account | Value |
+|---|---|
+| `requested_reasons[].code` | `routine_onboarding` — on all 18 |
+| `awaiting_action_from` | `"user"` — on all 18 |
+| `identity` | `null` |
+| top-level fields | no onboarding-state field of any kind |
+
+Whether those values change once somebody starts and abandons Stripe's flow is **unmeasured** — it would take an account left half-finished, which one session cannot produce.
+
+**What would distinguish them is a fact we already have and discard:** `createOnboardingLink` mints a link and records nothing. "A link has been requested for this venue at least once" is the difference between the two states, and it costs one column. Not built here — this slice's axis was consent — and recorded so the next reader does not re-derive it.
+
+**The copy was corrected**, because one wording is true in both cases and the old one was false in the case that actually occurs: *"Card payments need a few more details — Stripe needs some details about this business before it can take cards"* replaces *"Finish setting up… continuing takes you back to where you left off"*. That is the only change made here; the distinction itself stays open.
 
 ## Restaurant created, payments not yet live
 

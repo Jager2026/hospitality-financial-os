@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CURRENT_STRIPE_AGREEMENT_VERSION } from "../common/agreements/agreement-versions";
 import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
@@ -142,6 +143,8 @@ describe("A disabled Membership (E2E, real HTTP, real database)", () => {
         currency: "EUR",
         defaultCustomerLocale: "en",
         timezone: "Europe/Vilnius",
+        acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
+        acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
         address: "Gedimino pr. 1, Vilnius",
       });
     expect(restaurant.status, JSON.stringify(restaurant.body)).toBe(201);

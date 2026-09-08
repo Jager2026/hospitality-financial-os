@@ -16,6 +16,23 @@ export const createRestaurantSchema = z.object({
   timezone: z.string().min(1),
   address: z.string().min(1),
   logoUrl: z.string().url().optional(),
+  /**
+   * The revision of the Stripe connected-account agreement the person was shown (ADR-049).
+   *
+   * **Required, and the reason it is a field at all is that the other half of ADR-049 was built
+   * and never wired up.** The table has carried a `restaurant_id` subject and a
+   * `stripe_connected_account` agreement type since Sprint 14, with a CHECK constraint enforcing
+   * that pairing — and nothing has ever written a row: the constant existed, its comment said
+   * *"accepted when its Stripe connected account is created"*, and this DTO had no field to carry
+   * one. A schema built for a record that is never made is worse than no schema, because it reads
+   * as though the record exists.
+   *
+   * Taken from `GET /agreements/current` rather than compiled into the client, for the same reason
+   * registration does: a constant in a build may predate the revision, and the client would then
+   * be asserting *what a person was shown* from a stale copy. `min(1)` mirrors the second CHECK —
+   * a present-but-empty version answers nothing, and the empty string is a present value.
+   */
+  acceptedStripeAgreementVersion: z.string().min(1),
   // Deliberately no organizationId field here: which Organization a new Restaurant belongs to is
   // never client-supplied. POST /restaurants (bootstrap) creates one; POST /organizations/:id/
   // restaurants takes it from the route param. Either way it's a controller/service-level

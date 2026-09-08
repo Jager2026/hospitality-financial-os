@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CURRENT_STRIPE_AGREEMENT_VERSION } from "../../common/agreements/agreement-versions";
 import { createRestaurantSchema } from "./create-restaurant.schema";
 
 const VALID = {
@@ -11,6 +12,7 @@ const VALID = {
   country: "lt",
   currency: "eur",
   timezone: "Europe/Vilnius",
+  acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
   address: "Gedimino pr. 1, Vilnius",
 };
 

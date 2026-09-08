@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CURRENT_STRIPE_AGREEMENT_VERSION } from "../common/agreements/agreement-versions";
 import { Test } from "@nestjs/testing";
 import { ConfigService } from "@nestjs/config";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -79,6 +80,10 @@ describe("RestaurantService (real database)", () => {
       defaultCustomerLocale: "en",
       timezone: "Europe/Vilnius",
       address: "Test address 1",
+      // ADR-049. From the constant rather than a literal: a hand-typed version here would pass the
+      // service check by coincidence today and stop matching the moment the real revision lands —
+      // the fixture-drift class CLAUDE.md records for Roles and Permissions, applied to a version.
+      acceptedStripeAgreementVersion: CURRENT_STRIPE_AGREEMENT_VERSION,
       ...overrides,
     };
   }
@@ -116,6 +121,57 @@ describe("RestaurantService (real database)", () => {
       where: { id: restaurant.organizationId },
     });
     expect(organization).not.toBeNull();
+  });
+
+  // ADR-049's second half, which had a schema, a constant and a CHECK constraint since Sprint 14
+  // and no writer at all. These are the tests that make it a record rather than an intention.
+  it("records the Stripe connected-account agreement against the Restaurant, in the same transaction", async () => {
+    const userId = await createTestUser();
+
+    const restaurant = await service.create(baseDto(), userId, null, {
+      ipAddress: "203.0.113.7",
+      userAgent: "vitest",
+    });
+
+    const acceptances = await prisma.agreementAcceptance.findMany({
+      where: { restaurantId: restaurant.id },
+    });
+    expect(
+      acceptances,
+      "no acceptance was recorded for a Restaurant with a Stripe account",
+    ).toHaveLength(1);
+    const [row] = acceptances;
+    expect(row?.agreement).toBe("STRIPE_CONNECTED_ACCOUNT");
+    expect(row?.version).toBe(CURRENT_STRIPE_AGREEMENT_VERSION);
+    // The subject is the business, never the person (ADR-049). The database CHECK enforces the
+    // pairing; this asserts we write the side the constraint expects rather than relying on it to
+    // catch us.
+    expect(row?.userId).toBeNull();
+    expect(row?.ipAddress).toBe("203.0.113.7");
+    expect(row?.userAgent).toBe("vitest");
+  });
+
+  // THE DISCRIMINATING ONE. An implementation that took the client's word would pass every other
+  // test in this file: the row would exist, name a version, and be attached to the right subject.
+  // What it would not do is name a version anybody was actually shown.
+  it("refuses a version the server did not issue, and creates nothing — not even a Stripe account", async () => {
+    const userId = await createTestUser();
+    fakeStripe.createConnectAccount.mockClear();
+
+    await expect(
+      service.create(
+        baseDto({ acceptedStripeAgreementVersion: "some-other-revision" }),
+        userId,
+        null,
+      ),
+    ).rejects.toMatchObject({ code: "TERMS_VERSION_MISMATCH" });
+
+    // The refusal happens BEFORE the one step with an external side effect. Past that line a
+    // rejected request would still have cost a connected account nobody can reach.
+    expect(
+      fakeStripe.createConnectAccount,
+      "a refused agreement version still created a Stripe account",
+    ).not.toHaveBeenCalled();
   });
 
   it("second restaurant for an existing organization does NOT create a second Membership", async () => {

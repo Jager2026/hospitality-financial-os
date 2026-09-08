@@ -42,6 +42,8 @@ async function fillTheForm(page: Page, name: string): Promise<void> {
   await page.fill("#email", "owner@example.test");
   await page.fill("#phone", "+37060000000");
   await page.fill("#address", "Gedimino pr. 1, Vilnius");
+  // ADR-049: unticked by default, so every test that expects a create must tick it deliberately.
+  await page.getByTestId("create-restaurant-agree").check();
 }
 
 test("a just-registered person is shown the form, with every field the API requires", async ({
@@ -71,6 +73,41 @@ test("a just-registered person is shown the form, with every field the API requi
   // Country and currency are settled rather than offered (ADR-012), and the screen says why —
   // they are fixed at Stripe account creation and a change means a different restaurant.
   await expect(page.getByTestId("create-restaurant-fixed")).toContainText("cannot be changed");
+});
+
+test("the Stripe agreement starts unticked, and nothing is created without it", async ({
+  page,
+  request,
+}) => {
+  await resetRateLimits();
+  const user = await registerUser(request);
+
+  await logIn(page, user.email, user.password);
+
+  // ADR-049's shape, the same one registration settled: never pre-ticked. The row this writes
+  // claims a business accepted a revision, which is only honest if somebody acted on it.
+  const box = page.getByTestId("create-restaurant-agree");
+  await expect(box).not.toBeChecked();
+
+  // Everything filled EXCEPT the agreement — the one difference from the happy path.
+  await page.fill("#name", "Unagreed Venue");
+  await page.fill("#legalName", "Unagreed Venue UAB");
+  await page.fill("#companyNumber", "300000000");
+  await page.fill("#vatNumber", "LT100000000000");
+  await page.fill("#email", "owner@example.test");
+  await page.fill("#phone", "+37060000000");
+  await page.fill("#address", "Gedimino pr. 1, Vilnius");
+  await page.getByTestId("create-restaurant-submit").click();
+
+  await expect(page.getByTestId("create-restaurant-error")).toContainText("accept the Stripe");
+
+  // Nothing was created, asked of the API rather than read off the screen. Note this cannot be
+  // confused with the Stripe failure every other create hits here: the request never left.
+  const list = await request.get(`${API_BASE}/api/v1/restaurants`, {
+    headers: { Authorization: `Bearer ${await accessToken(page)}` },
+  });
+  const body = (await list.json()) as { data: unknown[] };
+  expect(body.data, "a restaurant was created without the agreement").toHaveLength(0);
 });
 
 test("a Manager cannot add a restaurant to the organization they work in", async ({

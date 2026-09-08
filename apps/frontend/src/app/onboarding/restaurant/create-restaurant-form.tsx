@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent, type JSX } from "react";
+import { useEffect, useState, type FormEvent, type JSX } from "react";
+import { fetchCurrentAgreements } from "../../../lib/api/agreements";
 import { authedGet, authedPost } from "../../../lib/auth/authed-fetch";
 import { RequireSession } from "../../../lib/auth/require-session";
 import { readSession } from "../../../lib/auth/session";
@@ -77,6 +78,12 @@ type Refusal =
 function Form(): JSX.Element {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  // ADR-049's second agreement: subject Restaurant, accepted when its Stripe account is created.
+  // Unticked, always — the row this writes claims the business accepted revision X at time T, and
+  // that is only honest if somebody did something about the agreement rather than about a form.
+  const [agreed, setAgreed] = useState(false);
+  const [agreementVersion, setAgreementVersion] = useState<string | null>(null);
+  const [versionUnavailable, setVersionUnavailable] = useState(false);
   const [refusal, setRefusal] = useState<Refusal>({ kind: "none" });
 
   const [name, setName] = useState("");
@@ -91,6 +98,21 @@ function Form(): JSX.Element {
   const [timezone, setTimezone] = useState(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Vilnius",
   );
+
+  // Fetched, never compiled in: a constant in this bundle would let a stale build assert what a
+  // person was shown, which is exactly the claim the acceptance record makes.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchCurrentAgreements();
+      if (cancelled) return;
+      if (result.ok) setAgreementVersion(result.data.stripeConnectedAccount.version);
+      else setVersionUnavailable(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const memberships = readSession()?.memberships ?? [];
   const orgWide = memberships.filter((m) => m.restaurantId === null);
@@ -114,6 +136,17 @@ function Form(): JSX.Element {
   async function onSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (submitting) return;
+
+    // Fails closed, like registration. No version means no honest record of what was agreed to, so
+    // nothing is created rather than a row naming a blank.
+    if (agreementVersion === null) {
+      setRefusal({ kind: "retry", message: t("createRestaurant.error.agreementUnavailable") });
+      return;
+    }
+    if (!agreed) {
+      setRefusal({ kind: "retry", message: t("createRestaurant.error.agreementRequired") });
+      return;
+    }
     setSubmitting(true);
     setRefusal({ kind: "none" });
 
@@ -129,6 +162,7 @@ function Form(): JSX.Element {
       country: LAUNCH_COUNTRY,
       currency: LAUNCH_CURRENCY,
       defaultCustomerLocale: "en",
+      acceptedStripeAgreementVersion: agreementVersion,
     });
 
     if (result.ok) {
@@ -233,6 +267,31 @@ function Form(): JSX.Element {
         <p className="text-small text-muted" data-testid="create-restaurant-fixed">
           {t("createRestaurant.fixed")}
         </p>
+      </div>
+
+      {/* The agreement block, in the shape ADR-049 settled at registration: an unticked box, the
+          link beside the label rather than inside it (a link inside a label toggles the box), and
+          the version submitted back rather than assumed. */}
+      <div className="space-y-2" data-testid="create-restaurant-agreement">
+        <label className="flex items-start gap-2 text-small">
+          <input
+            type="checkbox"
+            name="stripeAgreement"
+            checked={agreed}
+            onChange={(e) => setAgreed(e.target.checked)}
+            data-testid="create-restaurant-agree"
+            className="mt-1"
+          />
+          <span>{t("createRestaurant.agreement.agree")}</span>
+        </label>
+        {versionUnavailable ? (
+          <p
+            className="text-small text-muted"
+            data-testid="create-restaurant-agreement-unavailable"
+          >
+            {t("createRestaurant.error.agreementUnavailable")}
+          </p>
+        ) : null}
       </div>
 
       {refusal.kind !== "none" ? (
