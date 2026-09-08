@@ -1,6 +1,6 @@
 ---
 title: BLOCK_CLOSURE_117_156_AUDIT
-version: 1.1.0
+version: 1.2.0
 status: Active — closure report, findings shown not fixed
 classification: Internal
 owner: Founder
@@ -203,6 +203,23 @@ by Sprint 6"*. My scan flagged them too and they are **not** a finding. The diff
 product surface.
 
 ### Guarded routes: the count did not grow · **accept and record**
+> **Amendment, 2026-09-09 (ADR-079, PR #187) — marked, not rewritten.**
+>
+> **The count is right; "guarded" is the wrong word for what was counted.** This pass, like the two
+> closures it compares itself against, measured whether a route *carries* `@RequirePermission` — not
+> whether any `PermissionsGuard` is in scope to read it. Three routes carrying the decorator had no
+> guard on the method or the class, and `PermissionsGuard` is not global, so nothing read them.
+>
+> The comparison against #110–#116 is therefore consistent in a way that hid the defect rather than
+> exposing it: **both sides of the comparison asked the same question**, so the number agreed and the
+> agreement was read as confirmation. It confirmed only that the decorator count had not moved.
+>
+> Also worth keeping next to "the hole neither check covers" below, which was accurate about the two
+> directions of drift it named and did not know about a third: **a route in the contract, carrying
+> the decorator, that the framework never enforces.** That one is now covered — by an invariant that
+> asks whether a guard is in scope, and by a live request in `permission-scope.e2e.spec.ts`.
+
+
 
 **36 of 62 routes carry no `@RequirePermission`.** The #110–#116 closure recorded **36 of 57**. Five
 routes were added in this block and **all five are guarded**; the unguarded count is unchanged, which

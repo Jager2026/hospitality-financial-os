@@ -15,3 +15,11 @@ pnpm-lock.yaml
 # introduced. A generated directory has no formatting to check.
 apps/e2e/test-results/
 apps/e2e/playwright-report/
+
+# Nested git worktrees created by the desktop app for background tasks. Same argument as Playwright's
+# output above, one step stronger: this is a SECOND CHECKOUT of the repository, so every file it
+# holds is counted twice and `docs/**/*.md` — excluded above by path — is not excluded under this
+# prefix. Git ignores the directory locally (`.git/info/exclude`), so CI never sees it and this is
+# purely about the local gate staying runnable: 52 files failed `format` the first time a background
+# task ran, none of them written by anyone.
+.claude/worktrees/

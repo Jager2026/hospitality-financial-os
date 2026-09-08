@@ -1,7 +1,7 @@
 ---
 title: ADR-079 — A permission decorator nothing reads, and an audit that could not tell
-version: 1.0.0
-status: Proposed
+version: 1.1.0
+status: Accepted
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,10 +9,12 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-079 — A permission decorator nothing reads, and an audit that could not tell
 
-**Status:** Proposed (Sprint 15), 2026-09-08. **Measured and shown; nothing fixed and nothing
-built.** The finding is that three routes carry a permission decorator with no guard in scope, and
-the more useful finding is that **two previous permission audits asked a question that could not
-have told the difference.**
+**Status:** Accepted (Sprint 15), 2026-09-08; decided and built 2026-09-09 in PR #187 — see
+*Decided* at the end. **As first written this document fixed nothing:** it recorded that three routes
+carry a permission decorator with no guard in scope, and the more useful finding, that **two previous
+permission audits asked a question that could not have told the difference.** The measurement below
+is kept in the present tense it was written in, because it is the record of what was true then; the
+Decision section says what changed.
 
 ---
 
@@ -187,7 +189,7 @@ and deserves to be rejected explicitly rather than ignored.
 
 ---
 
-## Recommended, and not acted on
+## Recommended (and, at the time of writing, not acted on)
 
 **D, then B if D proves awkward.** D reuses a walk that already exists and closes the exact gap:
 the invariant that certifies these routes as documented would stop certifying a decorator nothing
@@ -199,3 +201,93 @@ missing service check, which is the failure this codebase has actually had.
 **Trigger, if nothing is chosen: the next permission audit, or the next route that carries
 `@RequirePermission`.** Either is a moment where the question "is this enforced?" gets asked and
 answered wrongly.
+
+---
+
+## Decided (PR #187): D and B are one thing, and the three are fixed
+
+**Accepted: the walk is shared, the assertions are two.** D's argument was that the contract
+invariant already walks every controller; B's was that documentation and enforcement are different
+claims and a failure must say which. Both hold, and they are not in tension — one
+`routesClaimingPermission()` helper does the walk, and two invariants ask their own question of its
+output. B's three design constraints are carried in full: the match is on a decorator's syntactic
+form, there is no exception list, and a non-vacuity assertion fails if the walk finds nothing.
+
+**And the three decorators are wired**, `@UseGuards(JwtAuthGuard, PermissionsGuard)` on
+`TransactionController` and `PaymentController`. The per-method guards on the two routes that had
+them were removed as duplicates of the class one: two copies of a rule is how the two drift.
+
+### The invariant, falsified three ways
+
+Each was executed, not reasoned about.
+
+| Falsification | Required | Observed |
+|---|---|---|
+| Remove `PermissionsGuard` from one controller | fails, naming the routes | fails, naming all three with file and permission |
+| Remove `@RequirePermission`, keep the guard | passes — the second honest exit | passes |
+| A route with neither | passes — this is not "every route is guarded" | passes |
+
+**The prose trap was tested where it actually bites: on the file the rule discusses.** The
+controller broken in the first falsification carries, in its own docstring, the literal text
+`@UseGuards(PermissionsGuard)` and `@RequirePermission("reports.view")`. A text matcher would have
+read the docstring as the guard and stayed green. The walk reads only lines whose trimmed content
+begins with `@`, so the invariant failed as it must.
+
+### Re-measured live, and one column changed
+
+Same probe as above — a real venue, a real payment, a real transaction — with the guard now wired:
+
+```
+route                          WAITER                OWNER
+GET /payments/{id}             403 PERMISSION_DENIED  200
+GET /payments/{id}/status      403 PERMISSION_DENIED  200
+GET /transactions/{id}         403 PERMISSION_DENIED  200
+```
+
+**The Owner is unchanged at 200 on all three** — which was the specific risk worth checking: had the
+guard read the permission differently from the service, the Owner would now be refused, and that
+would have been a finding rather than a fix. It does not.
+
+**The Waiter's refusal moved from 404 to 403, and that is a real change in what a refused caller is
+told.** This project's own doctrine (`permission-scope.e2e.spec.ts`) says the two are not
+interchangeable: a 403 concedes that the resource exists, a 404 does not. So it was measured rather
+than argued:
+
+```
+GET /payments/{NONEXISTENT}     WAITER 403 PERMISSION_DENIED  OWNER 404 PAYMENT_NOT_FOUND
+GET /transactions/{NONEXISTENT} WAITER 403 PERMISSION_DENIED  OWNER 404 NOT_FOUND
+```
+
+The guard runs before the service and never looks at the id, so the Waiter gets an identical 403 for
+a row that exists and one that does not. **No existence oracle is created; the information available
+to that caller strictly decreased.** What the 403 discloses is a fact about their own account — they
+hold `reports.view` nowhere. The nonexistent-id row is now a test, so that this stays true.
+
+**Nothing else in the repository asserted the old 404 for a permission-less caller.** The two
+existing assertions that expect 404 on these routes (`payment.controller.spec.ts`, and the browser
+suite's cross-Organization read) are made by an org-wide Owner and a Manager, and the seed grants
+`reports.view` to both — so the coarse filter passes them and the service still answers. Checked
+against `seed.ts` rather than assumed.
+
+### A claim of mine that the measurement corrected
+
+The first draft of the new test's comment said that removing `@RequirePermission` while keeping the
+guard would make the test fail *with 200*, "because reachability alone lets this caller through".
+Executed: it fails with **404**. `PaymentService` checks `reports.view` at the restaurant itself
+(ADR-043) and needs no decorator to refuse. The comment now says what the run said.
+
+It matters beyond the wording. It is the same fact as this ADR's central one, from the other side:
+**these routes were never open**, so no falsification of the guard can produce a leak — only a
+change in *which layer* refuses. That is exactly what the new e2e test pins, and why 403-versus-404
+is the assertion rather than allowed-versus-denied.
+
+### What is now true, and what still is not
+
+- A route claiming a permission with no guard in scope **fails the suite**, by name, with the two
+  exits stated in the failure message.
+- The `@ts-check` shape (#163) has a second instance covered rather than a second occurrence.
+- **Still uncovered:** a guard that is in scope but whose `canActivate` is wrong or whose module
+  cannot resolve it. The invariant reads scope, not behaviour — the e2e test is what covers that,
+  for these three routes only.
+- **Still true, and named in option B's price:** the helper encodes Nest's scoping rules (method,
+  class, global). If `app.module.ts` ever registers a guard globally, the helper must learn it.

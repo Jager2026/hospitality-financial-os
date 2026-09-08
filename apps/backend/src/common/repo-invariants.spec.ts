@@ -17,6 +17,104 @@ import {
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 
+/**
+ * Every route that CLAIMS a Permission, and whether anything will read the claim.
+ *
+ * Shared by the two invariants below because they ask two halves of one question — is the claim
+ * documented, and is it enforced — and a second walker would be a second thing to keep in step.
+ *
+ * ── A claim is a DECORATOR, not a string in the file ───────────────────────────────────────────
+ *
+ * Only lines whose trimmed content begins with `@` are read. That is the syntactic form of the
+ * claim, and matching it rather than the text is what stops this checker from punishing prose:
+ * a comment quoting `@RequirePermission("reports.view")` while explaining the rule is a comment,
+ * and this walk does not see it. **The project has paid for that lesson twice** — #163's first
+ * version flagged the next file written, one explaining in a docstring why it carries no
+ * `@ts-check`; and the seeded-Role matcher (#184) flagged a comment quoting the literal it forbids.
+ * Both times the fix was the matcher.
+ *
+ * ── Guard scope, from Nest's own semantics ─────────────────────────────────────────────────────
+ *
+ * `PermissionsGuard` is read by a route when `@UseGuards(...)` naming it sits on the METHOD or on
+ * the CLASS. It is deliberately NOT registered globally (`permissions.guard.ts`: a global guard
+ * runs before route-level ones and would never see `request.user`), and `app.module.ts` registers
+ * only `AuditEntityResolverGuard` and `ThrottlerGuard` — so those two scopes are the whole of it.
+ * If that ever changes, this helper is what has to learn.
+ */
+interface RouteClaim {
+  file: string;
+  method: string;
+  path: string;
+  permission: string;
+  guardInScope: boolean;
+}
+
+function routesClaimingPermission(): RouteClaim[] {
+  const SRC = join(REPO_ROOT, "apps", "backend", "src");
+
+  function controllers(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return controllers(full);
+      return entry.name.endsWith(".controller.ts") ? [full] : [];
+    });
+  }
+
+  const decorator = (line: string): string | null => {
+    const trimmed = line.trim();
+    return trimmed.startsWith("@") ? trimmed : null;
+  };
+
+  const claims: RouteClaim[] = [];
+  for (const file of controllers(SRC)) {
+    const text = readFileSync(file, "utf8");
+    const lines = text.split("\n");
+    const prefix = text.match(/@Controller\("([^"]*)"\)/)?.[1] ?? "";
+
+    // The class's own decorator block: everything above `export class`, decorator lines only.
+    const classLine = lines.findIndex((l) => l.trim().startsWith("export class "));
+    const classGuard = lines
+      .slice(0, classLine === -1 ? 0 : classLine)
+      .map(decorator)
+      .filter((l): l is string => l !== null)
+      .some((l) => /@UseGuards\(.*\bPermissionsGuard\b/.test(l));
+
+    lines.forEach((line, i) => {
+      const verb = decorator(line)?.match(/^@(Get|Post|Patch|Put|Delete)\(\s*(?:"([^"]*)")?\s*\)/);
+      if (!verb) return;
+
+      // This route's decorator block: from the verb to the handler signature.
+      let permission: string | null = null;
+      let methodGuard = false;
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const next = decorator(lines[j]);
+        if (next === null) {
+          if (/^\s{2}(?:async\s+)?[a-zA-Z]\w*[(<]/.test(lines[j])) break; // handler signature
+          continue; // a comment or a blank line inside the block — not a claim, not a guard
+        }
+        if (/^@(Get|Post|Patch|Put|Delete)\(/.test(next)) break;
+        const required = next.match(/@RequirePermission\("([^"]+)"\)/);
+        if (required) permission = required[1];
+        if (/@UseGuards\(.*\bPermissionsGuard\b/.test(next)) methodGuard = true;
+      }
+      if (!permission) return;
+
+      const path = `/${[prefix, verb[2] ?? ""].filter(Boolean).join("/")}`.replace(
+        /:(\w+)/g,
+        "{$1}",
+      );
+      claims.push({
+        file: relative(REPO_ROOT, file).split(/[\\/]/).join("/"),
+        method: verb[1].toUpperCase(),
+        path,
+        permission,
+        guardInScope: methodGuard || classGuard,
+      });
+    });
+  }
+  return claims;
+}
+
 describe("repository invariants", () => {
   it("keeps CLAUDE.md and docs/CLAUDE_RULES.md byte-identical (ADR-011)", () => {
     // ADR-011 made the root CLAUDE.md — the file Claude actually loads — and the versioned
@@ -136,44 +234,63 @@ describe("repository invariants", () => {
   // the code actually uses. An earlier version of this scan read it the other way round and
   // reported eight phantom mismatches — a reminder that a checker fails by *finding* something,
   // which is what an audit is looking for. It is falsified in both directions before being trusted.
+  /**
+   * A route may not claim a Permission that nothing will read (ADR-079).
+   *
+   * **The defect this exists for was found by reading, not by any check.** `GET /transactions/{id}`
+   * and both `GET /payments/{id}` routes carried `@RequirePermission("reports.view")` while their
+   * controllers named only `JwtAuthGuard` — so the decorator was inert. None was open, because each
+   * service performs the same check; what was missing was the coarse pre-filter that exists to
+   * catch a service that forgets, which is exactly the failure #108 measured.
+   *
+   * **The sibling invariant below could not have caught it, and that is the deeper finding.** It
+   * asserts that a route carrying the decorator is DOCUMENTED — keying on the decorator's
+   * presence. So a route could pass it, be published in `API_Contract.md` as requiring a
+   * Permission, and have nothing enforce one. Two permission audits (#109, and the #117–#156
+   * closure) asked the same presence question and were right only by luck.
+   *
+   * ── Two exits, and no third ────────────────────────────────────────────────────────────────
+   *
+   * **Wire the guard, or drop the decorator.** Both are honest, and the second is not a loophole:
+   * a route whose service does the whole check may legitimately decide the pre-filter is not worth
+   * a line — but it then stops advertising a requirement it does not impose, and the documentation
+   * invariant stops requiring it to publish one.
+   *
+   * **There is deliberately no exception list**, for #163's reason: a list is the thing someone
+   * edits to go green, and it decays. Nothing here can be added to.
+   */
+  it("lets no route claim a Permission with no PermissionsGuard in scope", () => {
+    const claims = routesClaimingPermission();
+
+    // NON-VACUITY. A walker that silently found nothing would pass this invariant while checking
+    // nothing at all — the shape this suite has been bitten by twice, and the reason #163 carries
+    // the same guard. Twenty-one routes carry the decorator today.
+    expect(claims.length, "no route claims a Permission — the walk is broken").toBeGreaterThan(15);
+
+    const inert = claims
+      .filter((c) => !c.guardInScope)
+      .map((c) => `${c.method} ${c.path} — claims "${c.permission}" (${c.file})`);
+
+    expect(
+      inert,
+      `These routes carry @RequirePermission with no PermissionsGuard in scope, so nothing reads ` +
+        `the decorator: it is not global (permissions.guard.ts), and no @UseGuards on the method ` +
+        `or the class names it. The route may still be closed by its service — that is how these ` +
+        `were found rather than exploited — but the pre-filter that catches a service forgetting ` +
+        `is absent while the contract advertises one. Either add PermissionsGuard to the ` +
+        `@UseGuards on the controller, or remove @RequirePermission and let the service be the ` +
+        `only check. Routes:\n${inert.join("\n")}`,
+    ).toEqual([]);
+  });
+
   it("states every guarded route's required permission in API_Contract.md", () => {
-    const SRC = join(REPO_ROOT, "apps", "backend", "src");
     const contract = readFileSync(join(REPO_ROOT, "docs", "API_Contract.md"), "utf8").split("\n");
 
-    function controllers(dir: string): string[] {
-      return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) return controllers(full);
-        return entry.name.endsWith(".controller.ts") ? [full] : [];
-      });
-    }
-
-    const guarded: Array<{ method: string; path: string; permission: string }> = [];
-    for (const file of controllers(SRC)) {
-      const text = readFileSync(file, "utf8");
-      const prefix = text.match(/@Controller\("([^"]*)"\)/)?.[1] ?? "";
-      const lines = text.split("\n");
-      lines.forEach((line, i) => {
-        const verb = line.match(/@(Get|Post|Patch|Put|Delete)\(\s*(?:"([^"]*)")?\s*\)/);
-        if (!verb) return;
-        let permission: string | null = null;
-        for (let j = i + 1; j < lines.length; j += 1) {
-          if (/@(Get|Post|Patch|Put|Delete)\(/.test(lines[j])) break;
-          const required = lines[j].match(/@RequirePermission\("([^"]+)"\)/);
-          if (required) {
-            permission = required[1];
-            break;
-          }
-          if (/^\s{2}[a-zA-Z]\w*[(<]/.test(lines[j])) break; // handler signature
-        }
-        if (!permission) return;
-        const path = `/${[prefix, verb[2] ?? ""].filter(Boolean).join("/")}`.replace(
-          /:(\w+)/g,
-          "{$1}",
-        );
-        guarded.push({ method: verb[1].toUpperCase(), path, permission });
-      });
-    }
+    // The same walk as the enforcement invariant above, deliberately: documentation and
+    // enforcement are two questions about one claim, and two walkers would be two things to keep
+    // in step. This one still keys on the decorator's PRESENCE, which is correct here — a route
+    // that advertises a Permission must publish it whether or not a guard reads it.
+    const guarded = routesClaimingPermission();
 
     // A route is "stated" when its Permission appears in the block that documents it. Two
     // normalisations, both learned by getting this wrong first.
@@ -545,7 +662,24 @@ describe("repository invariants", () => {
         ),
     );
 
-    const SKIP = new Set(["node_modules", "dist", ".next", ".git", "coverage", "test-results"]);
+    // `.claude` holds nested git WORKTREES — a second, complete checkout of this repository, put
+    // there by the desktop app when a background task starts. Walking into one makes every file in
+    // the repository appear twice, and the copy is judged against the ORIGINAL's tsconfig include
+    // patterns, which are relative and therefore never match it. The result is this invariant
+    // failing with eight findings that are all the same eight files it just passed on.
+    //
+    // It is local-only — CI checks out once — which is exactly why it matters: the rule is to run
+    // the whole gate before pushing, and a gate that fails whenever a background task exists is a
+    // gate that gets run selectively instead.
+    const SKIP = new Set([
+      "node_modules",
+      "dist",
+      ".next",
+      ".git",
+      "coverage",
+      "test-results",
+      ".claude",
+    ]);
     const scripts: string[] = [];
     (function walk(dir: string) {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
