@@ -119,7 +119,7 @@ function Loaded({ id }: { id: string }): JSX.Element {
       ) : data.shiftTransactions === 0 ? (
         <Explanation titleKey="dashboard.empty.title" explainKey="dashboard.empty.explain" />
       ) : (
-        <Figures data={data} currency={currency} locale={moneyLocale} />
+        <Figures data={data} currency={currency} locale={moneyLocale} restaurantId={id} />
       )}
     </div>
   );
@@ -217,10 +217,12 @@ function Figures({
   data,
   currency,
   locale,
+  restaurantId,
 }: {
   data: DashboardSummary;
   currency: string;
   locale: string;
+  restaurantId: string;
 }): JSX.Element {
   return (
     <>
@@ -270,6 +272,17 @@ function Figures({
           <p className="text-small text-muted">{t("dashboard.afterMidnight.explain")}</p>
         </section>
       ) : null}
+
+      {/* The route into Transactions, placed under the figures on purpose: nobody opens a
+          transaction list for its own sake — they open it because a figure above did not match
+          what they expected. A navigation entry would be equally reachable and would lose that. */}
+      <Link
+        href={`/restaurants/${restaurantId}/transactions`}
+        className="inline-block text-small text-muted underline"
+        data-testid="dashboard-transactions-link"
+      >
+        {t("dashboard.seeTransactions")}
+      </Link>
     </>
   );
 }
