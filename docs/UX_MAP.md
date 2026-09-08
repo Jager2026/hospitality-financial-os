@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.8.0
+version: 2.9.0
 status: Active
 classification: Internal
 owner: Founder
@@ -149,6 +149,27 @@ Country and Currency are **permanent**. They are fixed at Stripe account creatio
 
 **On success:** a real Stripe connected account now exists, and the next screen appears immediately.
 
+**Built in Sprint 15**, at `/onboarding/restaurant`, replacing the stub that existed only to give the login fork a destination. Four things about it are decisions rather than layout.
+
+**Where success goes: Connect Payments, never the Dashboard.** The venue exists and cannot take a card, so a Dashboard would open on a banner saying so. Verified by hand against live Stripe, because the browser harness cannot reach the success path at all (its Stripe key is a placeholder, by design): the real path lands on `/restaurants/{id}/onboarding`.
+
+**Which endpoint, which is the same question as which permission.** `POST /restaurants` carries **no** Permission, deliberately — a just-registered person holds zero Memberships, so there is nothing to check against, and it creates a new Organization with the caller as its org-wide Owner. `POST /organizations/{id}/restaurants` requires `restaurant.create` **in that Organization**. So the screen sends an org-wide Member through the scoped route, where the server checks them, and everybody else through the bootstrap route. **A Manager or Waiter therefore cannot add a venue to their employer** (403, asserted against the live API), while anyone may start a business of their own — which is the API's design, not an oversight.
+
+**Two org-wide Memberships stop the screen rather than prompting a guess.** There is no organization picker anywhere in the Portal, and writing a Restaurant into the wrong business is not an edit anyone can undo. The screen says so and does nothing.
+
+**A failure whose outcome is unknown offers a check, never a second attempt.** `POST /restaurants` creates the Stripe account **before** it opens its transaction, so a failure inside that transaction leaves an account with no row pointing at it — measured on 2026-09-07 by forcing the transaction to throw: HTTP 500, zero rows, and one orphaned account that took a hand-written API call to close. The API's own message on that 500 is *"please try again"*, and trying again mints a second account. So the screen distinguishes a refusal it can read (400/403/404 — nothing was created, retry is safe) from a 5xx or a lost connection (**may have succeeded**), and in the second case removes the submit button entirely, offering only to ask `GET /restaurants` what exists.
+
+### The field count is a real cost, and the split is not decided here
+
+Ten required fields is a lot for a new customer's first screen. **Facts before options:** `POST /restaurants` requires all ten, and Stripe's account creation uses exactly **three** of them — `email`, `name`, `country` (`stripe.service.ts`). The other seven are ours: they exist for invoicing and the company record, not for Stripe.
+
+| Option | Price |
+|---|---|
+| **All ten now** (what is built) | The heaviest first screen in the product, at the moment a new owner is least committed. In exchange the venue is complete the moment it exists, and no later screen has to chase a half-filled record. |
+| **Three now, seven later** | A far lighter start — but it needs a backend change (the DTO requires all ten), and it moves the missing fields into a state nothing currently models: a Restaurant that exists and cannot be invoiced. **The price the Founder named is real and specific:** Stripe's own onboarding asks for the company registration number and VAT details anyway, so deferring them here does not defer them for the owner — it splits one form into two, in two different places, one of them ours and one of them Stripe's. |
+
+Not decided. What would settle it is evidence rather than argument: the first real owner filling this in, and whether they stop.
+
 ## Connect Payments
 
 **Purpose:** get the Restaurant from "exists" to "can take money." A screen in its own right, not only the Dashboard banner (ADR-009).
@@ -180,7 +201,20 @@ Stripe hosts the actual identity and bank-account collection; this screen's whol
 
 **Stripe's own two return addresses are screens now.** `${FRONTEND_URL}/restaurants/{id}/onboarding/complete` and `.../onboarding/refresh` are built by the backend and handed to Stripe; neither existed in the Portal, so **finishing onboarding used to end on a 404**. `complete` re-reads the venue rather than trusting the arrival — coming back is not the same as being verified — and `refresh` is Stripe's way of saying the link is no longer usable, so it says the link expired and offers a fresh one instead of silently rendering the same page.
 
-**"Which specific requirements are outstanding" is NOT built, and the reason is a fact rather than a preference.** `requirementsDue` holds Stripe's `requirements.entries[]` (ADR-009's revision captured the real shape from a live response), the backend types it `unknown` and asserts nothing about it, and **no row in this system has ever held a non-empty one**: of 349 restaurants in the development database, four carry a value and all four are `[]`, written by specs with a faked Stripe. Rendering a named requirement would mean rendering a shape this product has never once received. Until it has, the screen lists what Stripe asks of every business — identity, business details, bank account — which is true without pretending to know this venue's outstanding items.
+**"Which specific requirements are outstanding" is NOT built, and the reason changed on 2026-09-08 while the decision did not.** As written in Sprint 15 the reason was absence: `requirementsDue` held nothing anywhere — of 349 restaurants, four carried a value and all four were `[]`, written by specs with a faked Stripe — so rendering a named requirement would have meant rendering a shape the product had never received.
+
+**That is no longer true, and it was measured rather than assumed.** Creating a venue through the real Create Restaurant screen against live Stripe produced an account carrying **18 requirement entries**. The shape is exactly what ADR-009's revision recorded, and the decisive detail is inside it:
+
+```
+description:      "configuration.merchant.mcc"        ← an API field path, not prose
+impact:           { restricts_capabilities: [ { capability, configuration, deadline } ] }
+minimum_deadline: { status: "past_due" }
+requested_reasons:[ { code: "routine_onboarding" } ]
+```
+
+**`description` is Stripe's own field name, not something a restaurant owner can act on.** Turning eighteen of those into instructions needs a mapping from Stripe's field paths to human words that we do not have — and that Stripe's hosted onboarding already performs, which is where the person is being sent anyway. So the screen still lists what Stripe asks of every business (identity, business details, bank account), now because naming the eighteen would require inventing translations rather than because the data was missing.
+
+**One consequence for the wording, recorded and not fixed:** a venue created seconds ago already has 18 outstanding requirements and derives to `IN_PROGRESS`, so a brand-new owner lands on *"Finish setting up card payments — continuing takes you back to where you left off"* having left off nothing. No test covers that state, because no fixture reaches Stripe; it was seen on the real path.
 
 ## Restaurant created, payments not yet live
 

@@ -152,11 +152,17 @@ function Loaded({
         {resuming ? t("connect.resume.explain") : t("connect.start.explain")}
       </p>
 
-      {/* What Stripe will ask for, and why. Written here rather than fetched: these are the
-          requirements of being paid at all, not this venue's outstanding items — those live in
-          `requirementsDue`, which no real account has ever populated in this system (see the PR
-          for the counts). Naming a specific outstanding requirement waits for a shape we have
-          actually seen. */}
+      {/* What Stripe will ask for, and why. Written here rather than fetched, and the reason has
+          been corrected by measurement: #179 said `requirementsDue` had never been populated in
+          this system. That was true then and is false now — creating a venue through the real
+          screen on 2026-09-08 produced an account carrying **18** entries.
+
+          The decision not to render them stands, on the evidence rather than on its absence: each
+          entry's `description` is an API field path — `configuration.merchant.mcc` — not prose a
+          person can act on. Turning eighteen of those into instructions needs a mapping from
+          Stripe's field names to human words that we do not have, and that Stripe's own hosted
+          onboarding already performs. Listing what Stripe asks of every business is true without
+          pretending to translate this venue's eighteen. */}
       <ul className="list-disc space-y-1 pl-5 text-small text-muted">
         <li>{t("connect.asks.identity")}</li>
         <li>{t("connect.asks.business")}</li>
