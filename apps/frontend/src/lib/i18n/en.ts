@@ -269,6 +269,54 @@ export const en = {
     "Stripe setup could not be started for this restaurant from this account. Setting up payments needs an owner’s account, and this restaurant needs a Stripe account of its own before setup can begin.",
   "connect.refused.unavailable":
     "The setup link could not be created just now. Nothing has changed for this restaurant — try again in a moment.",
+  // Transactions — UX_MAP.md. Reached from the Dashboard when a figure raised a question.
+  "transactions.title": "Transactions",
+  // Said plainly rather than implied. ADR-065 puts operational screens on shifts, and this list
+  // cannot be one: `Transaction` carries no shift, and the endpoint offers no shift filter.
+  "transactions.scope":
+    "Every payment taken at this restaurant, newest first — not only the open shift. The dashboard is the screen that follows the shift.",
+  "transactions.loading": "Loading transactions…",
+  "transactions.filter.status": "Status",
+  "transactions.filter.any": "Any status",
+  "transactions.row.tip": "tip",
+  "transactions.status.completed": "Completed",
+  "transactions.status.partiallyRefunded": "Partly refunded",
+  "transactions.status.refunded": "Refunded",
+  "transactions.status.disputed": "Disputed",
+  "transactions.pages.previous": "Previous",
+  "transactions.pages.next": "Next",
+  // Two empties, and they must not read alike: one says no money has come in, the other says this
+  // question excluded whatever did.
+  "transactions.empty.title": "No payments have been taken here yet.",
+  "transactions.empty.explain":
+    "Payments appear here as they are taken, each with what the customer paid and what was left as a tip. Nothing is wrong and nothing is hidden — there is simply nothing yet.",
+  "transactions.emptyFilter.title": "No payments match this filter.",
+  "transactions.emptyFilter.explain":
+    "This restaurant may well have taken payments — none of them have the status you selected. Clearing the filter shows everything again.",
+  "transactions.emptyFilter.action": "Clear the filter",
+  "transactions.error.title": "We could not load the transactions",
+  "transactions.error.explain":
+    "The list could not be fetched. Nothing here is out of date — there is nothing here.",
+  // A Waiter holds no permissions at all, so `reports.view` refuses them the whole list. Saying
+  // "something went wrong" would send somebody looking for a fault that does not exist.
+  "transactions.error.forbidden":
+    "Your account cannot see this restaurant’s transactions. Payment records are available to owners and managers.",
+
+  "transaction.error.title": "We could not show this transaction",
+  "transaction.error.notFound":
+    "This transaction could not be found. It may belong to a restaurant your account cannot see, or it may not exist.",
+  "transaction.back": "Back to transactions",
+  "transaction.line.restaurant": "The restaurant’s share",
+  "transaction.line.tip": "Tip to staff",
+  "transaction.line.platformFee": "Our fee",
+  "transaction.line.tax": "Tax",
+  "transaction.line.processingFee": "Card processing fee",
+  // ADR-025: unavailable is not zero, and in a money breakdown a blank reads as zero.
+  "transaction.unavailable": "Not available",
+  "transaction.refunds.title": "Refunds",
+  "transaction.refunds.tipReturned": "tip returned",
+  "transaction.chargebacks.title": "Chargebacks",
+
   "dashboard.stripe.action": "Set up payments",
   "dashboard.stripe.cards.title": "Card payments are not switched on here yet",
   "dashboard.stripe.cards.explain":
@@ -282,6 +330,7 @@ export const en = {
   "dashboard.expired.explain":
     "You were signed out after fifteen minutes. Nothing is wrong with the restaurant or its figures — sign in again and they will be here.",
   "dashboard.expired.action": "Sign in again",
+  "dashboard.seeTransactions": "See every payment",
   "dashboard.nav.backToRestaurants": "All restaurants",
   "dashboard.error.title": "We could not load this dashboard",
   "dashboard.error.retry": "Try again",

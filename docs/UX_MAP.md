@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.11.0
+version: 2.12.0
 status: Active
 classification: Internal
 owner: Founder
@@ -388,6 +388,30 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 **New (ADR-008):** a Refund / Chargeback status, shown only when one exists on this Transaction — status, amount, and whether the tip was refunded. No action is available here for MVP; refunds are initiated through Stripe, not this screen (see `API_Contract.md`). This exists so an owner is never left wondering why a number changed. Every figure here — Net Amount, Tips, Processing Fee — reflects the current state after any Refund/Chargeback activity, not a snapshot frozen at the moment of capture, which is exactly why this exists: "why did this number change" always has an answer on this screen.
 
 **Processing Fee is unavailable in MVP (Sprint 8) — shown as "—", never a false `0`:** distinct from `Tax` (also unavailable, but only because no code writes it yet). Fact-checked against ADR-014's own Direct Charge + `fees_collector: "stripe"` configuration: Stripe deducts its own processing fee directly from the Restaurant's connected-account balance, a fact our `payment_intent.succeeded` webhook never observes — the real figure exists only via a separate Stripe `balance_transaction` API call (with the `Stripe-Account` header), which is out of this Sprint's scope ("breakdown computed from `LedgerLine`," `IMPLEMENTATION_PLAN.md`). `MASTERPLAN.md` names Processing Fee and Platform Fee as two distinct concepts — this screen keeps them as two distinct fields rather than collapsing the unavailable one into the one we do have, even though Platform Fee is real and shown correctly today.
+
+### Built in Sprint 15 — and two of this section's promises could not be kept
+
+The screen exists at `/restaurants/{id}/transactions`, with the card at `.../transactions/{id}`. It is reached from **under the Dashboard's figures**, deliberately rather than from a navigation entry: nobody opens a transaction list for its own sake, they open it because a figure did not match what they expected.
+
+**What the row shows: time · amount · tip · status.** Four fields, because four is what `GET /transactions` returns for a row. The time is rendered in the **venue's own timezone**, not the reader's — a payment at 01:30 belongs to the venue's night (ADR-064), and an owner checking from another country must see the time their staff would name.
+
+**Why there is a card at all.** The row answers *which payment*; the card answers *where the money went* — the split into the venue's share, the tip, our fee, tax, and any refunds or chargebacks. That is a second request and a genuinely different question, so it is a page with its own address: it is what an owner forwards when an accountant queries a figure, and a link can be forwarded.
+
+**Pagination, not infinite scroll**, because that is what the endpoint does (`page`/`limit`, with a `meta` carrying `total` and `pages`). Inventing a second paging model over the first would be a choice the API does not support — and it is the wrong one here anyway, since somebody checking a figure wants to be able to say which page they were on.
+
+**Two empty states, and keeping them apart is the point.** A venue that has taken nothing and a filter that matched nothing look identical if both render an empty list, and they mean opposite things. The first explains that nothing has happened yet; the second says the venue may well have taken payments and this question excluded them, and offers to clear the filter.
+
+#### Two promises this section makes that the API cannot keep
+
+**1. "Staff Member" is not on the row, and cannot be.** `TransactionListEntry` carries no membership and no display name. The *filter* accepts a `membership` uuid — so the API can narrow to one person while the rows cannot name anyone, which is a filter whose result nobody can read. It is therefore not offered on this screen. Closing this needs a field on the list entry.
+
+**2. The list is not shift-scoped, and cannot be.** ADR-065 puts operational screens on shifts. `Transaction` has no `shiftId` and no relation to `Shift`; `Payment` has none either; only `LedgerLine` does. `transactionListQuerySchema` accepts `restaurantId`, `status`, `membership`, `page`, `limit` — no shift and no date. **So this list is every payment at the venue, newest first, and the screen says so in a line of its own** rather than letting a reader assume it is the open shift. The Dashboard remains the screen that follows the shift.
+
+Both are recorded in `UX_API_RECONCILIATION.md`. Neither is closed here: the axis of this slice was the screen, and both fixes are backend changes.
+
+#### One thing found while reading the routes, not fixed here
+
+`GET /transactions/{id}` carries `@RequirePermission("reports.view")` **without `@UseGuards(PermissionsGuard)` on the method**, and `PermissionsGuard` is deliberately not global (`permissions.guard.ts` says so). The decorator on that route is therefore **inert**. The route is not open — `TransactionService.findOne` performs the same permission check itself, and a Waiter is refused — so this is a claimed second layer that does not exist rather than a hole. Worth naming because the contract invariant keys on the decorator's *presence*: the route is documented as permission-guarded while its guard is not wired.
 
 ---
 

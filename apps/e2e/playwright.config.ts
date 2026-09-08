@@ -79,6 +79,27 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
 
+  /**
+   * Assertions wait 15 seconds rather than Playwright's default 5, and this is a measurement
+   * rather than padding.
+   *
+   * **What was observed.** Three unrelated specs failed in one run on the same shape — a click on
+   * a `<Link>`, then `toHaveURL` — including one that had been green since #179 and one that
+   * passed at 1.6s in the immediately preceding run. Nothing about the assertions changed between
+   * those runs; the machine's load did. A Next.js client transition fetches the route's payload
+   * before the URL moves, and on a loaded machine that first fetch can exceed five seconds.
+   *
+   * **Why raising it does not weaken anything.** A timeout is an upper bound on waiting, not a
+   * relaxation of the assertion: a passing assertion still passes in milliseconds, and a genuinely
+   * broken navigation still fails — three times slower to report, and correctly. What it removes
+   * is a failure mode that says nothing about the product.
+   *
+   * **What it must NOT become.** If a test needs this to pass *consistently*, that is a finding
+   * about the product, not a reason to raise it again. `retries` stays at 0 for the same reason
+   * (`tests/harness.spec.ts`): a retry hides the failure, a longer wait does not.
+   */
+  expect: { timeout: 15_000 },
+
   use: {
     baseURL: `http://localhost:${FRONTEND_PORT}`,
     trace: "retain-on-failure",
