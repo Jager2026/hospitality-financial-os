@@ -20,6 +20,50 @@
 // pulled vite/glob/nanoid up to their patched versions. An ignore list is a promise to come back,
 // not a place to file things forever; keeping it empty is what makes the gate mean something.
 // Adding an entry here again should feel like a decision, not a reflex.
+//
+// ── `pnpm.overrides` IS A FLOOR, NOT A CEILING — and the difference is invisible ──────────────
+//
+// An override in the root `package.json` states which versions are ACCEPTABLE. The lockfile states
+// which one is INSTALLED. `pnpm install` never re-resolves an entry that still satisfies its
+// range, so an override written before a patch existed keeps the old resolution indefinitely while
+// the line reads as though the package were handled. It is the shape CLAUDE.md already names: a
+// record that looks like a mechanism.
+//
+// This was not theory. On 2026-09-09 two of them were sitting on vulnerable versions their own
+// ranges already permitted them to leave:
+//
+//     "multer": "^2.2.0"   -> lockfile 2.2.0, while 2.3.0 existed   (3 high, denial of service)
+//     "sharp":  "^0.35.0"  -> lockfile 0.35.3, while 0.35.4 existed (1 high, via libheif)
+//
+// Both were raised to the patched version explicitly, so the line now states the fact it appears
+// to state. Three more were stale in the same way without being vulnerable — `postcss` 8.5.25,
+// `body-parser` 1.20.6 and `qs` 6.15.3 — and were raised for the same reason: a floor nobody has
+// checked is indistinguishable from one that is doing nothing.
+//
+// ── STATE OF EVERY OVERRIDE, CHECKED 2026-09-09 ──────────────────────────────────────────────
+//
+// **This is a claim about a moment, and it will go stale** (ADR-078) — which is why it carries a
+// date rather than the present tense. On 2026-09-09 all thirteen overrides installed the newest
+// version their own range allows, and `pnpm audit` reported no high or critical advisory. The
+// method, so it can be repeated rather than re-invented: for each override, compare the range
+// against the version in `pnpm-lock.yaml` AND against the newest published version the range
+// already permits. Only the third of those catches this class; the first two always agree.
+//
+//   multer 2.3.0 · lodash 4.18.1 · postcss 8.5.28 · body-parser 1.20.8 · qs 6.16.0 ·
+//   file-type 21.3.4 · sharp 0.35.4 · vite 6.4.3 · glob 10.5.0 · nanoid 3.3.18 ·
+//   fast-uri 3.1.7 · js-yaml 4.3.2
+//
+// **`uuid` is the thirteenth and installs nothing.** `"uuid": "^11.1.1"` has governed no package
+// since it was added with the rest of this block in #12: the name appears in `pnpm-lock.yaml`
+// exactly once, as the override declaration itself, with no package entry anywhere in the tree.
+// It is harmless and it is not nothing — it reads as protection that is not being applied, and if
+// a future dependency pulls `uuid` in, the range that then starts governing it is one nobody chose
+// for that purpose. Left in place rather than deleted, because removing it is a decision about
+// pre-emptive overrides in general and belongs with somebody who wants to make that decision.
+//
+// **Nothing checks any of the above.** The comparison is three lines of `semver` against the
+// lockfile and the registry, and it would fit here or as a gate step; it is not built, so this
+// paragraph is a record and not a guarantee.
 const { execSync } = require("node:child_process");
 const { evaluate, AuditUnavailableError } = require("./audit-evaluate");
 
