@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.3.0
+version: 1.4.0
 status: Active
 classification: Critical
 owner: Founder
@@ -168,6 +168,74 @@ pilot restaurant arrives is the day staging stops being premature.
 OC-1 and two rows from an earlier count. This is a fourth, included because branch 3 of the roadmap
 is *defined* as "waiting on the regulator" and a register that omits the thing branch 3 waits on
 would be incomplete on its first day. Remove it if that is not wanted.
+
+### Somebody is already running Model B in Lithuania — established 2026-09-09
+
+**This does not answer either question above, and it is recorded here because it is the closest
+thing to evidence that has appeared while they go unanswered.**
+
+**GlobalTips Europe, UAB** — a Lithuanian legal entity, registration code **305942984**, Naugarduko
+g. 3-401, Vilnius. From its own public documentation:
+
+- it **"is not a financial organisation"**;
+- the employee opens an account with its **banking partner, Stripe**, and submits a photograph of an
+  identity document *there*;
+- tips accumulate as a **balance**, withdrawable to an IBAN in **up to 3 business days**, or
+  **instantly for a small fee**.
+
+### What that description resolves to, read as an implementation
+
+The four statements only fit together one way. **"A balance in the app" is the waiter's own Stripe
+connected-account balance**, and **"instant withdrawal for a small fee" is Stripe Instant Payouts** —
+Stripe's product, and Stripe's fee, surfaced under someone else's brand. The platform does not hold
+the money, which is exactly what lets it say it is not a financial organisation.
+
+**That is Model B (ADR-053), seen from the waiter's side.** The tip separates at payment and lands
+in the person's own account; the venue never receives it, holds it, or distributes it.
+
+**It matches ADR-061 on the part that decision had to guess at**: one person, one connected account,
+identity verified at Stripe rather than at the platform, with payouts a separate capability from
+receiving. The onboarding this project designed against Stripe's test API is the onboarding a
+company in the same jurisdiction is running in production.
+
+**And it is a point in favour of `Wallet` being a projection rather than a store** (ADR-006,
+`DATABASE.md`). Under Model B the authoritative balance is Stripe's; a `Wallet` that *stored* money
+would be a second ledger of the same euros, disagreeing with Stripe the moment a payout settles. A
+projection over `LedgerLine` **shows** the obligation without **holding** it — which is why ADR-053
+could observe that the `tip_payable` line is identical under both models. The screen survives the
+switch from A to B; only settlement changes.
+
+### The boundaries of this fact, which are most of it
+
+**The source is a company's own public documentation. It is not a regulator's position, and it is
+not an audit.** Everything above is what GlobalTips says about GlobalTips.
+
+- **"Not a financial organisation" is their claim about themselves**, not a determination by the
+  Bank of Lithuania. It is also precisely the claim this project would need to be true of itself,
+  which makes it the least safe sentence to borrow.
+- **The corporate structure is unknown.** Whether the Lithuanian UAB is the contracting party for
+  the money flow, or a subsidiary of something registered elsewhere, was not established.
+- **A company operating this way is not evidence that it is compliant.** It is evidence that the
+  shape is being run, that Stripe supports it for Lithuanian individuals, and that somebody has
+  concluded the risk is acceptable. Those are three useful facts and none of them is the answer
+  **OC-4** is waiting for.
+
+### Their tax claim is the VMI question, and it stays a claim
+
+**They state that the employer pays no additional taxes on tips.** That is not a detail — it is
+*the* question put to VMI, almost word for word: who is the tax agent when a platform moves money
+from a customer directly to a named individual.
+
+**Recorded as somebody else's assertion, deliberately, and it changes nothing about this row's
+status.** A competitor's reading of Lithuanian tax law is not a written answer from VMI, and
+treating it as one would be the same error as the estimate in **OC-1** — a number that governed the
+schedule because it was repeated confidently and never sourced. ADR-067 continues to ship no tax
+column on staff-earnings exports, for exactly the reason it always did.
+
+**What it does change: the question is worth asking with more urgency, and with a sharper form.**
+Somebody has an operating answer. The useful version of the VMI request is no longer only "what is
+the rule" but "a Lithuanian platform is doing X and telling employers Y — is that right", which is a
+question a regulator can answer briefly.
 
 ---
 

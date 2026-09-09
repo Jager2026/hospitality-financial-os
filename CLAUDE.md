@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.20.0
+version: 2.21.0
 status: Active
 classification: Critical
 priority: Highest
@@ -154,6 +154,15 @@ This has a name in this codebase already: it is ADR-073's finding — *a check t
 It was measured on 2026-09-08. A commit was pushed to a branch whose pull request had already been merged; the push succeeded, the branch moved, and **no run was created at all** — a closed PR raises no `pull_request` event. A wait-loop polling for "no pending checks" reported green immediately, from the run belonging to the previous commit. The fix that landed never reached `main` and was never verified by anything.
 
 So the rule is: **compare the SHA the checks belong to against the SHA you intend to merge, and treat "no run exists for this SHA" as a distinct answer from "the checks passed"** — it usually means the event never fired, which is worth knowing on its own. Neither `gh pr checks` nor a green tick on the page distinguishes the two.
+
+Testing Review, for any test that starts a process: **its time budget is written at the moment the spawns are added, not when a run first goes red.** A test runner's default timeout is per TEST, not per spawn, so a case that runs one subprocess and a case that runs seven are given the same allowance — and the second one passes for as long as the machine happens to be fast enough. Nothing about it is wrong until the day the suite is busy, and then it fails somewhere unrelated to whatever changed.
+
+**The reason this is a rule rather than a note in a test file is that it was already a note in a test file, and that did not work.** It was diagnosed and fixed in `apps/frontend/scripts/check-public-env.spec.ts` — six subprocess spawns in one case against a 5s default, with the file measured at 5.5s, 7.2s, 9.5s and 13.7s across recorded gate runs, so the default had always been inside the noise and finally failed on a run where nothing about the code under test had changed. The reasoning was written into that file's own docstring. **One pull request later the same session created `gate-porcelain.spec.ts`, which builds a real git repository per case — five to seven spawns — and left it on the default. It took about 600ms standalone and timed out at 5s inside the full parallel suite.** A rule that lives as a comment inside the test it fixed is read by people editing that test, which is precisely the population that no longer needs it.
+
+Two things about the shape of the budget, both learned the same way:
+
+- **Put it on the suite, not in the global config.** A raised global default silently covers tests that do far less, which is where the same defect would next hide. The budget belongs where the cost is — the file that spawns processes.
+- **Check that the option is actually read.** A green suite does not distinguish "the budget applies" from "the budget was ignored and today's machine was fast enough". Set it to `1` and confirm every case in the file times out; that is the same discriminating-pair standard the Workspace Hygiene section demands of any instrument, applied to a configuration value.
 
 ---
 
