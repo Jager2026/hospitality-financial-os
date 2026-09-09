@@ -208,6 +208,10 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
         token: invitationToken,
         password: managerPassword,
         displayName: "Test Manager",
+        // Sprint 16: accepting an invitation is the second path that creates a User, and it now
+        // records the consent registration has recorded since ADR-049. Same placeholder the
+        // registration step above uses, from the constant rather than a literal.
+        acceptedTermsVersion: PLATFORM_TERMS_PLACEHOLDER,
       });
     expect(acceptRes.status).toBe(200);
     const managerMembershipId: string = acceptRes.body.data.id;

@@ -7,9 +7,11 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   UseGuards,
 } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
+import type { Request } from "express";
 import { AuditEntity } from "../common/decorators/audit-entity.decorator";
 import { RequirePermission } from "../auth/decorators/require-permission.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
@@ -91,8 +93,18 @@ export class MembershipController {
   @Post("memberships/invitations/accept")
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  acceptInvitation(@Body(new ZodValidationPipe(acceptInvitationSchema)) dto: AcceptInvitationDto) {
-    return this.invitationService.accept(dto);
+  acceptInvitation(
+    @Body(new ZodValidationPipe(acceptInvitationSchema)) dto: AcceptInvitationDto,
+    @Req() req: Request,
+  ) {
+    // ADR-049: the acceptance record carries where it came from, the same context the register
+    // route already collects. Passed from here rather than read in the service, mirroring
+    // `AuthController.register` exactly — the two paths that create a `User` should differ in as
+    // few places as possible, and this is the second of them.
+    return this.invitationService.accept(dto, {
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
   }
 
   @Get("memberships")

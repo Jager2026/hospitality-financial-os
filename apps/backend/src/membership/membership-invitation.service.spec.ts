@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmailOutboxService } from "../email/email-outbox.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { CURRENT_PLATFORM_TERMS_VERSION } from "../common/agreements/agreement-versions";
 import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import { MembershipInvitationService } from "./membership-invitation.service";
 
@@ -120,6 +121,7 @@ describe("MembershipInvitationService (real database)", () => {
       token,
       password: "SetMyOwnPassword!2026",
       displayName: "New Waiter",
+      acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
     });
 
     expect(membership.organizationId).toBe(organizationId);
@@ -177,6 +179,7 @@ describe("MembershipInvitationService (real database)", () => {
       token,
       password: "FirstAccept!2026xyz",
       displayName: "Replay Test User",
+      acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
     });
 
     await expect(
@@ -218,6 +221,7 @@ describe("MembershipInvitationService (real database)", () => {
       token,
       password: "ScopedAccept!2026xyz",
       displayName: "Scoped Test User",
+      acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
     });
 
     expect(membership.restaurantId).toBe(restaurant.id);
@@ -238,10 +242,104 @@ describe("MembershipInvitationService (real database)", () => {
     );
 
     await expect(
-      service.accept({ email, token, password: "password", displayName: "Breached User" }),
+      service.accept({
+        email,
+        token,
+        password: "password",
+        displayName: "Breached User",
+        acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
+      }),
     ).rejects.toMatchObject({ code: "PASSWORD_BREACHED" });
 
     const user = await prisma.user.findUnique({ where: { email } });
     expect(user).toBeNull();
+  });
+
+  // ─── The consent this path used to skip (ADR-049) ────────────────────────────────────────────
+  //
+  // Accepting an invitation is the SECOND way a `User` is created, and it wrote no
+  // `AgreementAcceptance` — so everybody who joined through an invitation was using the platform
+  // with no record of having agreed to anything. It could not be repaired afterwards: a row
+  // written later asserts that a person agreed at a moment when nobody asked them.
+
+  it("accept() records the platform-terms acceptance for a User it creates, with the request's context", async () => {
+    const email = `consent-${randomUUID()}@example.com`;
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+    await service.accept(
+      {
+        email,
+        token,
+        password: "ConsentGiven!2026xyz",
+        displayName: "Consenting Waiter",
+        acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
+      },
+      { ipAddress: "203.0.113.7", userAgent: "AcceptSpec/1.0" },
+    );
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    const acceptances = await prisma.agreementAcceptance.findMany({ where: { userId: user.id } });
+
+    expect(acceptances).toHaveLength(1);
+    expect(acceptances[0]).toMatchObject({
+      agreement: "PLATFORM_TERMS",
+      // From the server's constant, never a literal typed here: a literal cannot be wrong when it
+      // is written and cannot stay right afterwards (CLAUDE.md, Testing Philosophy).
+      version: CURRENT_PLATFORM_TERMS_VERSION,
+      ipAddress: "203.0.113.7",
+      userAgent: "AcceptSpec/1.0",
+    });
+  });
+
+  it("accept() records NO acceptance when the User already exists — they agreed when they registered", async () => {
+    // The other half of the pair. A check that only ever wrote rows would pass the test above just
+    // as well, and would be wrong here: a second row would claim this person agreed twice, on a day
+    // they were not asked.
+    const email = `already-consented-${randomUUID()}@example.com`;
+    const existing = await prisma.user.create({
+      data: {
+        email,
+        displayName: "Already Has An Account",
+        passwordHash: "not-a-real-hash",
+        locale: "en",
+      },
+    });
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+    await service.accept({ email, token });
+
+    expect(await prisma.agreementAcceptance.count({ where: { userId: existing.id } })).toBe(0);
+  });
+
+  it("accept() refuses to create a User without the terms, and creates nothing at all", async () => {
+    const email = `no-consent-${randomUUID()}@example.com`;
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+    await expect(
+      service.accept({ email, token, password: "NoConsent!2026xyz", displayName: "No Consent" }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    // Asserted on the database rather than only on the rejection: refusing while leaving a User
+    // behind would be the same defect in a quieter form.
+    expect(await prisma.user.findUnique({ where: { email } })).toBeNull();
+    const invitation = await prisma.membershipInvitation.findFirst({ where: { email } });
+    expect(invitation?.acceptedAt, "the invitation must remain usable").toBeNull();
+  });
+
+  it("accept() refuses a terms version that is not the server's own, and creates nothing", async () => {
+    const email = `stale-terms-${randomUUID()}@example.com`;
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+    await expect(
+      service.accept({
+        email,
+        token,
+        password: "StaleTab!2026xyz",
+        displayName: "Stale Tab",
+        acceptedTermsVersion: `${CURRENT_PLATFORM_TERMS_VERSION}-but-older`,
+      }),
+    ).rejects.toMatchObject({ code: "TERMS_VERSION_MISMATCH" });
+
+    expect(await prisma.user.findUnique({ where: { email } })).toBeNull();
   });
 });

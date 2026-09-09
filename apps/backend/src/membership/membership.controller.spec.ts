@@ -74,7 +74,7 @@ describe("MembershipController — invite scope (real database)", () => {
   async function callerWith(
     organizationId: string,
     restaurantId: string | null,
-    roleName: "Manager" | "Owner",
+    roleName: "Manager" | "Owner" | "Accountant" | "Waiter",
   ): Promise<AuthenticatedUser> {
     const role = await prisma.role.findUniqueOrThrow({
       where: { name: roleName },
@@ -151,6 +151,42 @@ describe("MembershipController — invite scope (real database)", () => {
         outsider,
       ),
     ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(invitationService.invite).not.toHaveBeenCalled();
+  });
+
+  // ─── The falsification: which permission, asked of a caller who holds others ─────────────────
+  //
+  // `membership.invite` is the answer, and the discriminating caller is the **Accountant**: a real
+  // seeded Role holding `reports.view` and `data.export` and nothing else (ADR-066). A test using a
+  // Waiter would pass against an implementation that merely required SOME permission, because a
+  // Waiter holds none; the Accountant separates "has permissions" from "has this one".
+  //
+  // This exercises the controller's own resource-scoped check. `PermissionsGuard` is the first
+  // layer and is not in this path — the controller is called directly here — so a green result
+  // means the second layer refuses on its own, which is what ADR-043 says it must.
+  it("an Accountant cannot invite — holding two permissions is not holding membership.invite", async () => {
+    invitationService.invite.mockClear();
+    const { organization, restaurant } = await seedOrgWithRestaurant();
+    const accountant = await callerWith(organization.id, restaurant.id, "Accountant");
+
+    // Read from the seed rather than asserted from memory: if the Accountant ever gains
+    // membership.invite this fixture stops being the discriminating one, and this line says so
+    // instead of the test quietly proving nothing.
+    const permissions = accountant.memberships[0].role.permissions;
+    expect(permissions.length, "the Accountant must hold some permissions").toBeGreaterThan(0);
+    expect(permissions).not.toContain("membership.invite");
+
+    await expect(
+      controller.invite(
+        {
+          email: `${randomUUID()}@example.com`,
+          roleId: waiterRoleId,
+          restaurantId: restaurant.id,
+        },
+        accountant,
+      ),
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+
     expect(invitationService.invite).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,13 @@ export const acceptInvitationSchema = z.object({
   token: z.string().min(1),
   password: z.string().min(8, "Password must be at least 8 characters").optional(),
   displayName: z.string().trim().min(1, "Display name is required").optional(),
+  // ADR-049, and optional here for exactly the same reason as the two fields above: it is required
+  // only when this request is the one creating the User. An invitation accepted by somebody who
+  // already has an account records nothing — they accepted the terms when they registered, and a
+  // second row would claim they agreed twice.
+  //
+  // The service decides which case this is, because only a database read can tell.
+  acceptedTermsVersion: z.string().trim().min(1).optional(),
 });
 
 export type AcceptInvitationDto = z.infer<typeof acceptInvitationSchema>;
