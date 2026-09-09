@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.36.0
+version: 2.37.0
 status: Active
 classification: Critical
 priority: Highest
@@ -26,29 +26,52 @@ for it again.
 | # | Waits on | What is in it |
 |---|---|---|
 | **1** | **Nothing.** | The Portal, payout, debts, design. Anything here can move today, and everything shipped in Sprint 15 came from here. |
-| **2** | **The UAB** — see **OC-1** | The customer-facing texts (the `[LEGAL ENTITY]` placeholders), translation, the DPA, the trademark. |
+| **2** | **Nothing external any more** — the UAB is one working day and about €29 (**OC-1**, answered 2026-09-09). What is left is writing. | The customer-facing texts (the `[LEGAL ENTITY]` placeholders), translation, the DPA, the trademark. |
 | **3** | **The regulator** — see **OC-4** | Model B, tax, the waiter's wallet. |
 | **4** | **Money** | Terminals, filming, a lawyer. |
 | **5** | **Nothing — and it is not being done.** | Talking to a restaurant. |
 
-**Branch 2 is the path to the first customer, and it is the one measured by a single phone call.**
-`[LEGAL ENTITY]` in the texts → publishing the Terms and Privacy Policy → lifting the registration
-gate (ADR-055) → a pilot. Every step of that chain is behind one unverified estimate, recorded as
-**OC-1** in `OPEN_CONDITIONS.md` with the five sub-questions that separate it — including the one
-that could shorten the whole schedule: **the estimate may describe Model B's requirements while the
-pilot runs on Model A**, in which case the blocked branch is not the branch the pilot needs.
+**The numbers are names, not ranks.** They come from the Founder's roadmap and are referenced by
+number elsewhere, so they stay put even though branch 2 has moved out of the blocked group. Read
+the middle column, not the order.
+
+**Branch 2 was the longest of the blocking branches. It is now the shortest**, and the correction
+is large enough to state in full: the estimate behind it was **three months and thousands of
+euros**; the measured answer is **one working day and about €29 in fees**, with a €1,000 minimum
+share capital that is not a cost at all — it moves to the company's own account and stays the
+company's money. Wrong by roughly two orders of magnitude in money, and about sixty in time.
+
+**And the reason it was wrong is the part worth carrying: the estimate was made about Model B,
+while the pilot runs on Model A.** ADR-053 had already settled that asymmetry — under Model A the
+tax position is answered and it is Model B that waits on a regulator (**OC-4**). So branch 2 was
+sequenced behind a number that belonged to branch 3. **The branch that was blocked was not the
+branch the pilot needs**, and no amount of reading either branch's contents would have shown it;
+only asking what the estimate was *about*.
+
+**What branch 2 now waits on is the work itself** — writing the Terms, the Privacy Policy and the
+DPA, having them translated, and publishing them. That is weeks of work rather than months of
+waiting, and it is work this project can start on any day it chooses.
+
+**Two things on the path to a pilot are still unmeasured**, and they are named here so "one working
+day" does not quietly become "the pilot is one working day away": **opening the company's bank
+account** — which OC-1 itself described as usually the longest step, and which the capital must be
+paid into — and **Stripe accepting a live account on a Lithuanian legal entity**, which is a
+question for Stripe rather than the registrar. The pilot takes real card payments, so the second is
+on the critical path rather than beside it.
 
 **Branch 5 costs nothing, is blocked by nothing, and has not been done.** It is written down in
-those words deliberately. The other four all have an answer to *why not yet* — a registration, a
-regulator, a budget. Branch 5 has none, and it is the only branch that produces evidence about
-whether any of the rest is worth building. **A branch with no blocker and no progress is a priority
-statement, not a schedule.**
+those words deliberately. The other branches all have an answer to *why not yet* — a regulator, a
+budget, or work that has to be written. Branch 5 has none, and it is the only branch that produces
+evidence about whether any of the rest is worth building. **A branch with no blocker and no
+progress is a priority statement, not a schedule.** That reading got sharper, not softer, when
+branch 2's blocker evaporated: two of the five now wait on nothing but a decision to start.
 
 **The honest reading of Sprint 15 against this table:** five Portal slices and a diagnostic block,
-all from branch 1, while branch 2 stood on a number nobody had checked. Branch 1 work was correct
-in itself and wrong in sequence — the cheapest measurement in the project went unmade for weeks
-because nothing in this document said which branch was load-bearing. This table is the fix, and
-`OPEN_CONDITIONS.md` is where its blockers live.
+all from branch 1, while branch 2 stood on a number nobody had checked — and the number was wrong
+by two orders of magnitude. Branch 1 work was correct in itself and wrong in sequence. The cost was
+not the euros; it was the weeks spent treating the shortest blocking branch as the longest. This
+table is the fix, `OPEN_CONDITIONS.md` is where its blockers live, and **OC-1 is the demonstration
+that a register earns its keep the first time a row in it is answered.**
 
 ---
 
