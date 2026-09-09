@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.1.0
+version: 1.2.0
 status: Active
 classification: Critical
 owner: Founder
@@ -50,44 +50,91 @@ nobody mistakes this for a mechanism.
 | | |
 |---|---|
 | **Question** | What does it cost, and how long does it take, to register a UAB in Lithuania — **electronically, with standard articles of association**? |
-| **Status** | **Open. Answer: empty, waiting.** |
+| **Status** | **Answered on the main question, 2026-09-09, by the Founder. Narrowed, not closed** — one figure and one source remain open, below. |
 | **Open since** | 2026-09-07 (recorded; the underlying question is older and was never written down) |
-| **Source of the answer** | Registrų centras. A telephone call by the Founder. |
-| **What it gates** | `[LEGAL ENTITY]` placeholders in the customer-facing texts → publishing the Terms and Privacy Policy → lifting the registration gate (ADR-055) → **the pilot**. That is the whole path to the first customer. |
+| **Answered** | 2026-09-09, by the Founder. **The estimate was wrong by an order of magnitude.** |
+| **Source of the answer** | **Search, not Registrų centras.** The call has not happened, and that is deliberately recorded rather than glossed — see *What is still not confirmed*. |
+| **What it gates** | `[LEGAL ENTITY]` placeholders in the customer-facing texts → publishing the Terms and Privacy Policy → lifting the registration gate (ADR-055) → **the pilot**. Unchanged; what changed is how long that chain is. |
 | **Owner** | Founder |
 
-**The estimate in circulation is three months and thousands of euros, and it has never been
-verified.** Established on 2026-09-07 by exhaustive search: the figure appears in no document, in
-no code comment, and in none of the ~180 pull requests' commit messages. It exists only in
-conversation. **The most expensive unknown in the project was recorded nowhere**, which is the
-specific reason this file now exists.
+### The answer
 
-### The question is really five questions, and one call can separate them
+| | |
+|---|---|
+| Registering the UAB electronically | **€14.02** |
+| Reserving the name beforehand | **€14.79**, and **optional** |
+| Elapsed time | **1 working day** |
+| Notary | **Not required** — with model articles of association and a qualified e-signature |
+| Minimum share capital | **€1,000** — lowered from €2,500 in 2023 |
+| Paying the capital | In parts: an initial contribution of **at least 25% of each founder's nominal**, with the total not below the minimum |
 
-The estimate almost certainly conflates steps whose durations differ by an order of magnitude. Ask
-them apart:
+**The share capital is not a cost.** It is transferred to the company's own account and stays there
+— the company's money, spendable on the company's expenses. Any comparison of "what it costs" that
+puts €1,000 next to €14.02 is adding two different kinds of number.
 
-1. **Registering the UAB itself** — Registrų centras, electronic, standard articles. Fee, and
-   elapsed time.
-2. **Opening a bank account for the new company** — usually the longest step, and sensitive to the
-   founder's residency.
-3. **Stripe accepting a live account** on a Lithuanian legal entity — a question for Stripe, not
-   for the registrar.
-4. **Whether any licence is required at all** — the only part where "months" is plausible. Already
-   asked and outstanding: see **OC-4**.
-5. **Which of the four the pilot actually needs, given that the pilot runs on Model A.**
+**So the honest total is about €29 of fees and one working day**, plus a transfer from one of the
+Founder's accounts to another of the Founder's accounts.
 
-### Point 5 is the one that could move the whole schedule
+### What this replaces, stated plainly
 
-**The estimate may have been made about Model B, while the pilot runs on Model A.** ADR-053 settles
-this asymmetry: for Model A the position is answered — tips distributed by the employer are
-employment income and the restaurant is the tax agent — and it is **Model B** whose money fork is
-blocked on a regulator's written answer.
+The estimate in circulation was **three months and thousands of euros**. It appears in no document,
+no code comment, and none of ~180 pull requests' commit messages — established on 2026-09-07 by
+exhaustive search. **It was wrong by roughly two orders of magnitude in money and by a factor of
+about sixty in time**, and it went unchecked for weeks while it was the single most expensive
+assumption in the project.
 
-**If the three-month figure describes Model B's requirements, then the branch that is blocked is
-not the branch the pilot needs**, and the path to the first customer is shorter than the roadmap
-currently assumes. This is settled by the same call, and it is the highest-value question in this
-file.
+That is the finding worth keeping, and it is not "the Founder was mistaken". It is that **the
+project's most load-bearing number was the one number nobody had written down**, so nothing could
+go stale, nothing could be reviewed, and its cost was paid in sequencing rather than in euros —
+Sprint 15 spent five slices on branch 1 while branch 2 waited on it. This file exists because of
+that, and this row is its first return.
+
+### What it confirmed: sub-question 5, and it was the expensive one
+
+The original row broke the question into five, and named the fifth as the one that could move the
+whole schedule: **the estimate may have been made about Model B, while the pilot runs on Model A.**
+
+**Confirmed: it was.** ADR-053 already settled the asymmetry — under Model A tips are distributed
+by the employer, the restaurant is the tax agent, and the position is answered; it is **Model B**
+whose money fork waits on a regulator's written answer (**OC-4**). The three-month figure described
+Model B's requirements.
+
+**So the branch that was blocked was not the branch the pilot needs.** That is the sentence to keep.
+The roadmap's branch 2 was sequenced behind a number that belonged to branch 3, and no reading of
+either branch's contents would have revealed it — only asking what the estimate was *about*.
+
+### What is still not confirmed
+
+**Everything above comes from search, not from Registrų centras.** The figures are consistent and
+specific, which is not the same as sourced. They are recorded as the Founder's finding of
+2026-09-09, and one call replaces "found" with "confirmed".
+
+**The one figure that genuinely matters is how much capital must be paid before filing**, because
+the two rules as recorded can be read two ways and the readings differ by €750:
+
+- **25% of the nominal** — with authorised capital set at €1,000, that is **€250** before filing.
+- **Not less than the statutory minimum** — that is **€1,000** before filing, and the 25% relief
+  only begins to mean anything above €4,000 of nominal, where 25% first exceeds the minimum.
+
+Both readings are consistent with the two sentences as written; they cannot both be right. **This
+is a question with a numeric answer, which makes it a good one to put to the registrar** — along
+with whether the €14.02 covers everything or is one line of several.
+
+### The three sub-questions this did not touch
+
+Sub-question 1 is answered. Sub-question 4 is **OC-4**. Sub-questions 2 and 3 are untouched by any
+of the above, and one of them was described in this very row as *"usually the longest step"*:
+
+- **Opening a bank account for the new company.** Not measured. Sensitive to the founder's
+  residency, and the company's capital has to be paid into it, so it sits *between* registration
+  and everything else.
+- **Stripe accepting a live account on a Lithuanian legal entity.** Not measured, and it is a
+  question for Stripe rather than the registrar. The pilot takes real card payments, so this is on
+  the critical path, not beside it.
+
+**Neither is a reason to doubt the finding**, and both are reasons not to convert "one working day"
+into "the pilot is one working day away". The registration has stopped being the long pole. Writing
+and publishing the texts is now the long pole, and these two are unmeasured.
 
 ---
 
