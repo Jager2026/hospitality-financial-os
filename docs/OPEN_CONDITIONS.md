@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.2.0
+version: 1.3.0
 status: Active
 classification: Critical
 owner: Founder
@@ -154,24 +154,6 @@ pilot restaurant arrives is the day staging stops being premature.
 
 ---
 
-## OC-3 — `browser-e2e` is not a required status check on `main`
-
-| | |
-|---|---|
-| **Status** | Open. |
-| **Open since** | 2026-09-05 (ADR-073's option A′ landed in #166; the branch-protection step was deliberately left as the last step, to be done by hand) |
-| **What closes it** | Settings → Branches → the `main` rule → *Require status checks to pass before merging* → add `browser-e2e` → Save. |
-| **What it gates** | Nothing is blocked. The browser suite runs and reports on every pull request, and its result is **advisory**: a red browser run does not prevent a merge. |
-| **Owner** | Founder — this cannot be done from the CLI (the branch-protection API call is refused in this environment). |
-
-ADR-073 exists because a check that does not run reports nothing, and nothing reads as green. The
-workflow was reshaped so that `browser-e2e` always reports — skipped or otherwise — precisely so it
-*could* be made required without permanently blocking documentation-only pull requests. **The
-mechanism has been ready since #166; the click has not happened.** It has been raised in five
-consecutive reports, which is itself the argument for a register rather than a repeated paragraph.
-
----
-
 ## OC-4 — Two regulator requests are outstanding
 
 | | |
@@ -228,4 +210,5 @@ would make the file look like it has never been wrong.
 
 | Condition | Opened | Closed | How it ended |
 |---|---|---|---|
+| **OC-3** — `browser-e2e` was not a required status check on `main` | 2026-09-05 (the mechanism landed in #166; the branch-protection click was deliberately left as the last step) | **2026-09-09** (Founder, in Settings → Branches) | The rule now lists two required checks. Nothing about the repository changed on the day it closed, which is the point: this was a condition no code change could have signalled, and no code change did. **It was raised in five consecutive session reports before the register existed and once after** — the sixth mention is this row, and it is the last, which is the whole argument for a list over a repeated paragraph. What it bought: ADR-073's reshaping — `browser-e2e` reports `skipping` rather than not reporting — is what made it requirable without permanently blocking documentation-only pull requests, and that reshaping was worth nothing until the click happened. |
 | Stripe integration non-functional against `invalid_v2_key` | 2026-08-24 (written) | **2026-08-30** (key replaced in Railway) | A `STRIPE_SECRET_KEY` truncated by one character (ADR-038). **Nothing re-read the two documents asserting it**, so the claim stood in the present tense for fourteen days and was repeated as current in a pull-request report. Closed by execution on 2026-09-07: `POST /restaurants` returns 201 with a real connected account. This is the incident that produced ADR-078 and this file. |
