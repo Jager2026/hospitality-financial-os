@@ -37,7 +37,7 @@
   },
   "pnpm": {
     "overrides": {
-      "multer": "^2.2.0",
+      "multer": "^2.3.0",
       "lodash": "^4.18.0",
       "postcss": "^8.5.18",
       "body-parser": "^1.20.6",
