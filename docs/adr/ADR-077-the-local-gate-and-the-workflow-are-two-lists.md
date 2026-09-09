@@ -1,6 +1,6 @@
 ---
 title: ADR-077 — The local gate and the workflow are two lists, and nothing makes them agree
-version: 1.1.0
+version: 1.2.0
 status: Proposed
 classification: Critical
 owner: Founder
@@ -204,9 +204,30 @@ says it is *"wider than CI in one direction, on purpose: uncommitted work counts
 width is the entire reason to run the gate before committing rather than letting CI decide. The bug
 disables precisely that one advantage, and it does so silently, in the direction of skipping.
 
-**Not fixed here, on instruction — this task was to measure.** It is one line
-(`r.stdout` for the porcelain call, or slicing before trimming). Recorded so the fix is a decision
-rather than a discovery, and so that nobody re-derives the measurement.
+**Not fixed in that pull request, on instruction — that task was to measure.** Recorded so the fix
+would be a decision rather than a discovery, and so that nobody re-derives the measurement.
+
+**Closed on 2026-09-09.** `git()` no longer normalises what it returns; the porcelain read is
+parsed by `dirtyPaths()`, which takes a `cwd` so it can be exercised against a purpose-built
+repository — the seam where the defect lived, and the only place a test could have caught it. Three
+tests in `apps/backend/src/common/gate-porcelain.spec.ts` fail when the `trim()` alone is put back,
+naming the mangled path each time.
+
+**And the search for a third instance, which the Founder asked for, found one.**
+`scripts/preflight-deploy.js` had grown the identical pairing — a single trimming `git()` helper
+used on `git status --porcelain` — independently. There it was harmless, because that script only
+counts the lines and prints them, so the corruption cost one misaligned character in a failure
+message and never changed an answer. It is separated into `git()` and `gitRaw()` anyway: the two
+uses are one edit apart, and the next person to add `line.slice(3)` there would have inherited the
+bug rather than written it.
+
+**The correction worth keeping is about the cause, not the count.** This defect was not, as first
+believed, a second sighting of something already found and fixed elsewhere. The earlier incident
+(#83) was a different class in a different file — `err.stdout ?? "{}"` failing to treat the empty
+string as present — and it is already recorded in `CLAUDE.md`. What the two share is only the
+shape of the mistake: **a helper that normalises command output, used on output where the exact
+bytes are the meaning.** That is the thing to look for, and looking for it is what turned up the
+third caller.
 
 ### What this changes about the options above
 

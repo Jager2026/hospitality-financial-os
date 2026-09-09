@@ -26,11 +26,38 @@
 const { execFileSync } = require("node:child_process");
 
 /**
+ * Trimmed, for the single-value reads below — a branch name, a SHA, a count — where the trailing
+ * newline is noise and there is no leading whitespace to lose.
+ *
  * @param {...string} args
  * @returns {string}
  */
 function git(...args) {
-  return execFileSync("git", args, { encoding: "utf8" }).trim();
+  return gitRaw(...args).trim();
+}
+
+/**
+ * Untouched, for output where whitespace is part of the format.
+ *
+ * The distinction is made at the call site on purpose, because collapsing the two is a defect this
+ * repository has already shipped once. `scripts/gate.js` had a single trimming helper used for both
+ * kinds of read, and `git status --porcelain` is the second kind: its lines are `XY path`, and a
+ * file modified but not staged is ` M path`. Trimming the whole output removes the leading space of
+ * the FIRST line only, and the parser's `slice(3)` then ate that one path's first character — so
+ * `apps/frontend/x` was read as `pps/frontend/x` and the browser suite was skipped for a change
+ * that needed it (ADR-077's amendment).
+ *
+ * **Here the same pairing was harmless, and it is fixed anyway.** This file only counts the lines
+ * and prints them, so the corruption cost one misaligned character in a failure message and never
+ * changed the answer. That is the whole reason to fix it now rather than when it matters: the two
+ * uses are one edit apart, and the next person to add `line.slice(3)` here would inherit the bug
+ * rather than write it.
+ *
+ * @param {...string} args
+ * @returns {string}
+ */
+function gitRaw(...args) {
+  return execFileSync("git", args, { encoding: "utf8" });
 }
 
 const failures = [];
@@ -55,8 +82,8 @@ try {
 //    describes it.
 let dirty = "";
 try {
-  dirty = git("status", "--porcelain");
-  if (dirty) {
+  dirty = gitRaw("status", "--porcelain");
+  if (dirty.trim()) {
     const lines = dirty.split("\n").filter(Boolean);
     failures.push(
       `Working tree is not clean — ${lines.length} entr${lines.length === 1 ? "y" : "ies"}:\n` +

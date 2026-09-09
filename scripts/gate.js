@@ -114,11 +114,28 @@ function browserSuiteApplies() {
     return { run: true, why: "no change found against origin/main, which is unexpected here" };
   }
 
-  for (const prefix of prefixes) {
-    const hit = changed.find((f) => f.startsWith(prefix));
-    if (hit !== undefined) return { run: true, why: hit + " is under " + prefix };
-  }
+  const hit = firstUnderPrefix(changed, prefixes);
+  if (hit !== null) return { run: true, why: hit.file + " is under " + hit.prefix };
   return { run: false, why: "nothing changed under: " + prefixes.join(" ") };
+}
+
+/**
+ * The prefix test itself, separated so that a `false` can be shown to be honest.
+ *
+ * A negative answer here is indistinguishable, from the outside, from a negative answer produced by
+ * a mangled path — which is exactly what happened when `apps/frontend/x` was being read as
+ * `pps/frontend/x`. Splitting it out lets a test assert the decision over paths it has verified
+ * character for character, rather than over whatever the parser happened to produce.
+ *
+ * @param {string[]} changed @param {string[]} prefixes
+ * @returns {{ file: string, prefix: string } | null}
+ */
+function firstUnderPrefix(changed, prefixes) {
+  for (const prefix of prefixes) {
+    const file = changed.find((f) => f.startsWith(prefix));
+    if (file !== undefined) return { file, prefix };
+  }
+  return null;
 }
 
 /** @returns {string[] | null} the PATHS list from e2e.yml's decide step, or null if unreadable */
@@ -138,25 +155,62 @@ function e2ePathPrefixes() {
 function changedFiles() {
   const diff = git(["diff", "--name-only", "origin/main...HEAD"]);
   if (diff === null) return null;
-  const dirty = git(["status", "--porcelain"]);
+  const dirty = dirtyPaths();
   if (dirty === null) return null;
 
-  const names = diff.split("\n");
-  // `XY path`, and for a rename `XY old -> new`. The destination is the file that exists now.
-  for (const line of dirty.split("\n")) {
-    const path = line.slice(3).trim();
-    if (path === "") continue;
-    const arrow = path.lastIndexOf(" -> ");
-    names.push(arrow === -1 ? path : path.slice(arrow + 4));
-  }
-  return names.map((n) => n.replace(/^"|"$/g, "").trim()).filter(Boolean);
+  const names = diff.split("\n").concat(dirty);
+  return names.map((n) => n.replace(/^"|"$/g, "")).filter(Boolean);
 }
 
-/** @param {string[]} args @returns {string | null} */
-function git(args) {
-  const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
+/**
+ * The paths `git status --porcelain` reports, read as the fixed-width format it actually is.
+ *
+ * **In this format the leading whitespace is DATA.** Each line is `XY path`: `X` is the index
+ * status and `Y` the worktree status, and a file modified but not staged is ` M path` — a leading
+ * SPACE. That is why this must not be handed output that has been tidied: `String.trim()` removes
+ * the leading space of the FIRST line only, after which `slice(3)` eats the first character of
+ * that one path.
+ *
+ * It is not hypothetical and it was not cosmetic. Measured on 2026-09-09 (ADR-077's amendment):
+ * an unstaged edit to `apps/frontend/scripts/check-public-env.mjs`, alphabetically first among the
+ * changed paths, was read as `pps/frontend/...`, and `browserSuiteApplies()` answered *"nothing
+ * changed under: apps/frontend/ …"*. The browser suite was skipped for a change that requires it —
+ * silently, and in the direction of running less.
+ *
+ * **The fix is at the source rather than at this call site**: `git()` no longer normalises what it
+ * returns, because a helper that tidies output is a hazard wherever whitespace carries meaning,
+ * and `scripts/preflight-deploy.js` had already grown the same pairing on the same command.
+ *
+ * @param {string} [cwd] the repository to read; the parameter exists so this can be exercised
+ *   against a purpose-built repository in a test, which is the only way to cover the seam where
+ *   the defect actually lived — a parser fed hand-written strings would have passed throughout.
+ * @returns {string[] | null}
+ */
+function dirtyPaths(cwd = ROOT) {
+  const out = git(["status", "--porcelain"], cwd);
+  if (out === null) return null;
+
+  const paths = [];
+  for (const line of out.split("\n")) {
+    if (line === "") continue;
+    // `XY path`, and for a rename `XY old -> new`. The destination is the file that exists now.
+    const path = line.slice(3);
+    if (path === "") continue;
+    const arrow = path.lastIndexOf(" -> ");
+    paths.push(arrow === -1 ? path : path.slice(arrow + 4));
+  }
+  return paths;
+}
+
+/**
+ * Raw stdout, deliberately — see `dirtyPaths`. Callers that want it tidied say so themselves.
+ *
+ * @param {string[]} args @param {string} [cwd] @returns {string | null}
+ */
+function git(args, cwd = ROOT) {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
   if (r.status !== 0 || typeof r.stdout !== "string") return null;
-  return r.stdout.trim();
+  return r.stdout;
 }
 
 /** @param {string} text */
@@ -214,4 +268,11 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { STEPS, browserSuiteApplies, e2ePathPrefixes, changedFiles };
+module.exports = {
+  STEPS,
+  browserSuiteApplies,
+  e2ePathPrefixes,
+  changedFiles,
+  dirtyPaths,
+  firstUnderPrefix,
+};
