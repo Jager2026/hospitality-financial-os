@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.19.0
+version: 2.20.0
 status: Active
 classification: Critical
 priority: Highest
@@ -146,6 +146,14 @@ The generalisation worth carrying: **a search over source text can only ever pro
 Testing Review, specifically, for a CI failure that follows one already diagnosed this sprint: re-derive the cause from the real log or annotations for *this* failure, every time — never from resemblance to the prior incident. Three separate CI failures in one sprint each looked the same from the outside (a red check, a short runtime, a couple of annotations) and had three different root causes: an unawaited write in `AuditLogInterceptor` racing the HTTP response, a non-atomic Prisma `upsert()` racing across parallel test-file workers seeding the same `Currency`/`Role` rows, and a fully deterministic ESLint rule rejecting a Next.js-generated file. The first two were runtime races; the third wasn't a race at all. Assuming "this is probably the same class of bug as last time" would have produced the wrong fix for at least two of the three.
 
 Testing Review, one step before any of that — and it is a rule because it was broken on 2026-09-02, by the same session that had written the paragraph above: **the failure log is read before anything is re-run. The second run destroys the only evidence.** A gate on a documentation-only branch failed one backend test of 344; the log was deleted unread, and the suite was re-run to "check". Two green runs followed. They proved non-reproducibility, not absence — and by then vitest's own `results.json` had been overwritten as well, verified after the fact. The failure is recorded as unreproduced, cause unknown, and it stays open, because "ran twice, green" is not a diagnosis. This is the same class as ADR-058's attribution loss, where two changes in one commit made it impossible to say which one closed the door: **a cause is isolable exactly once.** A re-run, like a second change, is not neutral — it overwrites the state in which the cause could still be seen. So the order is fixed: capture the log to a file that nothing else writes to, read it, name the test and the assertion, and only then decide whether a re-run has anything to tell you.
+
+Testing Review, and the same class one step further out — **a status check belongs to a commit, not to a pull request.** "Are the checks green?" is not a question about a branch or a PR number; it is a question about a specific SHA, and the answer is only usable when the SHA it belongs to is the one you are about to act on. Waiting until nothing is pending and then reading the result answers a different question, because a PR whose newest push has produced no run yet shows the **previous** commit's checks — all complete, all green, nothing pending, and about code that is no longer there.
+
+This has a name in this codebase already: it is ADR-073's finding — *a check that did not run reports nothing, and nothing reads as green* — arriving through the observer rather than through the workflow. The workflow-side hole was closed by making `browser-e2e` always report; this one is not closable that way, because the missing run is not a skipped job, it is the absence of a job.
+
+It was measured on 2026-09-08. A commit was pushed to a branch whose pull request had already been merged; the push succeeded, the branch moved, and **no run was created at all** — a closed PR raises no `pull_request` event. A wait-loop polling for "no pending checks" reported green immediately, from the run belonging to the previous commit. The fix that landed never reached `main` and was never verified by anything.
+
+So the rule is: **compare the SHA the checks belong to against the SHA you intend to merge, and treat "no run exists for this SHA" as a distinct answer from "the checks passed"** — it usually means the event never fired, which is worth knowing on its own. Neither `gh pr checks` nor a green tick on the page distinguishes the two.
 
 ---
 

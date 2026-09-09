@@ -1,6 +1,6 @@
 ---
 title: ADR-077 — The local gate and the workflow are two lists, and nothing makes them agree
-version: 1.0.0
+version: 1.1.0
 status: Proposed
 classification: Critical
 owner: Founder
@@ -112,3 +112,110 @@ and the one to reach for if per-step reporting ever stops mattering.
 **Trigger, if nothing is chosen now: the next step added to `ci.yml`.** That is the moment the two
 lists can first disagree, and the moment somebody is already editing the file that would make them
 agree.
+
+---
+
+## Amendment, 2026-09-09 — the lists can be identical and still disagree
+
+**This document framed the risk as two lists that can drift apart. On 2026-09-09 the gate and the
+workflow disagreed about whether the browser suite applied while their lists were byte-identical** —
+the gate reads `PATHS` straight out of `e2e.yml`, which is exactly the defence Option 2 was meant to
+provide, and it held. What differed was not the list. It was **the base each side diffed against.**
+
+Recorded here rather than as a new ADR because it is the same decision's blind spot: a mechanism
+that makes the two *lists* agree does not make the two *answers* agree.
+
+### The measurement
+
+Pull request #188, run 34357052701. The gate reported the browser suite **skipped**; CI **ran** it.
+
+Both sides compute the same thing — `git diff --name-only <base>...HEAD`, a three-dot diff anchored
+at the merge base — and both then test each path against the same four prefixes. The base was
+identified by reproducing CI's own file list exactly:
+
+| base | files in the diff | `apps/frontend/` among them | verdict |
+|---|---|---|---|
+| `d5eeeb6` — `main` **before** #187 merged | 15 | yes (2) | matches CI's printed list exactly |
+| `e5bb555` — `main` **after** #187 merged | 5 | no | matches the gate's answer |
+
+So the runner's `origin/main` was **one merge behind the real `main`**, roughly fifteen hours after
+that merge landed, and it pulled two already-merged `apps/frontend/` files into the diff. CI ran the
+suite over work that had already been verified on its own pull request.
+
+### The direction that would matter, and why it cannot come from the base
+
+The harmless direction is the one observed: a stale base makes the changed set **larger**, so a side
+runs a suite it did not need to. The question worth answering is the opposite one — **can a base
+difference make the gate skip a change CI would catch?**
+
+**No, and this is a property of the three-dot diff rather than a fact about today's commits.** Both
+sides anchor at `merge-base(base, HEAD)`, which is by construction an ancestor of `HEAD`. Every file
+the branch's own commits touch is therefore in *every* such diff, whichever ancestor is chosen;
+moving the base can only add or remove **other** commits' files. Measured rather than reasoned: a
+throwaway branch whose single commit edits one file under `apps/frontend/`, diffed against five
+different bases — the fork point, an ancestor of it, and three later `main`s:
+
+```
+base c5581d9 (the fork point)        -> 1 file under apps/frontend/
+base c684118 (older than the fork)   -> 7
+base d5eeeb6                         -> 1
+base e5bb555                         -> 1
+base 0dbb4e0                         -> 1
+```
+
+Never zero. **A base difference produces false positives only.**
+
+### But the dangerous direction does exist — from somewhere else entirely
+
+Looking for it turned it up, and it is not in the base or in the list. It is in
+`scripts/gate.js`'s own `git()` helper:
+
+```js
+return r.stdout.trim();          // strips the leading space of the FIRST porcelain line
+...
+const path = line.slice(3).trim(); // then slices 3 characters off a line that is now 1 shorter
+```
+
+`git status --porcelain` prints `XY path`, and a file modified but not staged has a **leading
+space** — ` M apps/frontend/x.tsx`. `trim()` removes it from the first line of the output, and the
+subsequent `slice(3)` therefore eats the first character of that path. Measured on the real exported
+function, not a copy (`gate.js` exports `browserSuiteApplies` and `changedFiles` for exactly this
+kind of examination):
+
+```
+git status --porcelain          gate's changedFiles()
+ M package.json             ->  ackage.json
+ M apps/frontend/…mjs       ->  pps/frontend/scripts/check-public-env.mjs
+                                browserSuiteApplies() -> { run: false,
+                                  why: "nothing changed under: apps/frontend/ …" }
+```
+
+With any path sorting earlier made dirty as well, the frontend file moves off line one and is read
+correctly — `{ run: true, why: "apps/frontend/scripts/check-public-env.mjs is under
+apps/frontend/" }` — which pins the fault to the **first line only**.
+
+**The conditions are narrow and ordinary:** the change is uncommitted and unstaged (a staged file
+prints `M ` with no leading space, an untracked one `??`), and its path sorts first among the
+changed paths. All four `PATHS` prefixes are destroyed by losing one character, so any of them can
+be missed this way.
+
+**What makes it worse than an ordinary off-by-one is where it lands.** The gate's own docstring
+says it is *"wider than CI in one direction, on purpose: uncommitted work counts too"* — that
+width is the entire reason to run the gate before committing rather than letting CI decide. The bug
+disables precisely that one advantage, and it does so silently, in the direction of skipping.
+
+**Not fixed here, on instruction — this task was to measure.** It is one line
+(`r.stdout` for the porcelain call, or slicing before trimming). Recorded so the fix is a decision
+rather than a discovery, and so that nobody re-derives the measurement.
+
+### What this changes about the options above
+
+Nothing about their prices, and one thing about their claims. **Option 2 — "the gate derives itself
+from the workflow" — was credited with making drift impossible.** It already does that for the
+`PATHS` list, and today's divergence happened anyway. A shared list is necessary and not sufficient;
+two implementations of the same rule can agree on every input and still be handed different inputs.
+
+**The trigger stays as written — the next step added to `ci.yml`** — and gains a second: **the first
+time the gate and CI disagree about whether a conditional check applies.** That has now happened
+once, harmlessly, and it is the cheapest moment to look, because the disagreement is visible in two
+logs side by side.
