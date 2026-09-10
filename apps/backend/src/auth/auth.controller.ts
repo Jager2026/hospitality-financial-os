@@ -1,11 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
-import {
-  CURRENT_PLATFORM_TERMS_VERSION,
-  assertPlatformTermsPublished,
-} from "../common/agreements/agreement-versions";
 import { AuditEntity } from "../common/decorators/audit-entity.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthService } from "./auth.service";
@@ -20,27 +15,28 @@ import { JwtAuthGuard, type AuthenticatedUser } from "./guards/jwt-auth.guard";
 @Controller("auth")
 @Throttle({ default: { limit: 10, ttl: 60_000 } })
 export class AuthController {
-  constructor(
-    private readonly authService: AuthService,
-    private readonly config: ConfigService,
-  ) {}
+  constructor(private readonly authService: AuthService) {}
 
   @Post("register")
   @AuditEntity("Authentication")
   register(@Body(new ZodValidationPipe(registerSchema)) dto: RegisterDto, @Req() req: Request) {
-    // ADR-055. The pre-pilot gate, on the route rather than on the screen.
+    // ADR-080. The pre-pilot gate is no longer called here — it lives at `createUserAccount`, the
+    // one sanctioned way to create a `User`, and this route reaches it through `AuthService`.
     //
-    // It was written as "the registration screen must not be shown to a real restaurant", and the
-    // route kept accepting requests regardless — so a real acceptance row naming a document that
-    // does not exist reached production anyway. A gate that protects a screen protects nothing.
+    // ADR-055 put it here for a stated reason: "this is a statement about whether the route is open
+    // at all, not a rule about registering", and keeping `ConfigService` out of a service
+    // constructor that eleven tests build by hand. That reasoning was right about the route and
+    // wrong about the class of defect — `POST /memberships/invitations/accept` also creates a
+    // `User`, consulted nothing, and was found only by reading. A gate on one route protects
+    // nothing if a second route reaches the same outcome, which is ADR-055's own sentence one level
+    // out from where it was written.
     //
-    // Here rather than inside `AuthService.register`, deliberately: this is a statement about
-    // whether the route is open at all, not a rule about registering, and putting it here keeps
-    // `ConfigService` out of a constructor that eleven tests build by hand.
-    assertPlatformTermsPublished(
-      this.config.getOrThrow<string>("NODE_ENV"),
-      CURRENT_PLATFORM_TERMS_VERSION,
-    );
+    // MOVED rather than duplicated, on the Founder's decision. Two copies of one rule is how the
+    // two drift, and the copy that stays is the one a third path cannot avoid.
+    //
+    // What this costs, stated because it is a real behaviour change: the refusal now happens after
+    // the password is hashed and the breach check has run, rather than before any work. Same 503,
+    // same `REGISTRATION_UNAVAILABLE`, a little wasted effort on a request that is refused anyway.
 
     // ADR-049: the acceptance record carries where it came from, so the same context the refresh
     // route already collects is passed here too.
