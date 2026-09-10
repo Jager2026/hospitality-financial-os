@@ -217,6 +217,8 @@ describe("AuthService — register", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    // The ADR-080 gate test stubs NODE_ENV; leaking it would change what every later case runs in.
+    vi.unstubAllEnvs();
   });
 
   it("hashes the password before storing it and never persists the plaintext", async () => {
@@ -375,5 +377,47 @@ describe("AuthService — register", () => {
     expect(caught).toBeInstanceOf(AppException);
     expect((caught as AppException).code).toBe("PASSWORD_BREACHED");
     expect(create).not.toHaveBeenCalled();
+  });
+
+  // ─── The gate still refuses registration, now from a different place (ADR-080) ───────────────
+  //
+  // `assertPlatformTermsPublished` used to be called by `AuthController.register`, before this
+  // service was reached at all. ADR-080 MOVED it to `createUserAccount`, so the controller no
+  // longer carries it — which makes this test the one that would notice if the move had quietly
+  // dropped the rule for the route it was originally written for.
+  //
+  // The refusal now happens later, after hashing and the breach check. Same 503, same code.
+  it("refuses to register in production while the terms are unpublished — the gate moved, not the rule", async () => {
+    expect(CURRENT_PLATFORM_TERMS_VERSION).toBe(PLATFORM_TERMS_PLACEHOLDER);
+    vi.stubEnv("NODE_ENV", "production");
+
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const create = vi.fn();
+    const createAcceptance = vi.fn();
+    const tx = { user: { create }, agreementAcceptance: { create: createAcceptance } };
+    const fakePrisma = {
+      user: { findUnique, create },
+      membership: { findMany: vi.fn().mockResolvedValue([]) },
+      $transaction: vi.fn().mockImplementation((fn: (client: typeof tx) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+    const fakeTokenService = { issueTokenPair: vi.fn() } as unknown as TokenService;
+
+    const authService = new AuthService(fakePrisma, fakeTokenService);
+
+    await expect(
+      authService.register({
+        email: "would-have-registered@example.com",
+        password: "SuperSecret123",
+        displayName: "Refused",
+        locale: "en",
+        acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
+      }),
+    ).rejects.toMatchObject({ code: "REGISTRATION_UNAVAILABLE" });
+
+    // Asserted on the writes, not only the thrown code: a refusal that still created the User —
+    // or its acceptance row naming an unpublished document — is the exact thing ADR-055 exists to
+    // prevent, and would be invisible from the status alone.
+    expect(create).not.toHaveBeenCalled();
+    expect(createAcceptance).not.toHaveBeenCalled();
   });
 });

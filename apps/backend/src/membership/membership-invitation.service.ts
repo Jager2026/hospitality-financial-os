@@ -9,6 +9,7 @@ import { AppException } from "../common/exceptions/app.exception";
 import { EmailOutboxService } from "../email/email-outbox.service";
 import { DEFAULT_EMAIL_LOCALE, invitationEmail } from "../email/email-copy";
 import { PrismaService } from "../prisma/prisma.service";
+import { createUserAccount } from "../user/create-user-account";
 import type { AcceptInvitationDto } from "./dto/accept-invitation.schema";
 import type { InviteMembershipDto } from "./dto/invite-membership.schema";
 import {
@@ -262,13 +263,11 @@ export class MembershipInvitationService {
     return await this.prisma.$transaction(async (tx) => {
       const user =
         existing ??
-        (await tx.user.create({
-          data: {
-            email: dto.email,
-            displayName: dto.displayName as string,
-            passwordHash: passwordHash as string,
-            locale: "en",
-          },
+        (await createUserAccount(tx, {
+          email: dto.email,
+          displayName: dto.displayName as string,
+          passwordHash: passwordHash as string,
+          locale: "en",
         }));
 
       if (acceptedVersion !== null) {

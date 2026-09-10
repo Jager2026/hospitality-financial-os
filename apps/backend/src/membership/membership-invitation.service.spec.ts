@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmailOutboxService } from "../email/email-outbox.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { CURRENT_PLATFORM_TERMS_VERSION } from "../common/agreements/agreement-versions";
+import {
+  CURRENT_PLATFORM_TERMS_VERSION,
+  PLATFORM_TERMS_PLACEHOLDER,
+} from "../common/agreements/agreement-versions";
 import { readInvitationEmail } from "../../test/fixtures/invitation-email";
 import { MembershipInvitationService } from "./membership-invitation.service";
 
@@ -58,6 +61,9 @@ describe("MembershipInvitationService (real database)", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    // NODE_ENV is stubbed by the ADR-080 gate tests below; leaking it into the next case would
+    // silently change what every other test in this file is exercising.
+    vi.unstubAllEnvs();
   });
 
   beforeAll(async () => {
@@ -341,5 +347,59 @@ describe("MembershipInvitationService (real database)", () => {
     ).rejects.toMatchObject({ code: "TERMS_VERSION_MISMATCH" });
 
     expect(await prisma.user.findUnique({ where: { email } })).toBeNull();
+  });
+
+  // ─── The gate, reached through this route (ADR-080) ──────────────────────────────────────────
+  //
+  // The headline falsification of ADR-080's option C. Before that decision this path created an
+  // account while the pre-pilot gate — which refuses `POST /auth/register` in production while the
+  // platform terms are unpublished — knew nothing about it. These two tests are what would have
+  // failed then and what fails again if the check ever drifts back onto the routes.
+
+  it("refuses to create an account in production while the terms are unpublished", async () => {
+    expect(CURRENT_PLATFORM_TERMS_VERSION).toBe(PLATFORM_TERMS_PLACEHOLDER);
+    vi.stubEnv("NODE_ENV", "production");
+    const email = `gated-${randomUUID()}@example.com`;
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+    await expect(
+      service.accept({
+        email,
+        token,
+        password: "WouldHaveWorked!2026",
+        displayName: "Gated Invitee",
+        acceptedTermsVersion: CURRENT_PLATFORM_TERMS_VERSION,
+      }),
+    ).rejects.toMatchObject({ code: "REGISTRATION_UNAVAILABLE" });
+
+    // Nothing created, and the invitation still usable once the terms exist.
+    expect(await prisma.user.findUnique({ where: { email } })).toBeNull();
+    const invitation = await prisma.membershipInvitation.findFirst({ where: { email } });
+    expect(
+      invitation?.acceptedAt,
+      "a refused acceptance must not consume the invitation",
+    ).toBeNull();
+  });
+
+  it("still accepts in production for someone who ALREADY has an account — nothing is created", async () => {
+    // The property that falls out of binding the check to creation rather than to the route, and
+    // the reason it is better than gating the route: this person is not being given an account and
+    // no acceptance is recorded for them, so there is no false record to prevent. Option A would
+    // have had to special-case exactly this.
+    vi.stubEnv("NODE_ENV", "production");
+    const email = `already-${randomUUID()}@example.com`;
+    await prisma.user.create({
+      data: {
+        email,
+        displayName: "Already Has One",
+        passwordHash: "not-a-real-hash",
+        locale: "en",
+      },
+    });
+    const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+    const membership = await service.accept({ email, token });
+
+    expect(membership.organizationId).toBe(organizationId);
   });
 });

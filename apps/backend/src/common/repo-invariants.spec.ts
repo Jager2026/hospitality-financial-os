@@ -172,6 +172,83 @@ describe("repository invariants", () => {
     ).toEqual([]);
   });
 
+  /**
+   * A `User` is created in exactly one place, so the gate that guards creation cannot be walked
+   * past (ADR-080).
+   *
+   * **Why this invariant is the mechanism rather than a runtime interceptor.** Option C was chosen
+   * because it binds the check to the ACT of creating an account rather than to a list of routes —
+   * a remedy picked by the property of the defect. The obvious way to implement that is a Prisma
+   * `$extends` query interceptor on `user.create`, and it was measured before being believed:
+   *
+   *   - it DOES fire for `tx.user.create` inside an interactive transaction (2 of 2, which is both
+   *     of the real call sites), so the transaction was never the obstacle;
+   *   - and **a nested write escapes it entirely** — `membership.create({ data: { user: { create
+   *     } } })` produced a `User` while the interceptor counted zero.
+   *
+   * So the data layer offers no point through which every creation passes, and a gate installed
+   * there would have had a documented way around it. What is enforceable is that this repository
+   * contains one way to create a `User`; this test is what makes that true tomorrow as well as
+   * today. Both forms are refused, because the nested one is exactly the form the interceptor
+   * could not see.
+   *
+   * **No allowlist, by construction.** The only exempt file is the one that implements the rule,
+   * and `.spec.ts` files are excluded because a fixture `User` is not a product path to an account
+   * — the same shape as the reachability invariant above, and not a list anybody can add to in
+   * order to go green.
+   *
+   * **Comments are stripped before matching**, and that is not fastidiousness: this codebase has
+   * twice shipped a checker that punished prose for quoting the rule it enforces (#163's first
+   * `@ts-check` matcher, #184's seeded-Role matcher). The file that implements this rule discusses
+   * `user.create` at length in its own docstring, so a matcher reading raw source would flag its
+   * own subject.
+   */
+  it("creates a User in exactly one place, so the gate on creation cannot be walked past", () => {
+    const SRC = join(REPO_ROOT, "apps", "backend", "src");
+    const SANCTIONED = join(SRC, "user", "create-user-account.ts");
+
+    function walk(dir: string): string[] {
+      return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return walk(full);
+        if (!entry.name.endsWith(".ts") || entry.name.endsWith(".spec.ts")) return [];
+        return [full];
+      });
+    }
+
+    /** Block and line comments removed, so prose about the rule is not mistaken for the rule. */
+    const code = (text: string): string =>
+      text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+
+    // Two forms, because they are two different ways to reach the same row and the second is the
+    // one a runtime interceptor cannot see.
+    const DIRECT = /\buser\s*\.\s*create\s*\(/;
+    const NESTED = /\buser\s*:\s*\{\s*create\b/;
+
+    const offenders = walk(SRC)
+      .filter((file) => file !== SANCTIONED)
+      .filter((file) => {
+        const source = code(readFileSync(file, "utf8"));
+        return DIRECT.test(source) || NESTED.test(source);
+      })
+      .map((file) => relative(REPO_ROOT, file).split(/[\\/]/).join("/"));
+
+    expect(
+      offenders,
+      `A User must be created through createUserAccount() in apps/backend/src/user/, which is ` +
+        `where the pre-pilot gate lives (ADR-080). Creating one directly — or nested inside ` +
+        `another model's create — walks past a check nobody would notice was missing, which is ` +
+        `the defect ADR-080 exists for. Offending files:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+
+    // NON-VACUITY. A walk that found nothing, or a rename of the sanctioned file, would leave this
+    // passing while checking nothing at all — the shape this suite has been bitten by twice.
+    expect(
+      DIRECT.test(code(readFileSync(SANCTIONED, "utf8"))),
+      "create-user-account.ts must itself contain the creation this rule is about",
+    ).toBe(true);
+  });
+
   // The fixture rule, as a check rather than a habit.
   //
   // What is forbidden is narrower than "a literal", and the narrowness is the point. A synthetic

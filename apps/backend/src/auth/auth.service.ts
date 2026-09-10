@@ -3,6 +3,7 @@ import { writeAuditLog } from "../common/audit/audit-metadata";
 import { CURRENT_PLATFORM_TERMS_VERSION } from "../common/agreements/agreement-versions";
 import type { User } from "@prisma/client";
 import { AppException } from "../common/exceptions/app.exception";
+import { createUserAccount } from "../user/create-user-account";
 import { PrismaService } from "../prisma/prisma.service";
 import { ACTIVE_MEMBERSHIP_WHERE, MEMBERSHIP_ROLE_INCLUDE } from "./active-memberships";
 import { isPasswordBreached } from "./hibp.util";
@@ -88,8 +89,11 @@ export class AuthService {
     // One transaction: a User that exists without its acceptance would be a person using the
     // platform with no record of having agreed to anything, which is the exact gap this closes.
     const user = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: { email: dto.email, displayName: dto.displayName, passwordHash, locale: dto.locale },
+      const created = await createUserAccount(tx, {
+        email: dto.email,
+        displayName: dto.displayName,
+        passwordHash,
+        locale: dto.locale,
       });
       await tx.agreementAcceptance.create({
         data: {
