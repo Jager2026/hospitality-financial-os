@@ -1,4 +1,10 @@
-import { apiGetAuthed, apiPost, apiPostAuthed, type ApiResult } from "../api/client";
+import {
+  apiGetAuthed,
+  apiPatchAuthed,
+  apiPost,
+  apiPostAuthed,
+  type ApiResult,
+} from "../api/client";
 import { clearSession, readSession, saveSession, type StoredSession } from "./session";
 
 /**
@@ -135,6 +141,39 @@ export async function authedPost<T>(path: string, body: unknown = {}): Promise<A
   }
 
   const second = await apiPostAuthed<T>(path, renewed.accessToken, body);
+  if (!second.ok && second.error.status === 401) {
+    clearSession();
+    return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
+  }
+  return second;
+}
+
+/**
+ * A PATCH that carries the session, with the same single renewal and replay as `authedGet`.
+ *
+ * **The replay question `authedPost` raises is answered differently here, and in this direction it
+ * is easier rather than harder.** A PATCH of venue settings sends the fields the person edited and
+ * sets them to the values they typed, so applying it twice leaves the row exactly as applying it
+ * once did. That is idempotent by the shape of the request rather than by a key — and it is a
+ * property of *this* endpoint, not of the verb. A future PATCH that increments something, or that
+ * appends, would need its caller to decide for itself, exactly as `authedPost`'s comment says.
+ */
+export async function authedPatch<T>(path: string, body: unknown = {}): Promise<ApiResult<T>> {
+  const session = readSession();
+  if (session === null) {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+
+  const first = await apiPatchAuthed<T>(path, session.accessToken, body);
+  if (first.ok || first.error.status !== 401) return first;
+
+  const renewed = await refreshOnce();
+  if (renewed === null) {
+    clearSession();
+    return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
+  }
+
+  const second = await apiPatchAuthed<T>(path, renewed.accessToken, body);
   if (!second.ok && second.error.status === 401) {
     clearSession();
     return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };

@@ -288,12 +288,30 @@ function Figures({
           arrives at the Dashboard wanting to add a waiter, so this is a signpost for the one
           moment somebody does — and the screen behind it is the only way a waiter gets an
           account at all. */}
+      {/* NOT prefetched, unlike the Transactions link above, and the reason is measured rather
+          than stylistic. Next prefetches every `Link` in the viewport, so each signpost added here
+          costs an RSC fetch on a screen most people open to read one figure and leave. Transactions
+          is the one people actually follow (it exists because a figure did not match); these two
+          are for the rare visit, and prefetching them competes with the navigation the Dashboard
+          is most often asked to perform. `browser-e2e` failed once on exactly that navigation
+          timing out — an assertion with a recorded history of the same failure BEFORE these links
+          existed, so this is not offered as the cause, only as this screen not adding to it. */}
       <Link
         href={`/restaurants/${restaurantId}/staff`}
         className="ml-4 inline-block text-small text-muted underline"
         data-testid="dashboard-staff-link"
+        prefetch={false}
       >
         {t("dashboard.seeStaff")}
+      </Link>
+
+      <Link
+        href={`/restaurants/${restaurantId}/settings`}
+        className="ml-4 inline-block text-small text-muted underline"
+        data-testid="dashboard-settings-link"
+        prefetch={false}
+      >
+        {t("dashboard.seeSettings")}
       </Link>
     </>
   );

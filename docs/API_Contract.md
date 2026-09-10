@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.24.0
+version: 2.25.0
 status: Active
 classification: Internal
 owner: Founder
@@ -151,7 +151,17 @@ GET /restaurants — scoped to every Restaurant the current user's Memberships g
 GET /restaurants/{id} — includes `onboardingStatus`, `cardPaymentsStatus`, `payoutsStatus`, `requirementsDue` so the frontend can surface outstanding Stripe requirements (ADR-009, ADR-014 — Accounts v2 capability-status strings, not v1 booleans).
 
 ## Update Restaurant
-PATCH /restaurants/{id}
+PATCH /restaurants/{id} — requires **`restaurant.edit`**, checked in `RestaurantService.update` rather than by a decorator. Measured against a running API on 2026-09-10 (Waiter **403**, Accountant **403**, Manager **200**, Owner **200**): a Manager can edit a venue's settings, which is worth stating because it is easy to assume otherwise.
+
+**Editable fields** — `createRestaurantSchema` minus `country` and `currency`, every one optional: `name`, `legalName`, `companyNumber`, `vatNumber`, `email`, `phone`, `address`, `timezone`, `defaultCustomerLocale`, `logoUrl`. `country`/`currency` are immutable once set (DATABASE.md Rules: changing the operating country means a new Stripe account, never an edit to this row).
+
+**Anything else is silently ignored, not refused, and that is the behaviour to know before building against this route.** The DTO is a plain `z.object`, which STRIPS unknown keys, so `PATCH { shiftAutoCloseMinutes: 240 }` answers **200** while the stored value stays **300** — measured. The same is true of `status` and of `tipPresets`. A client that offered those fields would report success and change nothing, which is why the settings screen shows the shift value read-only instead. **A value outside the database CHECK (`0..1439`) makes no difference either: the request never reaches the constraint, because the field never leaves the validation pipe.**
+
+**Two fields have somewhere else to go, and one has nowhere:**
+- **Tip presets** — `PATCH /restaurants/{id}/settings/tips` (below), a different route with a different permission (`tips.configure`).
+- **`shift_auto_close_minutes`** — no endpoint accepts it. It is set in the database and nowhere else (ADR-064 owns the value; the default `300` is a placeholder the Founder is to set).
+
+**Known defect, measured rather than inferred: `acceptedStripeAgreementVersion` is accepted by the schema and rejected by the database.** It is inherited from the create schema, is not a `Restaurant` column, and `update` passes the DTO straight to Prisma — so sending it returns **500 `UNKNOWN_ERROR`** (`PrismaClientValidationError: Unknown argument`). It is a create-time field that the update schema should not have carried; no client sends it today.
 
 ## Delete Restaurant
 DELETE /restaurants/{id} — **closes a venue** (ADR-054). Soft delete only: sets `deleted_at` and `status = INACTIVE`, and writes nothing else. Requires `restaurant.delete`.

@@ -54,6 +54,21 @@ export async function apiPostAuthed<T>(
   });
 }
 
+export async function apiPatchAuthed<T>(
+  path: string,
+  accessToken: string | null,
+  body: unknown,
+): Promise<ApiResult<T>> {
+  if (accessToken === null || accessToken === "") {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+  return await send<T>(path, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function apiGetAuthed<T>(
   path: string,
   accessToken: string | null,
