@@ -421,6 +421,58 @@ export const en = {
   "accept.error.tooManyAttempts": "Too many attempts. Wait a minute and try again.",
   "accept.error.unreachable": "Could not reach the server. Check your connection and try again.",
   "accept.error.generic": "The invitation could not be accepted. Please try again.",
+
+  // ── Venue settings (UX_MAP.md) ──────────────────────────────────────────────────────────────
+  "settings.title": "Venue settings",
+  "settings.loading": "Loading settings…",
+  "settings.error": "Could not load the settings. Please try again.",
+  "settings.forbidden":
+    "You can see these settings but not change them. Changing them needs the restaurant.edit permission, which an Owner or a Manager holds.",
+  "settings.section.identity": "The business",
+  "settings.section.contact": "Contact",
+  "settings.section.operating": "How the venue operates",
+  "settings.field.name": "Trading name",
+  "settings.hint.name": "What guests see.",
+  "settings.field.legalName": "Legal name",
+  "settings.field.companyNumber": "Company number",
+  "settings.field.vatNumber": "VAT number",
+  "settings.field.email": "Email",
+  "settings.field.phone": "Phone",
+  "settings.field.address": "Address",
+  "settings.field.timezone": "Time zone",
+  "settings.hint.timezone":
+    "Used to decide which business day a payment belongs to, and when an unclosed shift closes itself.",
+  "settings.field.locale": "Language shown to guests",
+  "settings.save": "Save changes",
+  "settings.saving": "Saving…",
+  "settings.saved": "Saved.",
+  "settings.error.save": "The changes could not be saved. Check the fields and try again.",
+  "settings.error.denied": "You do not have permission to change these settings.",
+  "settings.error.unreachable": "Could not reach the server. Check your connection and try again.",
+
+  // ── The shift safety net, worded as what it is ──────────────────────────────────────────────
+  //
+  // A shift lasts until the staff close it. This value is NOT "when the day ends" — it is the
+  // backstop for a shift nobody closed, and saying it the other way teaches an owner a model of
+  // the product that is wrong (ADR-064: the button is the main path, this is the net).
+  "settings.shift.heading": "If a shift is left open",
+  "settings.shift.explain":
+    "A shift lasts until someone closes it. This is only the backstop: if a shift is still open at this time, the system closes it so it cannot run forever.",
+  "settings.shift.value": "Closes itself at",
+  "settings.shift.notEditable":
+    "This cannot be changed here yet. The venue update endpoint has no field for it, so a value sent from this screen would be accepted and silently ignored — the setting lives in the database and is changed there.",
+  "settings.tips.heading": "Tip percentages offered to guests",
+  "settings.tips.explain":
+    "Suggestions shown to the guest, never a limit on what they may leave. Changing them needs the tips.configure permission, which is a different one from the rest of this screen.",
+  "settings.tips.field": "Percentages, separated by commas",
+  "settings.tips.save": "Save percentages",
+  "settings.tips.denied": "Changing these needs the tips.configure permission.",
+  "settings.tips.error.invalid":
+    "Enter whole percentages above zero, separated by commas — for example 10, 15, 20.",
+  "settings.tips.error.denied": "You do not have permission to change the tip percentages.",
+  "settings.tips.error.save": "The percentages could not be saved. Please try again.",
+
+  "dashboard.seeSettings": "Settings",
 } as const;
 
 export type MessageKey = keyof typeof en;

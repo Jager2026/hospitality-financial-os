@@ -295,6 +295,14 @@ function Figures({
       >
         {t("dashboard.seeStaff")}
       </Link>
+
+      <Link
+        href={`/restaurants/${restaurantId}/settings`}
+        className="ml-4 inline-block text-small text-muted underline"
+        data-testid="dashboard-settings-link"
+      >
+        {t("dashboard.seeSettings")}
+      </Link>
     </>
   );
 }
