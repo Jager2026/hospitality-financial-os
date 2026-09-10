@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.23.0
+version: 2.24.0
 status: Active
 classification: Internal
 owner: Founder
@@ -201,6 +201,12 @@ Requires: `membership.invite`
 
 ## Accept Invitation
 POST /memberships/invitations/accept — public, no `Authorization` header (the invitee may not have an account yet). Body: `email`, `token`, `password` and `displayName` (ADR-033, Sprint 13) — both required only if no `User` currently exists for `email` (ignored otherwise, since an existing User already has one). Looks up pending, non-expired `MembershipInvitation` rows by `email` and hash-verifies `token` against each candidate's `token_hash`, the same shape as a login password check (ADR-020) — never a lookup keyed on the token itself. On success: creates `User` (only if none exists for `email`) and `Membership` together, atomically, and sets `accepted_at`. Also rejects (ADR-032, Sprint 13) a password found in a known breach corpus (`PASSWORD_BREACHED`) whenever a new `User` is actually being created here.
+
+`acceptedTermsVersion` (ADR-049, Sprint 16) — **required exactly when this request creates the `User`**, and ignored otherwise, on the same rule as `password` and `displayName`: somebody who already has an account accepted the terms when they registered, and a second row would claim they agreed twice on a day nobody asked. Taken from `GET /agreements/current`, never from a constant in the client, and compared against the server's own value — a mismatch is **409 `TERMS_VERSION_MISMATCH`** and nothing is created. Its absence, when a `User` is being created, is a **400 `VALIDATION_ERROR`**.
+
+**Why this field exists here at all.** Accepting an invitation is the second path that creates a `User`, and until Sprint 16 it wrote no `agreement_acceptance` row while registration had written one since ADR-049 — so everybody who joined through an invitation used the platform with no record of having agreed to anything. It could not be repaired by a migration: a row written later asserts that a person agreed at a moment when nobody asked them. The `User`, its acceptance, the `Membership` and the invitation's `accepted_at` are now one transaction — previously the `User` was created outside it, so a failure could leave an account with no Membership and no way back in, since the retry takes the "already has an account" branch and never asks for a password again.
+
+**The gate that applies to registration does NOT apply here** — see ADR-080. `POST /auth/register` refuses in production while the platform terms are unpublished (ADR-055, `REGISTRATION_UNAVAILABLE`, 503); this route consults nothing, so it is a second path to creating a `User` that the gate does not cover. Recorded rather than closed, and reachable today only through an invitation, which requires an account that the gate itself governs.
 
 ## Membership List
 GET /memberships — **requires authentication only, and that is a decision rather than an oversight** (Founder, ADR-043's review). Returns every Membership reachable by the caller: colleagues at the restaurants they work at.

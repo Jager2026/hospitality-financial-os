@@ -283,6 +283,18 @@ function Figures({
       >
         {t("dashboard.seeTransactions")}
       </Link>
+
+      {/* Staff sits beside it rather than in a navigation bar, for the opposite reason: nobody
+          arrives at the Dashboard wanting to add a waiter, so this is a signpost for the one
+          moment somebody does — and the screen behind it is the only way a waiter gets an
+          account at all. */}
+      <Link
+        href={`/restaurants/${restaurantId}/staff`}
+        className="ml-4 inline-block text-small text-muted underline"
+        data-testid="dashboard-staff-link"
+      >
+        {t("dashboard.seeStaff")}
+      </Link>
     </>
   );
 }

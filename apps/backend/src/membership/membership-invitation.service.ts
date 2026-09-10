@@ -1,8 +1,10 @@
 import { Injectable } from "@nestjs/common";
 import type { Membership, MembershipInvitation } from "@prisma/client";
+import type { RequestContext } from "../auth/auth.service";
 import { isPasswordBreached } from "../auth/hibp.util";
 import { hashPassword } from "../auth/password.util";
 import { ConfigService } from "@nestjs/config";
+import { CURRENT_PLATFORM_TERMS_VERSION } from "../common/agreements/agreement-versions";
 import { AppException } from "../common/exceptions/app.exception";
 import { EmailOutboxService } from "../email/email-outbox.service";
 import { DEFAULT_EMAIL_LOCALE, invitationEmail } from "../email/email-copy";
@@ -157,7 +159,7 @@ export class MembershipInvitationService {
    * if none exists for this email) and Membership together, atomically. Does not issue tokens —
    * MASTERPLAN.md's own user journey has "Creates Password" and "Logs In" as separate steps; the
    * existing POST /auth/login is what proves the resulting account actually works. */
-  async accept(dto: AcceptInvitationDto): Promise<Membership> {
+  async accept(dto: AcceptInvitationDto, context?: RequestContext): Promise<Membership> {
     const invitation = await this.findMatchingInvitation(dto.email, dto.token);
 
     // ADR-044, defence in depth on a permission grant. invite() already rejects a platform-only
@@ -169,9 +171,27 @@ export class MembershipInvitationService {
       throw new AppException("VALIDATION_ERROR", "Invitation is no longer valid.", 400);
     }
 
-    let user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
 
-    if (!user) {
+    /**
+     * The consent this path used to skip (ADR-049).
+     *
+     * **Accepting an invitation is the SECOND way a `User` is created**, and until now it was the
+     * one that wrote no `AgreementAcceptance`. Registration has written one since ADR-049; this
+     * did not, so every person who joined through an invitation was using the platform with no
+     * record of having agreed to anything. `AuthService.register`'s own comment names that gap as
+     * the thing it closes — it was closed on one path and left open on the other.
+     *
+     * **It could not be repaired afterwards, and that is why it waited for this screen rather than
+     * for a migration.** A row written later asserts that a person agreed at a moment when nobody
+     * asked them. The trigger recorded for it was "before the first venue onboards staff", and the
+     * acceptance screen is that moment: before it existed there was nowhere to put the question.
+     *
+     * Required only when this request creates the User. Somebody who already has an account
+     * accepted the terms when they registered, and a second row would claim they agreed twice.
+     */
+    let acceptedVersion: string | null = null;
+    if (!existing) {
       if (!dto.password) {
         throw new AppException(
           "VALIDATION_ERROR",
@@ -186,6 +206,13 @@ export class MembershipInvitationService {
           400,
         );
       }
+      if (!dto.acceptedTermsVersion) {
+        throw new AppException(
+          "VALIDATION_ERROR",
+          "Accepting the terms is required to create an account from this invitation.",
+          400,
+        );
+      }
       if (await isPasswordBreached(dto.password)) {
         throw new AppException(
           "PASSWORD_BREACHED",
@@ -193,14 +220,70 @@ export class MembershipInvitationService {
           400,
         );
       }
-      const passwordHash = await hashPassword(dto.password);
-      user = await this.prisma.user.create({
-        data: { email: dto.email, displayName: dto.displayName, passwordHash, locale: "en" },
-      });
+      // Checked against the server's own value rather than trusted, exactly as registration does:
+      // a client could otherwise record agreement to any string, and a stale tab would record
+      // agreement to a revision that has since changed. Rejected rather than silently corrected —
+      // correcting it would write down that the person accepted something they were never shown.
+      //
+      // Ordered after the breached-password check to match `AuthService.register` step for step.
+      // The order is observable — it decides which of two errors a caller sees when both apply —
+      // and two paths creating the same kind of record should not answer differently.
+      if (dto.acceptedTermsVersion !== CURRENT_PLATFORM_TERMS_VERSION) {
+        throw new AppException(
+          "TERMS_VERSION_MISMATCH",
+          "The terms have changed since this page was opened. Please reload and read them again.",
+          409,
+        );
+      }
+      acceptedVersion = dto.acceptedTermsVersion;
     }
 
-    const [membership] = await this.prisma.$transaction([
-      this.prisma.membership.create({
+    const passwordHash =
+      existing === null && dto.password !== undefined ? await hashPassword(dto.password) : null;
+
+    /**
+     * One transaction for all four writes, and the User moved inside it.
+     *
+     * It used to be created on its own, before a separate `$transaction` holding the Membership and
+     * the invitation update — so a failure in that transaction left a `User` row with no Membership
+     * and no way back in: the invitation is still unaccepted, but the second attempt takes the
+     * "already has an account" branch and never asks for a password again. Adding the acceptance
+     * made this unavoidable rather than merely untidy, because a `User` that exists without its
+     * acceptance is the exact gap being closed here.
+     *
+     * **Not covered by a test, and that is stated rather than glossed.** Forcing a failure between
+     * these writes needs a lever the schema does not offer: the Role and Organization cannot be
+     * deleted out from under an invitation (`RESTRICT` foreign keys refuse it — measured, not
+     * assumed), `AgreementAcceptance` has no length-bounded column to overflow, and the remaining
+     * options are mocks that would test the mock. The tests below prove that the pre-transaction
+     * refusals leave nothing behind; the atomicity of the four writes rests on `$transaction`
+     * itself.
+     */
+    return await this.prisma.$transaction(async (tx) => {
+      const user =
+        existing ??
+        (await tx.user.create({
+          data: {
+            email: dto.email,
+            displayName: dto.displayName as string,
+            passwordHash: passwordHash as string,
+            locale: "en",
+          },
+        }));
+
+      if (acceptedVersion !== null) {
+        await tx.agreementAcceptance.create({
+          data: {
+            agreement: "PLATFORM_TERMS",
+            version: acceptedVersion,
+            userId: user.id,
+            ipAddress: context?.ipAddress ?? null,
+            userAgent: context?.userAgent ?? null,
+          },
+        });
+      }
+
+      const membership = await tx.membership.create({
         data: {
           userId: user.id,
           organizationId: invitation.organizationId,
@@ -208,14 +291,15 @@ export class MembershipInvitationService {
           roleId: invitation.roleId,
           status: "ACTIVE",
         },
-      }),
-      this.prisma.membershipInvitation.update({
+      });
+
+      await tx.membershipInvitation.update({
         where: { id: invitation.id },
         data: { acceptedAt: new Date() },
-      }),
-    ]);
+      });
 
-    return membership;
+      return membership;
+    });
   }
 
   private async findMatchingInvitation(

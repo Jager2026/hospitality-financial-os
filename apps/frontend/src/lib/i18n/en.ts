@@ -353,6 +353,74 @@ export const en = {
   "terminal.pay": "Pay",
   "state.paymentReceived": "Payment received",
   "state.cardDeclined": "Card declined",
+
+  "dashboard.seeStaff": "Staff",
+
+  // ── Staff (UX_MAP.md) ───────────────────────────────────────────────────────────────────────
+  "staff.title": "Staff",
+  "staff.loading": "Loading staff…",
+  "staff.error": "Could not load the staff list. Please try again.",
+  "staff.empty.title": "Nobody works here yet",
+  "staff.empty.body":
+    "Invite the first person and they will appear here once they accept. You can invite a manager, an accountant, or a waiter.",
+  "staff.column.person": "Person",
+  "staff.column.role": "Role",
+  // The list shows people who have accepted. It cannot show a pending invitation, because no
+  // endpoint reports one — said on the screen rather than left as an absence a reader has to
+  // notice, since "invited yesterday, nothing here" is otherwise indistinguishable from a bug.
+  "staff.pendingNote":
+    "This list shows people who have accepted. An invitation that has been sent but not yet accepted does not appear — the invitation is valid for 7 days, and the person appears here the moment they accept.",
+  "staff.invite.heading": "Invite someone",
+  "staff.invite.email": "Email address",
+  "staff.invite.role": "Role",
+  "staff.invite.rolePlaceholder": "Choose a role",
+  "staff.invite.submit": "Send invitation",
+  "staff.invite.sending": "Sending…",
+  "staff.invite.sent":
+    "Invitation sent. They have 7 days to accept it, and they will appear in the list above once they do.",
+  "staff.invite.error.email": "Enter the email address to send the invitation to.",
+  "staff.invite.error.role": "Choose which role this person will have.",
+  "staff.invite.error.denied": "You do not have permission to invite people to this restaurant.",
+  // Rate limiting explained in words rather than shown as a fault (ADR-028, ADR-070). Five a
+  // minute is the real limit, and the sentence says what to do rather than only what happened.
+  "staff.invite.error.tooMany":
+    "Five invitations a minute is the limit, and you have reached it. This protects the address our mail is sent from. Wait a minute and send the next one.",
+  "staff.invite.error.unreachable":
+    "Could not reach the server. Check your connection and try again.",
+  "staff.invite.error.generic":
+    "The invitation could not be sent. Check the address and try again.",
+  "staff.rolesUnavailable": "Roles could not be loaded, so invitations cannot be sent right now.",
+
+  // ── Accepting an invitation ─────────────────────────────────────────────────────────────────
+  "accept.title": "Accept your invitation",
+  "accept.checking": "Checking your invitation…",
+  "accept.invalid.title": "This invitation cannot be used",
+  "accept.invalid.body":
+    "The link may have expired, already been used, or been copied incompletely. Ask whoever invited you to send a new one.",
+  "accept.missingLink.body":
+    "This page needs the link from your invitation email. Open the email and use the button there.",
+  "accept.explain":
+    "You have been invited to join. Choose a password and accept the terms to create your account.",
+  "accept.displayName": "Your name",
+  "accept.password": "Choose a password",
+  "accept.submit": "Create my account",
+  "accept.submitting": "Creating your account…",
+  "accept.existing.explain":
+    "You already have an account with this address. Accepting adds this workplace to it — no new password needed.",
+  "accept.existing.submit": "Accept invitation",
+  "accept.done.title": "Your account is ready",
+  "accept.done.body": "Sign in with your email address and the password you just chose.",
+  "accept.done.signIn": "Go to sign in",
+  "accept.error.nameRequired": "Enter your name so your colleagues know who you are.",
+  "accept.error.passwordRequired": "Choose a password of at least 8 characters.",
+  "accept.error.termsRequired": "Please accept the terms to create your account.",
+  "accept.error.termsUnavailable":
+    "The terms could not be loaded, so we cannot record what you agreed to. Please reload the page.",
+  "accept.error.termsChanged":
+    "The terms changed while this page was open. Please reload and read them again.",
+  "accept.error.tooManyAttempts": "Too many attempts. Wait a minute and try again.",
+  "accept.error.unreachable": "Could not reach the server. Check your connection and try again.",
+  "accept.error.generic": "The invitation could not be accepted. Please try again.",
 } as const;
 
 export type MessageKey = keyof typeof en;
