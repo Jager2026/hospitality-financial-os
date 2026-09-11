@@ -313,6 +313,18 @@ function Figures({
       >
         {t("dashboard.seeSettings")}
       </Link>
+
+      {/* Same `prefetch={false}` reasoning as the two above, and for one more reason of its own:
+          the Analytics screen fetches on arrival for whichever area its URL names, so prefetching
+          the route would warm a page that is going to ask its own question anyway. */}
+      <Link
+        href={`/restaurants/${restaurantId}/analytics`}
+        className="ml-4 inline-block text-small text-muted underline"
+        data-testid="dashboard-analytics-link"
+        prefetch={false}
+      >
+        {t("dashboard.seeAnalytics")}
+      </Link>
     </>
   );
 }

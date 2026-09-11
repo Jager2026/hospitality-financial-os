@@ -1,5 +1,6 @@
 import {
   apiGetAuthed,
+  apiGetAuthedText,
   apiPatchAuthed,
   apiPost,
   apiPostAuthed,
@@ -109,6 +110,36 @@ export async function authedGet<T>(path: string): Promise<ApiResult<T>> {
   if (!second.ok && second.error.status === 401) {
     // A fresh token refused immediately. Retrying again is the infinite loop this guards against:
     // the renewal worked and the answer is still no, so the session is over.
+    clearSession();
+    return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
+  }
+  return second;
+}
+
+/**
+ * `authedGet` for a route that answers with a body rather than the envelope — the analytics CSV
+ * exports. Identical renewal and replay; the only difference is which reader parses the response.
+ *
+ * Replaying a GET is safe for the reason `authedPost`'s own comment says it is not in general: this
+ * one reads, and reading twice produces the same bytes.
+ */
+export async function authedGetText(path: string): Promise<ApiResult<string>> {
+  const session = readSession();
+  if (session === null) {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+
+  const first = await apiGetAuthedText(path, session.accessToken);
+  if (first.ok || first.error.status !== 401) return first;
+
+  const renewed = await refreshOnce();
+  if (renewed === null) {
+    clearSession();
+    return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
+  }
+
+  const second = await apiGetAuthedText(path, renewed.accessToken);
+  if (!second.ok && second.error.status === 401) {
     clearSession();
     return { ok: false, error: { code: "SESSION_ENDED", message: "", status: 401 } };
   }
