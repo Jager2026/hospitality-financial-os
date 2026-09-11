@@ -298,21 +298,21 @@ model User {
   /// a *recipient* account (v2, `configuration.recipient`, `dashboard: "none"`), not a merchant
   /// one like Restaurant.stripeAccountId — it receives transfers, it never takes card payments.
   /// Nullable: only Users who have been invited as staff ever get one (ADR-061 §2).
-  stripeAccountId          String?           @unique @map("stripe_account_id")
+  stripeAccountId        String?          @unique @map("stripe_account_id")
   /// Derived from the live account on every refresh, the same way Restaurant's is (ADR-009):
   /// never parsed from a webhook payload. COMPLETE means `stripe_transfers` is active — the one
   /// capability that decides whether this person can be a tip recipient at all (ADR-061 §3).
-  stripeOnboardingStatus   OnboardingStatus  @default(NOT_STARTED) @map("stripe_onboarding_status")
+  stripeOnboardingStatus OnboardingStatus @default(NOT_STARTED) @map("stripe_onboarding_status")
   /// Raw capability statuses, kept separately because they answer different questions:
   /// `stripe_transfers` = may money be moved TO this account; `payouts` = may it leave to a bank.
   /// A person can be a valid recipient while payouts are still blocked on a bank account.
-  stripeTransfersStatus    String?           @map("stripe_transfers_status")
-  stripePayoutsStatus      String?           @map("stripe_payouts_status")
+  stripeTransfersStatus  String?          @map("stripe_transfers_status")
+  stripePayoutsStatus    String?          @map("stripe_payouts_status")
   /// `requirements.entries` as Stripe returns them — the list the onboarding screen shows and the
   /// reason a status is what it is. Measured on 2026-09-02 for an LT individual: 12 entries at
   /// creation, identity fields + bank account + ToS attestation, no identity document (ADR-061).
-  stripeRequirementsDue    Json?             @map("stripe_requirements_due")
-  stripeAccountCreatedAt   DateTime?         @map("stripe_account_created_at")
+  stripeRequirementsDue  Json?            @map("stripe_requirements_due")
+  stripeAccountCreatedAt DateTime?        @map("stripe_account_created_at")
 
   memberships          Membership[]
   invitationsSent      MembershipInvitation[] @relation("MembershipInvitationInvitedBy")
@@ -737,7 +737,20 @@ model OutboxEvent {
   publishedAt   DateTime? @map("published_at")
   attempts      Int       @default(0)
 
-  @@index([publishedAt]) // Index Strategy — the poller's query
+  /// ADR-083. The earliest moment the poller may try this event again. Defaults to `now()`, so a
+  /// freshly written event is eligible on the next poll exactly as it was before this column
+  /// existed; only a FAILED dispatch pushes it into the future, by a delay that doubles.
+  ///
+  /// A column rather than a computation, because the delay depends on `attempts` and therefore
+  /// differs per row — "retry when the row's own last attempt is older than a function of its own
+  /// attempt count" is not something the poller's `findMany` can express, and the alternative was
+  /// raw SQL in the hottest query this service has.
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+
+  // Index Strategy — the poller's query, which filters on both columns together. The composite
+  // covers `published_at` alone as its prefix, so it replaces the single-column index rather than
+  // joining it.
+  @@index([publishedAt, nextAttemptAt])
   @@map("outbox_event")
 }
 
@@ -754,23 +767,23 @@ model OutboxEvent {
 /// and its own comment names email as the case that turns a double dispatch into a double effect.
 /// This constraint makes the second attempt fail at the database rather than at the recipient.
 model EmailDelivery {
-  id            String              @id @default(uuid()) @db.Uuid
+  id                String              @id @default(uuid()) @db.Uuid
   /// The OutboxEvent that asked for this send. UNIQUE: one request, at most one delivery record.
-  outboxEventId String              @unique @map("outbox_event_id") @db.Uuid
+  outboxEventId     String              @unique @map("outbox_event_id") @db.Uuid
   /// Recipient and subject are kept for the audit trail — a bounce is meaningless without knowing
   /// who it was to. The BODY is deliberately not stored: it carries the invitation token, and a
   /// token at rest in a second place is a second place it can leak from (ADR-020 keeps the token
   /// unpersisted; storing the email body would silently undo that).
-  to            String
-  subject       String
+  to                String
+  subject           String
   /// Resend's own id for the message, once it has accepted it. NULL until then, and NULL forever
   /// if it never accepted — which is exactly the trace a failure has to leave.
-  providerMessageId String?         @map("provider_message_id")
-  status        EmailDeliveryStatus @default(PENDING)
+  providerMessageId String?             @map("provider_message_id")
+  status            EmailDeliveryStatus @default(PENDING)
   /// The provider's own error text on the last failed attempt. NULL when nothing has failed.
-  lastError     String?             @map("last_error")
-  createdAt     DateTime            @default(now()) @map("created_at")
-  updatedAt     DateTime            @updatedAt @map("updated_at")
+  lastError         String?             @map("last_error")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
 
   @@index([status])
   @@map("email_delivery")
@@ -888,28 +901,28 @@ enum ShiftCloseReason {
 /// day's — which is what a calendar-only model does — reproduces the exact discrepancy between
 /// "the system's today" and "the Z-report" that this product exists to remove.
 model Shift {
-  id           String    @id @default(uuid()) @db.Uuid
-  restaurantId String    @map("restaurant_id") @db.Uuid
-  openedAt     DateTime  @default(now()) @map("opened_at")
+  id           String            @id @default(uuid()) @db.Uuid
+  restaurantId String            @map("restaurant_id") @db.Uuid
+  openedAt     DateTime          @default(now()) @map("opened_at")
   /// NULL means open. Exactly one open Shift per Restaurant at a time — enforced by a partial
   /// unique index in the migration, which Prisma's schema language cannot express.
-  closedAt     DateTime? @map("closed_at")
+  closedAt     DateTime?         @map("closed_at")
   /// Which of the two ways it ended (ADR-064 §2). NULL while open.
   closeReason  ShiftCloseReason? @map("close_reason")
   /// The User who pressed the button. NULL for a SCHEDULED close — nobody did — and NULL while
   /// open. Deliberately not a "system user" placeholder: an actor that is not a person should be
   /// absent, not invented, or every audit read has to know which id means "no one".
-  closedBy     String?   @db.Uuid @map("closed_by")
+  closedBy     String?           @map("closed_by") @db.Uuid
   /// The venue's own local calendar date this working day is CALLED, taken at `openedAt`. The
   /// label a human uses ("the shift of 2 September") — not a window: a shift that runs past
   /// midnight keeps this date while its operations carry their own real calendar timestamps.
-  businessDate DateTime  @db.Date @map("business_date")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  businessDate DateTime          @map("business_date") @db.Date
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
-  restaurant  Restaurant   @relation(fields: [restaurantId], references: [id])
-  closedByUser User?       @relation("ShiftClosedBy", fields: [closedBy], references: [id])
-  ledgerLines LedgerLine[]
+  restaurant   Restaurant   @relation(fields: [restaurantId], references: [id])
+  closedByUser User?        @relation("ShiftClosedBy", fields: [closedBy], references: [id])
+  ledgerLines  LedgerLine[]
 
   @@index([restaurantId, businessDate])
   @@index([restaurantId, closedAt])
