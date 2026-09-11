@@ -130,7 +130,7 @@ export class OutboxPollerService {
         // `next_attempt_at = created_at`, so a healthy queue is selected exactly as it was before
         // the column existed — the backoff is invisible until something goes wrong, which is the
         // only time it should be visible at all.
-        nextAttemptAt: { lte: new Date() },
+        OR: [{ attempts: 0 }, { nextAttemptAt: { lte: new Date() } }],
         NOT: {
           eventType: EMAIL_OUTBOX_EVENT_TYPE,
           createdAt: { lt: abandonedBefore },

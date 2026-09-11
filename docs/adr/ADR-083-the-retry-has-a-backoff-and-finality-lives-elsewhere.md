@@ -1,6 +1,6 @@
 ---
 title: ADR-083 — The retry has a backoff, and finality lives elsewhere
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Important
 owner: Founder
@@ -180,3 +180,66 @@ still tracked — the backoff touches scheduling, not claiming.
 **The alert threshold is still five attempts**, which is now thirty seconds rather than eight. That
 is a change in when a person is paged, and it is deliberate: the attempts are the same, the waiting
 between them is not.
+
+---
+
+## Amendment — the backoff shipped with a defect, and it was visible before it shipped
+
+**2026-09-11, same sprint, found while investigating something else.** The eligibility filter was
+written `next_attempt_at <= new Date()`. **Those are two different clocks.** The left side is
+written by the DATABASE (`DEFAULT now()`, and `COALESCE` on every insert that does not name it); the
+right side is the clock of the process running the poller.
+
+Measured on the machine this was found on, five samples, stable: **the database ran 5 ms ahead of
+Node.** An event created and polled inside that window is invisible to its own poller.
+
+### What it did
+
+It made the ADR-069 routing tests fail **deterministically when run alone** — 0 of 3 — while the
+whole file passed about **1 run in 3**, because a longer run puts more milliseconds between an
+insert and the next poll. That inversion is the signature: a defect that a *narrower* run exposes
+more reliably than a broad one is a timing window, not contamination.
+
+| | before #199 | after #199 | after this fix |
+|---|---|---|---|
+| whole spec, fresh database, 3–5 runs | 3/3 pass | **1/3 pass** | **5/5 pass** |
+| routing block alone, 3 runs | — | **0/3 pass** | **3/3 pass** |
+
+### Why it is not only a test defect
+
+In production the same comparison runs on every poll. `outbox_event.next_attempt_at` is written by
+Postgres for every new event; the filter reads the application server's clock. **A server whose
+clock lags the database's delays every newly written outbox event by the difference** — and the
+outbox is the money path: a Wallet projection waits behind it. At 5 ms nobody notices. At a second,
+every payment's projection is a second late, and nothing in the system would say why.
+
+### The fix, and why it is not a tolerance
+
+```ts
+OR: [{ attempts: 0 }, { nextAttemptAt: { lte: new Date() } }]
+```
+
+**A never-attempted event is due by definition**, not by comparison — so for it there is no
+cross-clock question at all. An event that has failed carries a delay written by the application
+(`Date.now() + retryDelayMs`) and read by the application: one clock on both sides.
+
+A skew allowance was the other candidate and was rejected. It would hide the coupling rather than
+remove it, and its size could only ever be fitted to today's measured skew.
+
+**Both halves are tested**, because the cheap wrong fix is to drop the filter entirely: a
+never-attempted event with `next_attempt_at` five seconds in the future must still be dispatched,
+and an event with `attempts = 3` and a minute to wait must still be skipped. Verified by reverting
+the fix and watching the first of those fail.
+
+### The part worth keeping
+
+**This was seen before it shipped and explained away.** While writing this ADR's own tests, two
+failed and a third passed for the wrong reason, and the cause was recorded here as a fake-timer
+artifact: *"`next_attempt_at` defaults to the database's clock, which keeps running while
+`vi.useFakeTimers` holds this process's Date still"*. A helper was added to step past it.
+
+That explanation was true and it was not the whole truth. The two clocks were still being compared
+in the **product**, where no fake timer was involved — and the question never asked was what the
+same comparison does without one. **A workaround in a test hid a defect in the product, and hid it
+the more effectively for having a correct-sounding explanation attached.** `CLAUDE.md` names the
+shape for self-written tools; this is the same failure with an explanation in the tool's place.
