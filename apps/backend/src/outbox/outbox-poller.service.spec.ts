@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { shiftServiceForTests } from "../../test/fixtures/shift-for-tests";
 import Stripe from "stripe";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
 import type { RestaurantService } from "../restaurant/restaurant.service";
@@ -9,8 +9,12 @@ import { StripeService } from "../stripe/stripe.service";
 import { IndividualTipAllocationStrategy } from "../tip/individual-tip-allocation.strategy";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 import { WebhooksService } from "../webhooks/webhooks.service";
-import { EMAIL_OUTBOX_EVENT_TYPE, type EmailOutboxService } from "../email/email-outbox.service";
-import { OutboxPollerService } from "./outbox-poller.service";
+import {
+  ABANDON_UNDELIVERED_AFTER_MS,
+  EMAIL_OUTBOX_EVENT_TYPE,
+  type EmailOutboxService,
+} from "../email/email-outbox.service";
+import { OutboxPollerService, retryDelayMs } from "./outbox-poller.service";
 
 /** ADR-069. The poller gained a second dispatch target; this file is about the FIRST one. A handler
  * that throws on contact is the honest stub here — if the money path ever routes an event into the
@@ -221,13 +225,20 @@ describe("OutboxPollerService (real database)", () => {
   // always have a few unrelated events from another concurrently-running test file ahead of
   // this test's own in the queue (createdAt-ordered) — this reaches THIS test's own ids
   // regardless, the same way the real interval-driven poller eventually would.
-  async function pollUntilSettled(ids: string[], maxIterations = 20): Promise<void> {
+  async function pollUntilSettled(ids: string[], maxIterations = 30): Promise<void> {
     for (let i = 0; i < maxIterations; i++) {
       const remaining = await prisma.outboxEvent.count({
         where: { id: { in: ids }, publishedAt: null },
       });
       if (remaining === 0) return;
       await poller.poll();
+      // ADR-083: an event that has FAILED is not eligible again until its backoff expires, so a
+      // tight poll loop would spin without retrying it. The first delay is `retryDelayMs(1)` =
+      // 2s, and this waits it out in real time rather than faking the clock, because this block
+      // also signs Stripe webhook events and those carry their own timestamp tolerance. Events
+      // that never failed are unaffected: they settle on the first poll and the loop returns
+      // before sleeping twice.
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }
 
@@ -440,6 +451,19 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
     walletProjection = new WalletProjectionService(prisma);
   });
 
+  // ADR-083. Only `Date` is faked, never timers: Prisma's own connection and query timeouts are
+  // real `setTimeout`s, and stopping those would hang a test against a real database rather than
+  // fail it. Faking `Date` alone is enough, because the backoff is written and read as a JS date
+  // on both sides — `next_attempt_at = Date.now() + delay` on failure, `lte: new Date()` in the
+  // query.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   afterAll(async () => {
     await prisma.$disconnect();
   });
@@ -485,6 +509,11 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
       const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
       if (current.attempts >= minAttempts) return;
       await poller.poll();
+      // ADR-083. Driving one event to five attempts used to take five polls and eight seconds of
+      // nothing; it now takes 2 + 4 + 8 + 16 = 30 seconds of waiting, which no test should spend.
+      // The clock moves instead of the row: rewriting `next_attempt_at` directly would step around
+      // the eligibility rule that half of these assertions depend on.
+      vi.setSystemTime(new Date(Date.now() + retryDelayMs(current.attempts + 1)));
     }
   }
 
@@ -534,6 +563,10 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
 
       for (let i = 0; i < 8; i++) {
         await expect(poller.poll()).resolves.toBeUndefined();
+        // ADR-083: same reason as pollUntilAttempts — without moving the clock this loop would
+        // poll eight times and retry once, and the assertion below would be about the backoff
+        // rather than about a throwing AlertService.
+        vi.setSystemTime(new Date(Date.now() + retryDelayMs(i + 1)));
       }
 
       const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
@@ -667,6 +700,163 @@ describe("OutboxPollerService routing by eventType (ADR-069)", () => {
       // `undefined`, and Prisma reads that as "omit this filter" — recomputing EVERY Membership's
       // balance in the database. That is the failure this asserts against.
       expect(seen.walletArgs.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+});
+
+// ADR-083 — the backoff, and where finality actually lives. Every case here names the
+// implementation it rejects, because the two wrong versions are both plausible: a retry with no
+// backoff (what this repository had for three sprints) and an attempt-count ceiling applied to
+// every event type alike (what the constant's old comment claimed existed).
+describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
+  const prisma = new PrismaService();
+  let poller: OutboxPollerService;
+
+  beforeAll(async () => {
+    await prisma.$connect();
+    poller = new OutboxPollerService(
+      prisma,
+      new WalletProjectionService(prisma),
+      emailOutboxThatMustNotBeCalled(),
+      fakeLogger,
+      fakeAlertServiceNoop,
+    );
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Moves this test's frozen clock past the moment a row was inserted.
+   *
+   * **Why it is needed, and why leaving it out produced a test that passed for the wrong reason.**
+   * `next_attempt_at` defaults to `now()` — the DATABASE's clock, which keeps running while
+   * `vi.useFakeTimers` holds this process's `Date` still. A row inserted a few milliseconds after
+   * the freeze therefore carries a `next_attempt_at` a few milliseconds in the *future* relative to
+   * the `new Date()` the poller puts in its query, and is not selected at all.
+   *
+   * The first version of this block had no such nudge. Two tests failed outright — and the third,
+   * the one asserting an abandoned email is never retried, **passed**: it expects the event not to
+   * be selected, and it was not selected, for a reason that had nothing to do with ADR-075. A green
+   * assertion resting on clock skew is worse than a red one, because nothing about it looks wrong.
+   */
+  function advancePastInsert(): void {
+    vi.setSystemTime(new Date(Date.now() + 1_000));
+  }
+
+  /** Permanently malformed on purpose: it fails deterministically on every attempt, so what is
+   *  being measured is the schedule rather than the failure. */
+  async function seedFailingMoneyEvent(createdAt?: Date) {
+    return prisma.outboxEvent.create({
+      data: {
+        aggregateType: "JournalEntry",
+        aggregateId: randomUUID(),
+        eventType: "journal_entry.payment_captured",
+        payload: { journalEntryId: "not-a-valid-uuid" },
+        ...(createdAt ? { createdAt } : {}),
+      },
+    });
+  }
+
+  it("the delay doubles and then stops doubling", () => {
+    // The shape, stated once so the behavioural tests below do not have to restate it. A version
+    // without the cap would grow to 2^n and pass every other assertion in this file.
+    expect(retryDelayMs(1)).toBe(2_000);
+    expect(retryDelayMs(2)).toBe(4_000);
+    expect(retryDelayMs(3)).toBe(8_000);
+    expect(retryDelayMs(9)).toBe(5 * 60 * 1000);
+    expect(retryDelayMs(5_293), "an event at 5,293 attempts must not be waiting for years").toBe(
+      5 * 60 * 1000,
+    );
+  });
+
+  it(
+    "a failing event is not retried immediately, and each gap is longer than the one before — " +
+      "discriminating: with no backoff every poll retries it, which is how one event reached 5,293 attempts",
+    async () => {
+      const event = await seedFailingMoneyEvent();
+      advancePastInsert();
+
+      await poller.poll();
+      const first = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(first.attempts).toBe(1);
+      const firstGap = first.nextAttemptAt.getTime() - Date.now();
+      expect(firstGap, "the first retry was scheduled in the past").toBeGreaterThan(0);
+
+      // THE HALF THAT REJECTS THE OLD IMPLEMENTATION: polling again straight away must do nothing
+      // at all to this event. Before this change the attempt count would already be 2.
+      await poller.poll();
+      const immediate = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(immediate.attempts, "a failing event was retried before its backoff expired").toBe(1);
+
+      vi.setSystemTime(new Date(Date.now() + firstGap));
+      await poller.poll();
+      const second = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(second.attempts).toBe(2);
+      const secondGap = second.nextAttemptAt.getTime() - Date.now();
+
+      expect(secondGap, "the interval between attempts did not grow").toBeGreaterThan(firstGap);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "an email event past the ADR-075 window is never selected again — finality for email is a " +
+      "WINDOW, and it is the poller's query that enforces it",
+    async () => {
+      // The email handler in this block throws on contact, so "never selected" is asserted by the
+      // absence of an explosion as well as by the attempt count standing still.
+      const stale = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "MembershipInvitation",
+          aggregateId: randomUUID(),
+          eventType: EMAIL_OUTBOX_EVENT_TYPE,
+          payload: { to: "nobody@example.invalid", subject: "s", text: "t" },
+          createdAt: new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS - 1000),
+        },
+      });
+      advancePastInsert();
+
+      await expect(poller.poll()).resolves.toBeUndefined();
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: stale.id } });
+      expect(after.attempts, "an abandoned email event was attempted again").toBe(0);
+      expect(
+        after.publishedAt,
+        "an abandoned email event must never be marked published",
+      ).toBeNull();
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a money event of the same age IS still retried — the asymmetry is deliberate, and giving up " +
+      "on a Wallet projection has never been decided",
+    async () => {
+      // THE DISCRIMINATING PAIR with the test above: same age, opposite answer. An implementation
+      // that applied one ceiling to every event type would pass that test and fail this one, and
+      // the damage would be a Wallet left permanently wrong rather than an email not sent.
+      const old = await seedFailingMoneyEvent(
+        new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS - 1000),
+      );
+      advancePastInsert();
+
+      await poller.poll();
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: old.id } });
+      expect(after.attempts, "a money event was abandoned by age, which nothing has decided").toBe(
+        1,
+      );
     },
     BACKLOG_SAFE_TIMEOUT_MS,
   );
