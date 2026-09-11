@@ -12,8 +12,62 @@ import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 
 const POLL_INTERVAL_MS = 2000; // SEQUENCE_PAYMENT_TIP.md: "Every 1-2 seconds"
-const MAX_ATTEMPTS_BEFORE_ALERT = 5; // SYSTEM_ARCHITECTURE.md: repeated failure becomes an alert, not an infinite retry loop
 const BATCH_SIZE = 50;
+
+/**
+ * The attempt count at which one alert is sent. **It bounds the ALERTING and nothing else.**
+ *
+ * It used to carry the comment "repeated failure becomes an alert, not an infinite retry loop",
+ * which was false in its second half and stayed false for three sprints: nothing here has ever
+ * stopped retrying because of an attempt count, and one e2e database was found holding an event at
+ * **5,293 attempts** (#196). The sentence described an intention, the way `playwright.config.ts`
+ * described one about truncation (ADR-082), and the two failures are the same shape — a comment
+ * that reads as a mechanism.
+ *
+ * Where finality actually lives, since it is not here:
+ *   - **Email** is abandoned after `ABANDON_UNDELIVERED_AFTER_MS` (ADR-075) — a window, not a
+ *     count, tied to the lifetime of Resend's `Idempotency-Key`.
+ *   - **Money** is retried forever, deliberately: abandoning a journal-entry projection leaves a
+ *     Wallet permanently wrong, and nothing has established that giving up on money is ever right.
+ */
+const MAX_ATTEMPTS_BEFORE_ALERT = 5;
+
+/**
+ * The longest a failing event waits between attempts. Reached after eight failures.
+ *
+ * At five minutes a stuck event costs 288 attempts a day instead of the 43,200 a two-second retry
+ * costs, while still recovering within five minutes of whatever broke being fixed — the number is
+ * chosen against recovery latency, which is the thing a person actually waits for.
+ */
+const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
+
+/**
+ * How long an event waits after failing `attempts` times: 2s, 4s, 8s … capped at five minutes.
+ *
+ * **Why doubling, and why this is not a taste question.** Without it, the interval between attempts
+ * is the poll interval, so a provider outage is answered by hammering the same failing call every
+ * two seconds for as long as it lasts — a storm against the database and against whatever is
+ * already unwell, at the moment it is least able to absorb one. Retrying is supposed to ride out a
+ * blip, and a retry policy with no backoff converts a blip into load.
+ *
+ * **What it changes about ADR-075, which matters more than the numbers.** That decision chose a
+ * time window over an attempt count, reasoning that "twenty attempts is forty seconds, which would
+ * abandon real messages during an ordinary provider blip". That was true *because* attempts and
+ * seconds were the same quantity at a fixed two-second interval. With a backoff they are no longer
+ * the same quantity — and the window is STILL the right instrument, for the reason that survives:
+ * it is pinned to the lifetime of Resend's `Idempotency-Key`, which is a duration in the world
+ * rather than a property of how often we happen to ask. An attempt count could now be made safe;
+ * it still would not be measuring the thing that expires.
+ *
+ * No jitter. It exists to stop many clients synchronising onto one target, and this poller is a
+ * single instance draining one batch in sequence — adding it here would buy nothing and cost a
+ * test that cannot assert an exact interval. Worth revisiting the day the claim step in `poll()`
+ * is fixed and a second instance becomes possible.
+ */
+export function retryDelayMs(attempts: number): number {
+  const doublings = Math.min(Math.max(attempts - 1, 0), 8);
+  return Math.min(POLL_INTERVAL_MS * 2 ** doublings, MAX_RETRY_DELAY_MS);
+}
 
 /**
  * ADR-003's Transactional Outbox — the polling half. The write half (inserting OutboxEvent rows
@@ -72,6 +126,11 @@ export class OutboxPollerService {
     const unpublished = await this.prisma.outboxEvent.findMany({
       where: {
         publishedAt: null,
+        // ADR-083. A row that failed recently is not due yet. Events that have never failed carry
+        // `next_attempt_at = created_at`, so a healthy queue is selected exactly as it was before
+        // the column existed — the backoff is invisible until something goes wrong, which is the
+        // only time it should be visible at all.
+        nextAttemptAt: { lte: new Date() },
         NOT: {
           eventType: EMAIL_OUTBOX_EVENT_TYPE,
           createdAt: { lt: abandonedBefore },
@@ -131,9 +190,15 @@ export class OutboxPollerService {
       });
     } catch (err) {
       const attempts = event.attempts + 1;
+      // ADR-083. The increment and the delay are written together: an attempt that counted but did
+      // not push the next one out would be counted twice within the same second, and the attempt
+      // number is what the alert threshold reads.
       await this.prisma.outboxEvent.update({
         where: { id: event.id },
-        data: { attempts: { increment: 1 } },
+        data: {
+          attempts: { increment: 1 },
+          nextAttemptAt: new Date(Date.now() + retryDelayMs(attempts)),
+        },
       });
 
       if (attempts >= MAX_ATTEMPTS_BEFORE_ALERT) {
