@@ -82,6 +82,55 @@ export async function apiGetAuthed<T>(
   });
 }
 
+/**
+ * Reads a route that answers with a body instead of the envelope — today, the analytics CSV
+ * exports, which carry `@SkipEnvelope()` and `Content-Type: text/csv`.
+ *
+ * **Separate from `apiGetAuthed` for the same reason `apiGetAuthed` is separate from `apiGet`:** a
+ * flag would make the difference forgettable, and forgetting it here means `response.json()` on a
+ * CSV, which throws and is then reported as `UNKNOWN` — a parse failure wearing the clothes of a
+ * server refusal.
+ *
+ * A FAILURE still arrives as the envelope, because `@SkipEnvelope()` governs the success path and
+ * the exception filter does not: a 403 from these routes is `{ success: false, error: {...} }` in
+ * JSON. So the error branch below parses JSON and the success branch does not, which looks
+ * asymmetric and is exactly right.
+ */
+export async function apiGetAuthedText(
+  path: string,
+  accessToken: string | null,
+): Promise<ApiResult<string>> {
+  if (accessToken === null || accessToken === "") {
+    return { ok: false, error: { code: "SESSION_MISSING", message: "", status: 0 } };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_URL}/api/v1${path}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    return { ok: false, error: { code: "NETWORK_UNAVAILABLE", message: "", status: 0 } };
+  }
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      error?: { code: string; message: string };
+    } | null;
+    return {
+      ok: false,
+      error: {
+        code: payload?.error?.code ?? "UNKNOWN",
+        message: payload?.error?.message ?? "",
+        status: response.status,
+      },
+    };
+  }
+
+  return { ok: true, data: await response.text() };
+}
+
 async function send<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
   let response: Response;
   try {

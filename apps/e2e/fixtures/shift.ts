@@ -35,9 +35,12 @@ function today(): string {
 export async function seedOpenShift(
   restaurantId: string,
   openedAtClock = "16:00",
+  /** The day the venue CALLS this working day. Defaults to today; passed explicitly by the test
+   *  that needs a shift running across midnight, which cannot be built out of today alone. */
+  businessDateOverride?: string,
 ): Promise<SeededShift> {
   const shiftId = randomUUID();
-  const businessDate = today();
+  const businessDate = businessDateOverride ?? today();
 
   // The instant is built HERE and written as a parameter, rather than assembled in SQL and read
   // back. `shift.opened_at` is a timestamp WITHOUT time zone, and node-postgres and Prisma do not
@@ -68,6 +71,16 @@ export async function seedCapturedSale(
   billMinorUnits: bigint,
   platformFeeMinorUnits: bigint,
   currency = "EUR",
+  /**
+   * When the lines were WRITTEN, as distinct from which shift they belong to.
+   *
+   * Defaults to `NOW()`, which is right for every test that does not care. The analytics
+   * by-shift assertion cares: it needs money recorded on both sides of a midnight while
+   * belonging to one shift, which is the only arrangement in which a shift-scoped figure and a
+   * calendar-scoped one disagree. Without this parameter that test passes against a calendar
+   * implementation too, and proves nothing.
+   */
+  createdAtIso?: string,
 ): Promise<void> {
   const entryId = randomUUID();
   const restaurantShare = billMinorUnits - platformFeeMinorUnits;
@@ -75,7 +88,7 @@ export async function seedCapturedSale(
   const line = (account: string, direction: "debit" | "credit", amount: bigint) => ({
     sql: `INSERT INTO ledger_line
             (id, journal_entry_id, account, direction, amount, currency, restaurant_id, shift_id, created_at)
-          VALUES ($1, $2, $3::ledger_account, $4::ledger_direction, $5, $6, $7, $8, NOW())`,
+          VALUES ($1, $2, $3::ledger_account, $4::ledger_direction, $5, $6, $7, $8, COALESCE($9::timestamptz, NOW()))`,
     params: [
       randomUUID(),
       entryId,
@@ -85,6 +98,7 @@ export async function seedCapturedSale(
       currency,
       restaurantId,
       shiftId,
+      createdAtIso ?? null,
     ],
   });
 
@@ -99,8 +113,8 @@ export async function seedCapturedSale(
   await executeAll([
     {
       sql: `INSERT INTO journal_entry (id, entry_type, description, created_at)
-            VALUES ($1, 'payment_captured', 'e2e fixture sale', NOW())`,
-      params: [entryId],
+            VALUES ($1, 'payment_captured', 'e2e fixture sale', COALESCE($2::timestamptz, NOW()))`,
+      params: [entryId, createdAtIso ?? null],
     },
     line("processor_clearing", "debit", billMinorUnits),
     line("restaurant_revenue_payable", "credit", restaurantShare),

@@ -473,6 +473,65 @@ export const en = {
   "settings.tips.error.save": "The percentages could not be saved. Please try again.",
 
   "dashboard.seeSettings": "Settings",
+
+  // ── Analytics (ADR-065, ADR-067) ─────────────────────────────────────────────────────────────
+  // The scope caption is the most load-bearing string on the screen. A figure here answers a
+  // question about SHIFTS while the dates that selected it are calendar dates, and a person who
+  // reads it as "the 3rd" will eventually find it disagreeing with a calendar export of the same
+  // period — correctly, and confusingly.
+  "analytics.title": "Analytics",
+  "analytics.scope":
+    "Figures cover whole shifts, including the part of a shift that runs past midnight — not calendar days. The dates below choose which shifts, not which midnights.",
+  "analytics.period.from": "From",
+  "analytics.period.to": "To",
+  "analytics.period.apply": "Show",
+  "analytics.period.invalid": "The start date must not be after the end date.",
+  "analytics.period.tooLong": "A period must be shorter than 366 days.",
+
+  "analytics.area.revenue": "Revenue",
+  "analytics.area.tips": "Tips",
+  "analytics.area.staff": "Staff",
+  "analytics.area.performance": "Compared with before",
+  "analytics.area.reports": "Summary",
+
+  "analytics.loading": "Loading…",
+  "analytics.error": "This could not be loaded. Please try again.",
+  "analytics.forbidden": "Analytics are visible to owners, managers and accountants.",
+
+  // Two different emptinesses, and the screen must not use one sentence for both.
+  "analytics.empty.period": "No sales in this period. Try a wider range of dates.",
+  "analytics.empty.everQuestion": "Nothing has been sold here yet.",
+  "analytics.empty.everBody": "Figures appear once the first payment is taken. Nothing is missing.",
+
+  "analytics.revenue.total": "Revenue",
+  "analytics.tips.total": "Tips",
+  "analytics.series.heading": "By shift",
+  "analytics.series.date": "Shift",
+  "analytics.series.amount": "Amount",
+
+  "analytics.staff.heading": "Tips by person",
+  "analytics.staff.person": "Person",
+  "analytics.staff.tips": "Tips",
+  "analytics.staff.page": "Page",
+  "analytics.staff.previous": "Previous",
+  "analytics.staff.next": "Next",
+
+  "analytics.performance.current": "This period",
+  "analytics.performance.previous": "The period before",
+  "analytics.performance.change": "Change",
+  "analytics.performance.noBaseline": "No comparison — nothing was taken in the period before.",
+  "analytics.performance.transactions": "Payments",
+
+  "analytics.report.transactions": "Payments",
+  "analytics.report.averageTip": "Average tip",
+  "analytics.report.topStaff": "Top five",
+
+  "analytics.export.calendar": "Export (calendar days)",
+  "analytics.export.byShift": "Export (by shift)",
+  "analytics.export.failed": "The export could not be produced. Please try again.",
+  "analytics.export.denied": "You do not have permission to export data.",
+
+  "dashboard.seeAnalytics": "Analytics",
 } as const;
 
 export type MessageKey = keyof typeof en;

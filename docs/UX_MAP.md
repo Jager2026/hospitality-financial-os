@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.12.0
+version: 2.13.0
 status: Active
 classification: Internal
 owner: Founder
@@ -431,7 +431,17 @@ Both are recorded in `UX_API_RECONCILIATION.md`. Neither is closed here: the axi
 
 **Reports is a short fixed list, not a report builder.** One report exists today — a period summary. A second is a second entry, not a query interface; nothing here should be designed as though arbitrary report construction is coming.
 
-**Exports: five, one per section, all CSV** — Revenue, Tips, Staff, Performance, Reports. **They are gated by a separate permission (`data.export`) from the one that lets a person read the screens (`reports.view`)**, and the two are genuinely independent: someone may be able to read every figure here and still not be allowed to take the data out of the building. The UI must reflect that split rather than assuming that a visible screen implies an available export.
+**Corrected again in Sprint 16, this time from the running controller rather than from the ADR, while the screen was being built.** Two statements below were wrong in a way that would have shaped the screen:
+
+**There are not five exports, one per section.** There are six families, and three of them come in two cuts: `revenue`, `tips` and `reports` each have `/export` (calendar) **and** `/export/by-shift` (ADR-067); `staff` and `performance` have only the calendar one; and `staff-earnings/export` exists with **no JSON section at all** — money that can be taken out of the building but not read on a screen. The screen offers exactly the cuts each area really has, because a button pointing at an unbuilt route is a 404 it would then have to explain.
+
+**The independence of `reports.view` and `data.export` is real in the routes and unreachable through a Role.** `PermissionsGuard` resolves with `Reflector.getAllAndOverride`, so the method-level `@RequirePermission("data.export")` on an export route REPLACES the controller-level `reports.view` rather than adding to it — the export routes do not check `reports.view` at all, and `AnalyticsService` re-checks the same single permission per route by design. But every seeded Role that holds one holds the other: Owner, Administrator, Manager and Accountant hold both, Waiter holds neither, and nothing in this codebase creates a Role outside `prisma/seed.ts`. **So "reads every figure but cannot export" is not a person who exists today; it is a response the screen must survive.** It survives it by absence — no button, no error — rather than by an explanation of something that did not happen.
+
+**The screens read SHIFTS; the calendar exports do not (ADR-065).** `getRevenue` and `getTips` aggregate by shift, so a period containing one shift that ran from 22:00 to 01:30 reports that shift whole against the day the venue calls it — not split at midnight. The dates that select the period are calendar dates; what they select is shifts. **That sentence is on the screen**, because the figure alone cannot say which of the two readings it is, and the same period exported the calendar way will legitimately disagree with it.
+
+**A period with no sales and a venue that has never traded are different screens.** The first is ordinary and says so; the second says nothing is missing, because somebody has just started. The screen tells them apart by asking a second question only when the first comes back empty — the widest period the API allows — and words the answer as "yet" rather than "never", since no answer this API can give distinguishes a dormant year from a new venue.
+
+**Exports (as first written, and corrected above): five, one per section, all CSV** — Revenue, Tips, Staff, Performance, Reports. **They are gated by a separate permission (`data.export`) from the one that lets a person read the screens (`reports.view`)**, and the two are genuinely independent: someone may be able to read every figure here and still not be allowed to take the data out of the building. The UI must reflect that split rather than assuming that a visible screen implies an available export.
 
 ---
 
