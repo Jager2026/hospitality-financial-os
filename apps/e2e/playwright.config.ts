@@ -22,9 +22,18 @@ const BACKEND_PORT = 3101;
 const FRONTEND_PORT = 3100;
 
 /** A database of its own, on the same Postgres the rest of the project uses (docker-compose,
- * ADR-034's `postgres:18`). Separate so a run can truncate freely without touching whatever a
- * developer has in their dev database — the reconciliation suite has already been derailed once
- * by accumulated local rows, and an e2e run creates users on every execution. */
+ * ADR-034's `postgres:18`). Separate because a run truncates it, which must not touch whatever a
+ * developer has in their dev database — the reconciliation suite has already been derailed once by
+ * accumulated local rows, and an e2e run creates users on every execution.
+ *
+ * **The truncation happens, and it happens BEFORE the run** — `fixtures/truncate.ts`, called by
+ * `fixtures/prepare-database.ts` between `migrate deploy` and the seed. For four sprints this
+ * comment said the database was separate "so a run can truncate freely" while nothing truncated
+ * anything: the isolation had been built and the cleanup had not, and the sentence read as a
+ * description of both. Rows accumulated at ~528 a run and were diagnosed as a surprise four times
+ * (#177, #180, #185, #194). ADR-082 has the measurement and the reason cleanup is not a teardown:
+ * the rows a failed run leaves are where its cause is still visible, and a teardown does not run
+ * at all when a run is killed. */
 const E2E_DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgresql://hospitality:hospitality@localhost:5432/hospitality_os_e2e";

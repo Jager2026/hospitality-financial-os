@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { Client } from "pg";
+import { MIGRATION_BOOKKEEPING, truncateTestResidue } from "./truncate";
 
 /**
  * Creates and migrates the e2e database BEFORE Playwright starts anything.
@@ -53,6 +54,14 @@ async function main(): Promise<void> {
     env,
     stdio: "inherit",
   });
+
+  // ADR-082. Between the two, and in that order for two separate reasons: after `migrate deploy`
+  // so the sweep sees the tables this run's schema actually has, including any a new migration
+  // just created; before the seed so the reference data it removes is put straight back by the
+  // seed that follows. Truncating after the seed would leave the run with no currencies or roles.
+  const truncated = await truncateTestResidue(E2E_DATABASE_URL);
+  console.log(`e2e: truncated ${truncated.length} tables, preserving ${MIGRATION_BOOKKEEPING}`);
+
   execSync("pnpm --filter backend run prisma:seed", { cwd: "../..", env, stdio: "inherit" });
 }
 

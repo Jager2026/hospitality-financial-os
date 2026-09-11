@@ -1,7 +1,7 @@
 ---
 title: ADR-082 — The harness isolates its database and never cleans it
-version: 1.0.0
-status: Proposed
+version: 2.0.0
+status: Accepted
 classification: Important
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,8 +9,9 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-082 — The harness isolates its database and never cleans it
 
-**Status:** Proposed (Sprint 16), 2026-09-11. **Three options, none chosen.** What is settled here is
-the measurement: what accumulates, how fast, and what — precisely — has to survive a cleanup.
+**Status:** **Accepted** (Sprint 16), 2026-09-11 — **option A, truncate before the run.** The
+measurement below stands as written; the options section now records which was taken and why, and
+the falsifications at the end were executed rather than proposed.
 
 **This is one property, not four incidents.** Accumulated rows were diagnosed separately in #177,
 #180, #185 and #194, and each time the answer was "run `db:reset`". That is treatment of the case.
@@ -122,11 +123,12 @@ per-run, not a function of what is already there. The database went from 27 MB t
 
 ---
 
-## Options — none chosen
+## Options
 
-### A — Truncate before the run
+### A — Truncate before the run — **ACCEPTED**
 
-In `prepare-database.ts`, after `migrate deploy` and before the seed.
+In `prepare-database.ts`, after `migrate deploy` and before the seed. Implemented as
+`fixtures/truncate.ts`.
 
 **Buys:** every run starts from a known state, so a failure is reproducible from the same beginning
 rather than from a different one each time. It also leaves the previous run's rows in place until the
@@ -136,6 +138,23 @@ next run starts — so a suite that just failed can still be inspected, which is
 **Price:** nothing bounds a *single* run's footprint; the database still grows to 528 rows during a
 run and stays there until the next one. A developer opening the database between runs sees residue
 and may reasonably think the cleanup is not working.
+
+**The Founder's reasoning, recorded because it is the part worth keeping:**
+
+> The rows of a failed run are evidence. The database is one more place where the cause is visible,
+> alongside the log and the trace. Cleaning up afterwards destroys it on the run that is the most
+> interesting of all.
+>
+> A teardown does not execute on killed and crashed runs — that is, on exactly the ones whose
+> residue confuses people later. Cleaning up afterwards cleans the cases that were already clean.
+
+**The price is accepted explicitly**, not accepted by omission: growth within a run is unbounded, the
+528 rows remain, and the next run removes them.
+
+**On the form, and it is not a detail.** The list is derived from `information_schema`, never
+written as an array of names. A written list is a list somebody edits to turn a red run green; a
+derived list has no handle to loosen, and a table added by next sprint's migration joins the sweep
+by existing rather than by being remembered.
 
 ### B — Truncate after the run
 
@@ -179,11 +198,57 @@ else at the time.
 
 ---
 
-## Not decided
+## Falsification — executed, not proposed
 
-**Trigger: the next diagnosis that ends in `db:reset`.** Whichever option is taken, the choice
-between *before* and *after* is a choice about evidence, not about tidiness — the database is the
-place a failed run's cause is still visible, and only one of the two leaves it there.
+Four claims, each run against the case that would fail if the implementation were wrong.
+
+**1. A run from a dirty database ends at the same census as one from a clean database.** Started at
+528 residue rows, ran the suite twice:
+
+```
+start:  residue=528
+run 1:  72 passed (2.7m)  ->  residue=528  reference=58  migrations=13  size=10 MB
+run 2:  72 passed (2.7m)  ->  residue=528  reference=58  migrations=13  size=10 MB
+```
+
+Without the sweep those runs read 1,056 and 1,584. The figure is now a **fixed point** rather than a
+running total, which is the whole claim.
+
+**2. `_prisma_migrations` must survive, and an implementation that truncates it must fail.**
+Falsified by breaking it deliberately, on a scratch database rather than the suite's own: truncate
+the bookkeeping, run `db:prepare` again, and it fails —
+
+```
+Error: P3018  A migration failed to apply.
+Database error code: 42710
+ERROR: type "entity_status" already exists
+```
+
+**It fails on a TYPE, not on a table**, which is the more useful half of the result: `TRUNCATE`
+empties tables and leaves every other schema object — types, sequences, indexes — in place, so
+re-applying the first migration collides immediately. A wrong implementation does not degrade
+quietly; it stops at the first step of the next run with a named error code.
+
+**3. A table nobody listed is swept because it exists.** `tests/harness-cleanup.spec.ts` creates
+`arrived_in_a_later_migration` at runtime, named in no array anywhere, and asserts the sweep covers
+it. **A list-based implementation passes every other test in that file and fails this one** — which
+is what makes it a falsification of the form rather than a demonstration of the function.
+
+**4. Foreign keys do not dictate an order.** `child` references `parent`; truncating them one at a
+time in catalogue order fails on the first. The test asserts both are in a single `TRUNCATE`.
+
+The first three tests run against a **throwaway database the spec creates and drops**, because a
+sweep pointed at the suite's own database would delete the rows the rest of the run is asserting on.
+The fourth assertion in that file is the only one touching the real database, and it only reads: it
+fails if the sweep were ever placed *after* the seed, since the reference tables would be empty.
+
+---
+
+## What this does not close
+
+**Growth within a run is still unbounded** — that is the accepted price, not an oversight. If a
+single run's footprint ever matters, the measurement to take first is whether 528 is stable across
+sprints or grows with the suite.
 
 **Out of scope here, deliberately:** the outbox retry loop that has no ceiling, recorded in
 `SYSTEM_ARCHITECTURE.md` — it is the reason 132 of those residue rows can never publish, but it is a
