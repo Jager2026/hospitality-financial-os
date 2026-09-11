@@ -1,6 +1,6 @@
 ---
 title: ADR-081 — A navigation that fetches its destination and never arrives
-version: 1.0.0
+version: 1.1.0
 status: Proposed
 classification: Critical
 owner: Founder
@@ -177,3 +177,90 @@ person to meet it will spend a session on it, as three sessions already have. **
 **Trigger: the next pull request this blocks.** On present frequency that is days, not weeks — and
 whichever option is chosen, the measurement named above under *"whether a real person is affected"*
 should happen first, because it costs one probe and it changes what this document is about.
+
+---
+
+## Amendment — the second-click measurement was attempted, and did not reproduce
+
+**2026-09-11, Sprint 16, fifth session. The question is still unanswered**, and this section says so
+first, because the section directly above calls it "the cheapest next measurement and it should be
+first". It was taken first. The failure did not happen.
+
+### What was run
+
+The three assertions in the table above were instrumented in place, rather than in a probe: the
+previous session established that the hang has never reproduced outside a full suite run, so a
+standalone probe measures the wrong thing. `apps/e2e/fixtures/navigation-measure.ts` clicks, waits
+the same fifteen seconds the `toHaveURL` assertion waited, and — only once that has already failed —
+clicks a second time and reports what happened.
+
+| attempts | shape | reproductions |
+|---|---|---|
+| 100 | standalone probe, warm context (session four) | 0 |
+| 60 | standalone probe, cold context per attempt (session four) | 0 |
+| **60** | **full `test:e2e` runs, instrumented assertions (this session)** | **0** |
+
+Sixty full-suite runs, about three hours. One of the sixty failed on something else — a
+`POST /auth/register` that hung until the thirty-second test timeout — and its log, trace and
+screenshot are kept, because a cause is isolable exactly once. It is not this flake: no navigation
+was involved.
+
+### What zero means, and what it does not
+
+**Thirteen runs would have been worthless and were nearly reported as a result.** At the rate this
+document records — roughly one suite run in twenty — the probability of seeing nothing in thirteen
+runs is 51%. A coin toss is not a finding, and "ran thirteen times, green" is the same sentence as
+the one `CLAUDE.md` forbids, with a larger number in it. The budget was extended for that reason and
+for no other.
+
+At sixty runs the probability of zero, if the recorded rate were true, is **4.6%**. So one of two
+things holds: the rate on this machine is below one in twenty, or this was an unlucky sample at the
+5% level. **What is NOT established is that the defect is gone** — it was captured on a trace, and a
+trace is not undone by a later silence.
+
+### Why this negative may not transfer to CI
+
+Three conditions differ from the ones that produced the original failure, and all three are recorded
+rather than argued:
+
+1. **The e2e database is never reset.** `prepare-database.ts` creates, migrates and seeds; it does
+   not truncate. After these runs it holds **5,233 users** and **132 outbox events that have never
+   published**, the oldest at **5,293 delivery attempts**. CI starts empty every time. Sixty runs on
+   a monotonically growing database is not sixty repetitions of CI's condition.
+2. **The machine was mostly idle.** Runs took 2.1 minutes for the first seven and 3.6-4.3 for the
+   rest. This document records the failure as load-dependent.
+3. **It has reached CI once.** So the conditions that produce it exist somewhere this session could
+   not reach.
+
+### The instrument is left armed, and what that costs
+
+It stays in the three assertions. The reasoning is that the answer cannot be obtained locally — that
+is now measured, not assumed — so the only remaining route to it is the next real failure, wherever
+that happens. An instrument that is not armed when the failure comes has to wait for the one after.
+
+**It cannot turn a red run green.** The first wait is fifteen seconds, exactly the `expect` timeout
+of the assertion it replaces, so the first click is judged by the same standard as before; a test
+that failed still fails. The only difference is that the failure message carries
+`secondClickNavigated=yes|no` instead of only the symptom.
+
+### The instrument's own defect, found before it could mislead
+
+The first version could not have reported at all. Its waits summed to 47 seconds against a test
+budget of 30, so Playwright would have killed the test with `Test timeout of 30000ms exceeded` and
+the measurement would never have printed — and the run would have looked exactly like the flake it
+was there to explain. It is the failure mode `CLAUDE.md` names for self-written tools, in its
+quietest form: not a false finding, but no finding, wearing the same face as the symptom.
+
+Fixed by shortening the measurement windows and raising the test timeout **only on the path where
+the test has already failed**, so a passing run is untouched and no raise can ever buy a green
+result. Verified as a discriminating pair rather than by reading it:
+
+- **must stay silent:** 59 clean full-suite runs, 68 passed each, not one measurement line;
+- **must report:** one run with the target regex deliberately made unmatchable — the measurement
+  printed in full, and the failing path took **29.0 seconds** against the 30-second default, on an
+  idle machine running a single test. A one-second margin is why the raise is necessary rather than
+  precautionary.
+
+**Still unexercised: the `secondClickNavigated=yes` branch.** No case has been constructed in which
+a first click genuinely fails and a second genuinely succeeds, so that half of the report has never
+run. Said plainly because the whole point of the instrument is that branch.

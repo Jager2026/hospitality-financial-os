@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { API_BASE, registerUser } from "../fixtures/api";
 import { seedMemberWithRole, seedOrgWideOwner } from "../fixtures/org";
 import { seedOpenShift, seedTransaction } from "../fixtures/shift";
+import { clickAndMeasureNavigation } from "../fixtures/navigation-measure";
 import { resetRateLimits } from "../fixtures/throttle";
 
 /**
@@ -197,11 +198,14 @@ test("the card answers what the row cannot — where the money went", async ({ p
 
   await logIn(page, owner.email, owner.password);
   await page.goto(`/restaurants/${org.restaurantId}/transactions`);
-  await page.getByTestId("transaction-row").first().click();
-
   // The navigation and the render are asserted separately, so a failure names which half of the
   // claim was wrong rather than only that the breakdown was missing.
-  await expect(page).toHaveURL(/\/transactions\/[0-9a-f-]{36}$/);
+  await clickAndMeasureNavigation(
+    page,
+    page.getByTestId("transaction-row").first(),
+    "transaction-row",
+    /\/transactions\/[0-9a-f-]{36}$/,
+  );
 
   const breakdown = page.getByTestId("transaction-breakdown");
   await expect(breakdown).toBeVisible();
@@ -232,8 +236,11 @@ test("the dashboard leads here, because that is where the question starts", asyn
 
   await logIn(page, owner.email, owner.password);
   await page.goto(`/restaurants/${org.restaurantId}`);
-  await page.getByTestId("dashboard-transactions-link").click();
-
-  await expect(page).toHaveURL(new RegExp(`/restaurants/${org.restaurantId}/transactions$`));
+  await clickAndMeasureNavigation(
+    page,
+    page.getByTestId("dashboard-transactions-link"),
+    "dashboard-transactions-link",
+    new RegExp(`/restaurants/${org.restaurantId}/transactions$`),
+  );
   await expect(page.getByTestId("transactions")).toBeVisible();
 });
