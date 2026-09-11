@@ -8,6 +8,7 @@ import {
   setStripeState,
   type StripeState,
 } from "../fixtures/org";
+import { clickAndMeasureNavigation } from "../fixtures/navigation-measure";
 import { resetRateLimits } from "../fixtures/throttle";
 
 /**
@@ -233,7 +234,11 @@ test("the dashboard banner now leads somewhere", async ({ page, request }) => {
 
   // #178 left the banner naming an action with nothing to press, because this screen did not
   // exist. The words are a route now.
-  await page.getByTestId("stripe-banner-action").click();
-  await expect(page).toHaveURL(new RegExp(`/restaurants/${org.restaurantId}/onboarding$`));
+  await clickAndMeasureNavigation(
+    page,
+    page.getByTestId("stripe-banner-action"),
+    "stripe-banner-action",
+    new RegExp(`/restaurants/${org.restaurantId}/onboarding$`),
+  );
   await expect(page.getByTestId("connect-payments")).toBeVisible();
 });
