@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.22.0
+version: 2.23.0
 status: Active
 classification: Critical
 priority: Highest
@@ -236,6 +236,21 @@ Two things follow from the same reasoning, and both were got wrong before they w
 
 - **The statistical floor is a lower bound on the budget, never a justification for it.** "Thirteen runs prove nothing" is a true and useful finding; it establishes that a *smaller* budget is worthless, not that a *larger* one is affordable. Those are separate questions with separate owners — the first is engineering, the second is not.
 - **An unattended cost is still a cost, and running overnight does not make it free.** It occupies the machine, the database grows under it (see `apps/e2e/fixtures/prepare-database.ts`), and it forecloses whatever else that window could have held. "It runs in the background" is a reason the Founder might well say yes; it is not a reason to skip asking.
+
+**A workaround in a test can hide a defect in the product — and it hides it the better the more convincing the workaround's explanation is.** The dangerous case is not a lazy `sleep`; it is a considered, correct-sounding account of why the test needs help. Such an account satisfies the part of you that was about to ask a further question, and the further question was the one that mattered.
+
+It cost a shipped regression on the money path (ADR-083, amended). Writing the outbox backoff's own tests, two failed and a third passed for the wrong reason. The cause was found and written down accurately: `next_attempt_at` defaults to the DATABASE's clock, which keeps running while `vi.useFakeTimers` holds the test process's `Date` still, so a freshly inserted row sits milliseconds in the future and is never selected. A helper stepped past it, the explanation went into the ADR, and the work moved on.
+
+Every sentence of that was true. It was also **incomplete in exactly the direction that mattered**: the two clocks were still being compared in the *product*, where no fake timer exists, and the question never asked was what that comparison does without one. The answer was that a server whose clock lags the database's delays every newly written outbox event by the difference — with a Wallet projection waiting behind it.
+
+**So the rule is a question, asked whenever a test needs a workaround at all: what does the PRODUCT do without the test's artificial conditions?** An explanation that is true of the test may be incomplete for the product, and the workaround removes exactly the pressure that would have revealed the rest. Write the answer down next to the workaround; if it cannot be written, the workaround is not yet understood.
+
+**And a diagnostic that came out of the same incident, because it is the thing that finally pointed at the cause.** When a test fails intermittently, compare its failure rate **in isolation** against its rate **inside the full suite**, and read the direction:
+
+- **Fails more often ALONE → a timing window.** Less runs around it means less time between the steps of the test itself, so a window that a busy suite happens to step over is hit reliably. This is the counter-intuitive one, and it is why it needs saying: the narrow run is the *harsher* test.
+- **Fails more often IN THE SUITE → contamination.** Shared state, accumulated rows, a neighbouring worker, ordering. The broad run is the harsher test, which is what everybody expects and therefore looks for first.
+
+Measured, on the same defect: the ADR-069 routing tests failed **0 of 3 alone** and passed about **1 run in 3** inside their own file. That inversion was on the screen for a while before it was read, and reading it the wrong way round cost a session spent suspecting an accumulated database — which was the defect's innocent neighbour, not its cause.
 
 **Run the whole gate before pushing, not the part that looks relevant — and the whole gate includes `build`.** Lint, typecheck and tests are the ones a change *feels* like it needs; the build is the one that enforces `rootDir`, decides what actually deploys, and is therefore the one whose absence is invisible until CI. Skipping it let 50 compiled spec files ship in the production bundle unnoticed, and let a fixture import that could never compile reach CI instead of being caught in seconds. **A gate you run selectively is a gate you have already weakened.**
 
