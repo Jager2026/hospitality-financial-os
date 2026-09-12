@@ -1,9 +1,19 @@
 /**
- * Seeds three Dashboards a person can look at, on the LOCAL development database only.
+ * Seeds every Portal screen with something worth looking at, on the LOCAL development database
+ * only.
  *
  * **Why this exists.** Nothing in the suite catches a visual regression: the end-to-end tests
- * assert content, the contrast spec asserts tokens, and neither has eyes. The screen had never
- * been looked at. This puts three real states in front of one.
+ * assert content, the contrast spec asserts tokens, and neither has eyes. This puts real states in
+ * front of one.
+ *
+ * **It began as three Dashboards and was renamed when it stopped being that.** The first version
+ * wrote Ledger lines only, which is what the Dashboard computes from — so three screens had data
+ * and five were empty, and the file was called `seed-dashboard-demo` truthfully. Covering the rest
+ * meant writing what those screens actually read: `transaction` rows for the Transactions list and
+ * card, six weeks of closed shifts for Analytics (Performance compares a period against the one
+ * before it, and there is no period before today), a pending invitation for Staff, and tip presets
+ * that are not the default so Settings is visibly reading the venue rather than rendering a
+ * constant.
  *
  * **It refuses to run anywhere but locally, and the check asks the database rather than the URL.**
  * A connection string can be read wrong; `inet_server_addr()` is the server's own answer about
@@ -16,6 +26,7 @@
  *
  * Usage:  pnpm --filter backend run demo:dashboard
  */
+import { randomUUID } from "node:crypto";
 import { PrismaClient, type Prisma } from "@prisma/client";
 import { hashPassword } from "../src/auth/password.util";
 import { deriveOnboardingStatus } from "../src/restaurant/onboarding-status.util";
@@ -138,9 +149,50 @@ async function main(): Promise<void> {
       },
     });
 
+    // The owner takes tips too. ADR-033's reasoning, made visible: Top Staff ranks whoever served
+    // the table, which can be the person who owns the place — so the Staff screens have two names
+    // rather than one, and a ranking with one row proves nothing about ranking.
+    const ownerMembership = await prisma.membership.findFirstOrThrow({
+      where: { userId: owner.id, organizationId: organization.id },
+    });
+
     await stateWithSales(prisma, restaurants.withSales, waiterMembership.id);
     await stateQuiet(prisma, restaurants.quiet);
     await stateAcrossMidnight(prisma, restaurants.acrossMidnight);
+
+    // Six weeks behind today, on the busy venue only. Analytics is the one screen a single day
+    // cannot serve: Performance compares a period against the one before it, and there is no
+    // period before today.
+    await history(prisma, restaurants.withSales, waiterMembership.id, ownerMembership.id);
+
+    // A pending invitation, which the Staff screen deliberately does NOT show — it lists people
+    // who have accepted, and says so in as many words.
+    //
+    // **Seeding something invisible is the point here, not an oversight.** That sentence on the
+    // screen is a claim about what is being withheld, and a claim about an absence cannot be
+    // checked when there is nothing absent: with no pending invitation in the database, an empty
+    // list is empty for the boring reason. With one, the screen is demonstrably choosing.
+    //
+    // The token itself is never stored, only its hash, so this row cannot be accepted by anyone.
+    const accountantRole = await prisma.role.findFirstOrThrow({ where: { name: "Accountant" } });
+    await prisma.membershipInvitation.create({
+      data: {
+        email: "buhalterija@local.invalid",
+        organizationId: organization.id,
+        restaurantId: restaurants.withSales,
+        roleId: accountantRole.id,
+        invitedBy: owner.id,
+        tokenHash: "demo-invitation-never-acceptable",
+        expiresAt: new Date(Date.now() + 6 * 86_400_000),
+      },
+    });
+
+    // Settings shows these back. Not the default [10, 15, 20], so the screen is visibly reading
+    // the venue rather than rendering a constant — the difference a default hides.
+    await prisma.restaurant.update({
+      where: { id: restaurants.withSales },
+      data: { tipPresets: [5, 12, 18] },
+    });
 
     print(restaurants);
   } finally {
@@ -161,8 +213,24 @@ async function wipe(prisma: PrismaClient, organizationId: string): Promise<void>
     })
   ).map((l) => l.journalEntryId);
 
+  // Order is the foreign keys read backwards, and the Payment/Transaction rows are why this list
+  // grew: a Transaction points at a Payment, a JournalEntry points at a Transaction, and a
+  // LedgerLine points at the JournalEntry. Deleting in any other order fails on a constraint —
+  // which is the honest failure, but it fails on the SECOND run of the day, when somebody is
+  // trying to look at a screen rather than read this file.
+  const keys = (
+    await prisma.payment.findMany({
+      where: { restaurantId: { in: restaurantIds } },
+      select: { idempotencyKey: true },
+    })
+  ).map((p) => p.idempotencyKey);
+
   await prisma.ledgerLine.deleteMany({ where: { restaurantId: { in: restaurantIds } } });
   await prisma.journalEntry.deleteMany({ where: { id: { in: entryIds } } });
+  await prisma.transaction.deleteMany({ where: { restaurantId: { in: restaurantIds } } });
+  await prisma.payment.deleteMany({ where: { restaurantId: { in: restaurantIds } } });
+  await prisma.idempotencyKey.deleteMany({ where: { key: { in: keys } } });
+  await prisma.membershipInvitation.deleteMany({ where: { organizationId } });
   await prisma.shift.deleteMany({ where: { restaurantId: { in: restaurantIds } } });
   await prisma.membership.deleteMany({ where: { organizationId } });
   await prisma.restaurant.deleteMany({ where: { organizationId } });
@@ -253,19 +321,11 @@ function saleLines(
   ];
 }
 
-/** A tip allocated to one person. Its own journal entry, as the real path posts it. */
-function tipLines(
-  restaurantId: string,
-  shiftId: string,
-  membershipId: string,
-  amount: bigint,
-  at: Date,
-): Prisma.LedgerLineCreateManyInput[] {
-  return [
-    line(restaurantId, shiftId, "PROCESSOR_CLEARING", "DEBIT", amount, at),
-    { ...line(restaurantId, shiftId, "TIP_PAYABLE", "CREDIT", amount, at), membershipId },
-  ];
-}
+// `tipLines` used to live here — a tip posted as its own journal entry, separate from the sale.
+// It is gone rather than kept for later: `sale()` now writes the tip as a TIP_PAYABLE line on the
+// sale's OWN entry, which is where the Transactions card looks for it. Two ways to post a tip in
+// one fixture is how the Dashboard and the Transactions screen came to disagree about the same
+// evening in the first place.
 
 function line(
   restaurantId: string,
@@ -325,29 +385,27 @@ async function stateWithSales(
     data: { restaurantId, openedAt, businessDate: businessDateOf(openedAt) },
   });
 
-  const sales: [bigint, bigint, number][] = [
-    [4_250n, 128n, 17],
-    [12_000n, 360n, 18],
-    [3_050n, 92n, 19],
-    [8_400n, 252n, 20],
-    [6_150n, 185n, 21],
+  // The tip rides ON the sale rather than being posted as a separate entry, because that is how
+  // the real payment path writes it and what the Transactions card reads. The earlier version
+  // posted the two apart — correct for the Dashboard, whose figures come from the Ledger, and it
+  // would have left every row on the Transactions screen showing a tip of zero.
+  const sales: [bigint, bigint, bigint, number][] = [
+    [4_250n, 0n, 128n, 17],
+    [12_000n, 1_200n, 360n, 18],
+    [3_050n, 0n, 92n, 19],
+    [8_400n, 500n, 252n, 20],
+    [6_150n, 900n, 185n, 21],
   ];
-  for (const [bill, fee, hour] of sales) {
-    const at = todayAt(hour, 15);
-    await post(prisma, "PAYMENT_CAPTURED", saleLines(restaurantId, shift.id, bill, fee, at), at);
-  }
-
-  for (const [amount, hour] of [
-    [500n, 18],
-    [1_200n, 20],
-  ] as [bigint, number][]) {
-    const at = todayAt(hour, 20);
-    await post(
-      prisma,
-      "TIP_ALLOCATED",
-      tipLines(restaurantId, shift.id, waiterMembershipId, amount, at),
-      at,
-    );
+  for (const [bill, tip, fee, hour] of sales) {
+    await sale(prisma, {
+      restaurantId,
+      shiftId: shift.id,
+      bill,
+      tip,
+      fee,
+      waiterMembershipId,
+      at: todayAt(hour, 15),
+    });
   }
 }
 
@@ -393,20 +451,230 @@ async function stateAcrossMidnight(prisma: PrismaClient, restaurantId: string): 
   );
 }
 
+/**
+ * A sale the TRANSACTIONS screens can read, not only the Dashboard.
+ *
+ * **The difference between this and `post()` above is the whole reason three screens were empty.**
+ * `post()` writes Ledger lines, which is what the Dashboard's figures are computed from. But
+ * `GET /transactions` reads `transaction` rows, and the card's breakdown reads the TIP_PAYABLE
+ * lines of the journal entry attached to that transaction. A fixture with one and not the other
+ * produces a Dashboard showing money beside a Transactions screen showing nothing — a state the
+ * product itself cannot reach, which is the class of fixture defect this file has already fixed
+ * once between two tables.
+ *
+ * One `$transaction`, because the Ledger's balance trigger is INITIALLY DEFERRED and sums debits
+ * against credits at COMMIT: four separate writes fail on the first one, honestly and unhelpfully.
+ */
+async function sale(
+  prisma: PrismaClient,
+  args: {
+    restaurantId: string;
+    shiftId: string;
+    bill: bigint;
+    tip: bigint;
+    fee: bigint;
+    waiterMembershipId: string | null;
+    at: Date;
+    status?: "COMPLETED" | "REFUNDED" | "DISPUTED";
+  },
+): Promise<string> {
+  const { restaurantId, shiftId, bill, tip, fee, waiterMembershipId, at } = args;
+  const charged = bill + tip;
+  const key = `demo-${randomUUID()}`;
+
+  return await prisma.$transaction(async (tx) => {
+    await tx.idempotencyKey.create({
+      data: {
+        key,
+        endpointScope: "POST /payments",
+        requestFingerprint: "dashboard-demo",
+        status: "COMPLETED",
+        createdAt: at,
+        expiresAt: new Date(at.getTime() + 86_400_000),
+      },
+    });
+
+    const payment = await tx.payment.create({
+      data: {
+        restaurantId,
+        processor: "stripe",
+        processorPaymentId: `pi_demo_${randomUUID().slice(0, 12)}`,
+        amount: charged,
+        tipAmount: tip,
+        waiterMembershipId,
+        currency: EUR,
+        status: "SUCCEEDED",
+        paymentMethod: "card",
+        idempotencyKey: key,
+        createdAt: at,
+        updatedAt: at,
+      },
+    });
+
+    const transaction = await tx.transaction.create({
+      data: {
+        paymentId: payment.id,
+        restaurantId,
+        grossAmount: charged,
+        currency: EUR,
+        status: args.status ?? "COMPLETED",
+        createdAt: at,
+      },
+    });
+
+    const entry = await tx.journalEntry.create({
+      data: {
+        entryType: "PAYMENT_CAPTURED",
+        transactionId: transaction.id,
+        description: "dashboard demo sale",
+        createdAt: at,
+      },
+    });
+
+    const lines: Prisma.LedgerLineCreateManyInput[] = [
+      { ...line(restaurantId, shiftId, "PROCESSOR_CLEARING", "DEBIT", charged, at) },
+      { ...line(restaurantId, shiftId, "RESTAURANT_REVENUE_PAYABLE", "CREDIT", bill - fee, at) },
+      { ...line(restaurantId, shiftId, "PLATFORM_FEE_REVENUE", "CREDIT", fee, at) },
+    ];
+    if (tip > 0n) {
+      lines.push({
+        ...line(restaurantId, shiftId, "TIP_PAYABLE", "CREDIT", tip, at),
+        membershipId: waiterMembershipId,
+      });
+    }
+    await tx.ledgerLine.createMany({
+      data: lines.map((l) => ({ ...l, journalEntryId: entry.id })),
+    });
+
+    return transaction.id;
+  });
+}
+
+/**
+ * Six weeks of closed shifts on the busy venue, so Analytics has something to be about.
+ *
+ * **Analytics is the screen a one-day fixture cannot serve.** Revenue and Tips draw a series over
+ * shifts; Performance compares the chosen period against the one immediately before it, which does
+ * not exist if all the money is today; Staff ranks people over a period; and the period-summary
+ * report has no average to report from a single sale. So this seeds real history rather than more
+ * of today.
+ *
+ * **One of these shifts crosses midnight deliberately.** ADR-065's distinction — a shift is not a
+ * calendar day — is the one thing on that screen a person cannot check by arithmetic, and the
+ * caption claiming it should have a shift behind it that actually ran to 01:20.
+ */
+async function history(
+  prisma: PrismaClient,
+  restaurantId: string,
+  waiterMembershipId: string,
+  ownerMembershipId: string,
+): Promise<void> {
+  for (let daysAgo = 42; daysAgo >= 1; daysAgo -= 1) {
+    // Four days in seven, so the series has gaps a real venue has — a closed Monday reads as a
+    // closed Monday, not as a hole in the data.
+    if (daysAgo % 7 === 0 || daysAgo % 7 === 1 || daysAgo % 7 === 2) continue;
+
+    const openedAt = todayAt(16, 0);
+    openedAt.setDate(openedAt.getDate() - daysAgo);
+
+    // Every sixth evening runs late. `businessDateOf` keeps it on the day it opened, which is the
+    // whole point of the caption on the Analytics screen.
+    const late = daysAgo % 6 === 0;
+    const closedAt = new Date(openedAt);
+    closedAt.setHours(late ? 25 : 23, late ? 20 : 40, 0, 0);
+
+    const shift = await prisma.shift.create({
+      data: {
+        restaurantId,
+        openedAt,
+        closedAt,
+        closeReason: "BUTTON",
+        businessDate: businessDateOf(openedAt),
+      },
+    });
+
+    // Amounts vary by weekday so Performance shows a real change rather than a flat line, and the
+    // figures stay plausible for one evening in a Vilnius restaurant.
+    const busy = daysAgo % 7 === 5 || daysAgo % 7 === 6;
+    const covers = busy ? 6 : 4;
+    for (let i = 0; i < covers; i += 1) {
+      const at = new Date(openedAt);
+      at.setHours(openedAt.getHours() + i, 25, 0, 0);
+      const bill = BigInt(3_200 + ((daysAgo * 137 + i * 411) % 9_000));
+      const tip = BigInt(((daysAgo * 53 + i * 97) % 12) * 50);
+      await sale(prisma, {
+        restaurantId,
+        shiftId: shift.id,
+        bill,
+        tip,
+        fee: bill / 33n,
+        // Two people take tips, so the Staff area of Analytics has more than one row to rank.
+        waiterMembershipId: i % 3 === 0 ? ownerMembershipId : waiterMembershipId,
+        at,
+      });
+    }
+
+    if (late) {
+      const afterMidnight = new Date(openedAt);
+      afterMidnight.setHours(24, 50, 0, 0);
+      await sale(prisma, {
+        restaurantId,
+        shiftId: shift.id,
+        bill: 5_400n,
+        tip: 600n,
+        fee: 162n,
+        waiterMembershipId,
+        at: afterMidnight,
+      });
+    }
+  }
+}
+
 function print(r: Restaurants): void {
-  const url = (id: string) => `http://localhost:3000/restaurants/${id}`;
+  const busy = `http://localhost:3000/restaurants/${r.withSales}`;
   console.log(`  Seeded. Sign in at http://localhost:3000/login
 
     email     ${DEMO_EMAIL}
     password  ${DEMO_PASSWORD}
 
-  Signing in lands on the Restaurants list, which links to all three. The direct addresses:
+  Signing in lands on the Restaurants list. Eight screens, and what each one is for:
 
-    1. sales, tips, a named person   ${url(r.withSales)}       (Stripe live)
-    2. open shift, nothing sold      ${url(r.quiet)}       (Stripe untouched — cards banner)
-    3. closed 01:30, after-midnight  ${url(r.acrossMidnight)}       (payouts held — payouts banner)
+  1. Restaurants        http://localhost:3000/restaurants
+       Three venues in three Stripe states. The flags differ per row — that is the screen
+       reading each venue rather than the account.
 
-  Re-running this command resets all three.
+  2. Dashboard          ${busy}
+       Tonight: five sales, two of them tipped. Compare with the other two venues — the quiet
+       one explains itself instead of showing zeroes, and the third closed at 01:30 and says so.
+
+  3. Transactions       ${busy}/transactions
+       The list the Dashboard figure leads to. Money is written in the venue's own locale
+       (lt-LT), so 50,00 rather than 50.00. The filter has its own empty state, separate from
+       a venue that sold nothing.
+
+  4. Transaction card   open any row from the list above
+       Where the money went: the venue's share, the tip, our fee. A figure that is unavailable
+       says so rather than showing a zero.
+
+  5. Staff              ${busy}/staff
+       Two people who have ACCEPTED. There is also an invitation pending in the database, and
+       the screen deliberately does not show it — read the sentence at the top, which says so.
+       The pending row exists precisely so that absence is a choice rather than an empty table.
+
+  6. Settings           ${busy}/settings
+       Tip presets read 5, 12, 18 — deliberately not the default, so you can see the screen is
+       reading this venue. The shift auto-close time is shown and explained, not editable: no
+       endpoint stores it.
+
+  7. Analytics          ${busy}/analytics
+       Six weeks of shifts. Switch areas with the buttons; the period stays. Revenue and Tips
+       show a series BY SHIFT — one evening a week ran past midnight and is reported whole,
+       against the day the venue calls it. Performance compares against the previous period.
+
+  8. Connect payments   http://localhost:3000/restaurants/${r.quiet}/onboarding
+       The venue Stripe has never heard of. This is where the Dashboard banner leads.
+
+  Re-running the command resets everything above.
 `);
 }
 
