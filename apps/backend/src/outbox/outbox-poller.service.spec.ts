@@ -768,6 +768,69 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
     });
   }
 
+  // ── The regression these two exist for (ADR-083 amendment) ──────────────────────────────────
+  //
+  // The first version of the backoff filtered `next_attempt_at <= new Date()`. The left side is
+  // written by the DATABASE (`DEFAULT now()`); the right side is the APPLICATION's clock. Those are
+  // two clocks, and on the machine this was found on the database ran **5 ms ahead** — so an event
+  // created and polled within that window was invisible to its own poller. It made the ADR-069
+  // routing tests fail deterministically in isolation while the full file passed about one run in
+  // three, because a longer run put more milliseconds between the insert and the poll.
+  //
+  // The pair below does not depend on the skew of whoever runs it: it SETS a future
+  // `next_attempt_at` explicitly, so the two cases differ by one field and by nothing else.
+
+  it(
+    "an event that has never been attempted is due immediately, whatever the clocks say — " +
+      "discriminating: the first version compared a database-written timestamp against the " +
+      "application's clock, and skipped anything newer than the skew between them",
+    async () => {
+      const event = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "JournalEntry",
+          aggregateId: randomUUID(),
+          eventType: "journal_entry.payment_captured",
+          payload: { journalEntryId: "not-a-valid-uuid" },
+          // Five seconds ahead — far beyond any real skew, so the assertion is about the RULE
+          // ("never attempted means due") rather than about this machine's clocks.
+          nextAttemptAt: new Date(Date.now() + 5_000),
+        },
+      });
+
+      await poller.poll();
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(
+        after.attempts,
+        "a brand-new event waited for a clock instead of being dispatched",
+      ).toBe(1);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "an event that HAS been attempted still waits for its backoff — the other half, without which " +
+      "the fix above would simply have switched the backoff off",
+    async () => {
+      const event = await prisma.outboxEvent.create({
+        data: {
+          aggregateType: "JournalEntry",
+          aggregateId: randomUUID(),
+          eventType: "journal_entry.payment_captured",
+          payload: { journalEntryId: "not-a-valid-uuid" },
+          attempts: 3,
+          nextAttemptAt: new Date(Date.now() + 60_000),
+        },
+      });
+
+      await poller.poll();
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(after.attempts, "a failing event was retried before its backoff expired").toBe(3);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
   it("the delay doubles and then stops doubling", () => {
     // The shape, stated once so the behavioural tests below do not have to restate it. A version
     // without the cap would grow to 2^n and pass every other assertion in this file.
