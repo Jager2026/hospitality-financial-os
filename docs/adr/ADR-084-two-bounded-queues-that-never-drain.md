@@ -1,6 +1,6 @@
 ---
 title: ADR-084 — Two bounded queues that never drain
-version: 1.0.0
+version: 1.1.0
 status: Proposed
 classification: Important
 owner: Founder
