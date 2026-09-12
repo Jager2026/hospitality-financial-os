@@ -524,6 +524,10 @@ export const en = {
 
   "analytics.report.transactions": "Payments",
   "analytics.report.averageTip": "Average tip",
+  // `null` here means something different from the Performance table: not a zero baseline to
+  // compare against, but no payments in THIS period to average over. One sentence for two facts
+  // is how a screen states something the figures beside it contradict.
+  "analytics.report.noAverage": "No payments in this period to average over.",
   "analytics.report.topStaff": "Top five",
 
   "analytics.export.calendar": "Export (calendar days)",

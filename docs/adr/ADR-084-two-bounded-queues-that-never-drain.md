@@ -141,6 +141,26 @@ and neither started out looking like a queue problem. **Buys:** nothing.
 
 ---
 
+## A cleanup happened, and it is NOT option B
+
+On 2026-09-12 the dev database crossed the bound in ordinary use — **112 stale PENDING payments
+against a batch of 100** — and the local gate went red on exactly the six assertions this document
+reproduces. 107 of those rows (the ones with no Transaction attached, so test residue rather than
+anything a screen shows) were deleted by hand, and the gate went green again.
+
+**That was housekeeping on one machine. It is not option B, and nothing above is decided.** The
+distinction is the Founder's and it is worth stating in full, because the two are easy to conflate
+six months from now:
+
+- **The cleanup** answers *"this developer's database is over the bound today."* It is a fact about
+  one machine at one moment, and it will be true again.
+- **Option B** would answer *"how does the PRODUCT deal with a queue head that never moves."* That
+  question is open, and it is the one that matters — a production queue has the same head, and no
+  amount of local tidying reaches it.
+
+A reader finding the cleanup in the git history and reading it as a decision would close a question
+that nobody has answered. It is recorded here so that reading is not available.
+
 ## Not decided
 
 **Trigger: the next suite failure that names the wrong thing.** Both known symptoms — a timeout in
