@@ -1,6 +1,6 @@
 ---
 title: EVENT_CATALOG
-version: 1.4.0
+version: 1.5.0
 status: Active
 classification: Internal
 owner: Founder
@@ -31,6 +31,9 @@ Every row in `outbox_event` (`apps/backend/prisma/schema.prisma`) has exactly th
 | `created_at` | timestamp | |
 | `published_at` | timestamp, nullable | Set once a consumer has handled it; `null` = still pending |
 | `attempts` | int, default 0 | Incremented by the poller on every dispatch attempt |
+| `next_attempt_at` | timestamp, default `now()` | ADR-083. When the poller may try again; only a failure pushes it forward, by a delay that doubles |
+| `abandoned_at` | timestamp, nullable | ADR-085. Set when a handler declares the row can never be dispatched. A row carries this **or** `published_at`, never both |
+| `abandoned_reason` | text, nullable | ADR-085. The handler's own words for why — a terminal state nobody can act on is a row nobody can act on |
 
 Written in the **same database transaction** as the Ledger write it describes (ADR-003) — confirmed directly in `LedgerService.postJournalEntry`, not just asserted by the ADR text.
 
@@ -93,6 +96,8 @@ The payload is intentionally minimal — an id and the entry's own type, not a d
  `dispatch()` handles the projection and marks `published_at` in one atomic transaction, and only increments `attempts` on an actual failure — a change from the old skeleton, which incremented it unconditionally, even on a no-op.
 
 A row whose `attempts` reaches 5 without `published_at` being set still logs an operational alert (`SYSTEM_ARCHITECTURE.md`, Outbox Lag), and — as of Sprint 13, ADR-031 — also sends one outbound webhook POST to `ALERT_WEBHOOK_URL`, if configured (fired exactly once per event, on the poll that crosses the threshold, not repeated on every later retry). This is no longer the expected steady state it was between Sprint 5 and Sprint 7: a `payment_captured`/`tip_allocated`/`refund_issued`/`chargeback` row now gets `published_at` set within one poll cycle under normal operation, the same run of live verification that closed Sprint 7 confirmed this directly. A row that keeps failing past Sprint 7 is a real signal again, not the expected gap it briefly was — with one known, permanent exception: `ledger.service.spec.ts`'s own atomicity test seeds an `OutboxEvent` with no `journalEntryId` on purpose (proving the write lands in the same transaction as the Ledger write, nothing to do with Wallet), which `dispatch()` now rejects immediately rather than silently matching every Membership in the database — expected local test noise, not an alert to chase.
+
+**ADR-085 amendment: that exception is no longer noise the queue has to live with — it is concluded.** A `journal_entry.*` payload whose `journalEntryId` is missing or not a well-formed UUID raises `PermanentRejection`, and the poller writes `abandoned_at` with the reason instead of scheduling another attempt. The row is **kept, never deleted** — it is the only record that something produced work this system could not use — and it stops being selected, which is the point: without it, a row nothing can ever publish held a slot in the oldest-first batch of 50 forever, and events behind it waited behind something that would never move. **Only a payload referring to no real work qualifies.** A dispatch that fails for any other reason — a projection bug, a database problem, an outage — keeps exactly its previous behaviour: counted, backed off, alerted at five, retried forever, because abandoning a real Wallet projection would leave a balance permanently wrong and nothing has decided that giving up on money is ever right.
 
 ---
 

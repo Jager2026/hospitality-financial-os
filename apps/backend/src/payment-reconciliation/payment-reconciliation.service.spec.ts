@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import { PrismaService } from "../prisma/prisma.service";
 import type { RetrievedPaymentIntent } from "../stripe/stripe.service";
 import type { StripeService } from "../stripe/stripe.service";
@@ -338,5 +339,265 @@ describe("PaymentReconciliationService (real database)", () => {
       expect(message).toContain("no Stripe account");
     },
     RECONCILIATION_SAFE_TIMEOUT_MS,
+  );
+});
+
+// ADR-085 — the queue's second exit. `Payment.status` has had CANCELED, FAILED and DECLINED in
+// its enum since the schema was written and nothing had ever written one; a Payment could leave
+// PENDING only by succeeding, so everything that did not succeed stayed in the oldest-first batch
+// of 100 forever.
+describe("PaymentReconciliationService concluding a stuck payment (ADR-085)", () => {
+  const prisma = new PrismaService();
+
+  const BATCH_SIZE = 100; // mirrors the constant in the service; the ballast below must exceed it
+
+  beforeAll(async () => {
+    await prisma.$connect();
+  });
+
+  // This block deliberately seeds more than one full batch (111 payments) to reproduce a starved
+  // head, and then removes exactly what it created — matched by its own `pi_adr085_` prefix, never
+  // by age and never by shape. Best effort by nature: ADR-082 records that teardown does not run on
+  // a killed or crashed run, which is why the e2e database is truncated up front instead. The dev
+  // database cannot be, so a test that knowingly writes a hundred rows owning them afterwards is
+  // the most that is available here — and what it leaves behind if this never runs are CONCLUDED
+  // rows, which by ADR-085 no longer occupy the queue at all.
+  afterAll(async () => {
+    const mine = await prisma.payment.findMany({
+      where: { processorPaymentId: { startsWith: "pi_adr085_" } },
+      select: { id: true, idempotencyKey: true },
+    });
+    await prisma.payment.deleteMany({ where: { id: { in: mine.map((p) => p.id) } } });
+    await prisma.idempotencyKey.deleteMany({
+      where: { key: { in: mine.map((p) => p.idempotencyKey) } },
+    });
+    await prisma.$disconnect();
+  });
+
+  async function seedRestaurant85() {
+    const org = await prisma.organization.create({ data: { name: "ADR-085 Test Org" } });
+    return prisma.restaurant.create({
+      data: {
+        organizationId: org.id,
+        name: "ADR-085 Test Restaurant",
+        legalName: "ADR-085 Test Restaurant UAB",
+        companyNumber: `RC85-${randomUUID()}`,
+        vatNumber: `LT85${randomUUID()}`,
+        email: `restaurant-${randomUUID()}@example.com`,
+        phone: "+37060000009",
+        country: "LT",
+        currency: "EUR",
+        defaultCustomerLocale: "en",
+        timezone: "Europe/Vilnius",
+        address: "Test address",
+        stripeAccountId: `acct_fake_${randomUUID()}`,
+      },
+    });
+  }
+
+  // Payment.idempotency_key is a real foreign key, so the key row has to exist first — the same
+  // two-step this file has always done, kept here rather than reusing the other block private
+  // helper so each describe stays readable on its own.
+  async function seedStuck(restaurantId: string, processorPaymentId: string, createdAt: Date) {
+    const key = `adr085-${randomUUID()}`;
+    await prisma.idempotencyKey.create({
+      data: {
+        key,
+        endpointScope: "/payments",
+        requestFingerprint: "test",
+        status: "COMPLETED",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    return prisma.payment.create({
+      data: {
+        restaurantId,
+        processor: "stripe",
+        processorPaymentId,
+        amount: 1000n,
+        tipAmount: 0n,
+        currency: "EUR",
+        status: "PENDING",
+        paymentMethod: "card",
+        idempotencyKey: key,
+        createdAt,
+      },
+    });
+  }
+
+  function buildService(
+    retrievePaymentIntent: ReturnType<typeof vi.fn>,
+    sendAlert: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined),
+  ) {
+    return new PaymentReconciliationService(
+      prisma,
+      { retrievePaymentIntent } as unknown as StripeService,
+      { captureFromPaymentIntentId: vi.fn() } as unknown as WebhooksService,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { sendAlert } as any,
+      fakeLogger,
+    );
+  }
+
+  /** Cycles until Stripe has actually been asked about this payment id — the shared dev database
+   *  can hold older stuck rows that fill part of the batch (the same bounded-catch-up reasoning
+   *  this file already uses), and this reaches THIS test's own row regardless. */
+  async function reconcileUntilTouched(
+    service: PaymentReconciliationService,
+    retrievePaymentIntent: ReturnType<typeof vi.fn>,
+    processorPaymentId: string,
+    maxCycles = 5,
+  ): Promise<void> {
+    for (let i = 0; i < maxCycles; i++) {
+      if (retrievePaymentIntent.mock.calls.some((c) => c[1] === processorPaymentId)) return;
+      await service.reconcile();
+    }
+  }
+
+  it(
+    "a PaymentIntent Stripe reports as canceled concludes the Payment as CANCELED, and a later " +
+      "cycle does not ask about it again — discriminating: an implementation that only alerts " +
+      "leaves the row PENDING, so it is re-retrieved from Stripe every five minutes forever",
+    async () => {
+      const restaurant = await seedRestaurant85();
+      const piId = `pi_adr085_cancelled_${randomUUID()}`;
+      const payment = await seedStuck(
+        restaurant.id,
+        piId,
+        new Date(Date.now() - PENDING_THRESHOLD_MS - 60_000),
+      );
+      const retrievePaymentIntent = vi.fn(async (_acct: unknown, id: unknown) => ({
+        id: String(id),
+        status: id === piId ? "canceled" : "requires_payment_method",
+      })) as unknown as ReturnType<typeof vi.fn>;
+      const service = buildService(retrievePaymentIntent);
+
+      await reconcileUntilTouched(service, retrievePaymentIntent, piId);
+
+      const after = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      expect(after.status, "a canceled PaymentIntent left its Payment in PENDING").toBe("CANCELED");
+
+      // THE HALF THAT REJECTS THE OLD IMPLEMENTATION: it has left the queue, so the next cycle
+      // does not touch it at all.
+      const callsBefore = retrievePaymentIntent.mock.calls.filter((c) => c[1] === piId).length;
+      await service.reconcile();
+      const callsAfter = retrievePaymentIntent.mock.calls.filter((c) => c[1] === piId).length;
+      expect(callsAfter, "a concluded Payment was asked about again").toBe(callsBefore);
+    },
+    RECONCILIATION_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a PaymentIntent Stripe has never heard of concludes the Payment as FAILED, and the alert says " +
+      "so rather than blaming the connection — discriminating: before ADR-085 every error from " +
+      "retrievePaymentIntent produced the same unreachable-Stripe message, which points whoever " +
+      "reads it at the wrong system",
+    async () => {
+      const restaurant = await seedRestaurant85();
+      const piId = `pi_adr085_missing_${randomUUID()}`;
+      const payment = await seedStuck(
+        restaurant.id,
+        piId,
+        new Date(Date.now() - PENDING_THRESHOLD_MS - 60_000),
+      );
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      const retrievePaymentIntent = vi.fn(async (_acct: unknown, id: unknown) => {
+        if (id === piId) {
+          throw new PermanentRejection(`Stripe PaymentIntent ${piId} does not exist`);
+        }
+        return { id: String(id), status: "requires_payment_method" };
+      }) as unknown as ReturnType<typeof vi.fn>;
+      const service = buildService(retrievePaymentIntent, sendAlert);
+
+      await reconcileUntilTouched(service, retrievePaymentIntent, piId);
+
+      const after = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      expect(after.status).toBe("FAILED");
+      const alerts = sendAlert.mock.calls.filter((c) => (c[0] as string).includes(payment.id));
+      expect(alerts, "concluding a Payment happened silently").toHaveLength(1);
+      expect(alerts[0][0]).toContain("does not exist");
+    },
+    RECONCILIATION_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a TRANSIENT Stripe error keeps exactly today's behaviour — the Payment stays PENDING, is " +
+      "alerted once, and is still asked about on the next cycle. The discriminating pair for the " +
+      "test above: same call, same throw site, opposite answer, because a connection problem is " +
+      "not an answer about the payment",
+    async () => {
+      const restaurant = await seedRestaurant85();
+      const piId = `pi_adr085_transient_${randomUUID()}`;
+      const payment = await seedStuck(
+        restaurant.id,
+        piId,
+        new Date(Date.now() - PENDING_THRESHOLD_MS - 60_000),
+      );
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      const retrievePaymentIntent = vi.fn(async (_acct: unknown, id: unknown) => {
+        if (id === piId) throw new Error("connection error to Stripe");
+        return { id: String(id), status: "requires_payment_method" };
+      }) as unknown as ReturnType<typeof vi.fn>;
+      const service = buildService(retrievePaymentIntent, sendAlert);
+
+      await reconcileUntilTouched(service, retrievePaymentIntent, piId);
+      const callsBefore = retrievePaymentIntent.mock.calls.filter((c) => c[1] === piId).length;
+      await service.reconcile();
+      const callsAfter = retrievePaymentIntent.mock.calls.filter((c) => c[1] === piId).length;
+
+      const after = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      expect(
+        after.status,
+        "a transient failure concluded a Payment — the row would be written off while the money may still be in flight",
+      ).toBe("PENDING");
+      expect(callsAfter, "a still-open Payment stopped being checked").toBeGreaterThan(callsBefore);
+      expect(
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes(payment.id)),
+      ).toHaveLength(1);
+    },
+    RECONCILIATION_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a head of payments that can never resolve does not starve a newer one — the falsification: " +
+      "with no terminal state the oldest 100 are the same 100 on every cycle, and the 111th is " +
+      "never reached however long the worker runs",
+    async () => {
+      const restaurant = await seedRestaurant85();
+      // Backdated far enough that nothing else in this shared database sorts ahead of them, so the
+      // batch really is made of this test's own rows.
+      const base = Date.now() - 60 * 24 * 60 * 60 * 1000;
+      const ballast: string[] = [];
+      for (let i = 0; i < BATCH_SIZE + 10; i++) {
+        const piId = `pi_adr085_ballast_${randomUUID()}`;
+        await seedStuck(restaurant.id, piId, new Date(base + i * 1000));
+        ballast.push(piId);
+      }
+      const behind = `pi_adr085_behind_${randomUUID()}`;
+      await seedStuck(restaurant.id, behind, new Date(base + (BATCH_SIZE + 10) * 1000));
+
+      const retrievePaymentIntent = vi.fn(async (_acct: unknown, id: unknown) => {
+        if (ballast.includes(String(id))) {
+          throw new PermanentRejection(`Stripe PaymentIntent ${String(id)} does not exist`);
+        }
+        // Everything else in the database — including whatever other specs have left behind —
+        // answers with a NON-terminal status, so nothing but the ballast is concluded here and the
+        // assertion is about the ballast alone.
+        return { id: String(id), status: "requires_payment_method" };
+      }) as unknown as ReturnType<typeof vi.fn>;
+      const service = buildService(retrievePaymentIntent);
+
+      // Two cycles clear the ballast (one full batch, then the remaining ten) and reach past it; a
+      // third is allowed for the shared database's own older stragglers.
+      await service.reconcile();
+      await service.reconcile();
+      await service.reconcile();
+
+      expect(
+        retrievePaymentIntent.mock.calls.some((c) => c[1] === behind),
+        "a payment behind a head of unresolvable rows was never reached",
+      ).toBe(true);
+    },
+    120_000,
   );
 });

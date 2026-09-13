@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.19.0
+version: 2.20.0
 status: Active
 classification: Internal
 owner: Founder
@@ -198,7 +198,7 @@ Payment
 
 **Relationships:** Payment → Restaurant · Payment → one Transaction (on success) · Payment → IdempotencyKey · Payment → Membership (`waiter_membership_id`, nullable — the explicitly-selected tip recipient, ADR-033; not necessarily the caller — see Tip fields below)
 
-**Rules:** Immutable once created, with one exception (ADR-018): `status` transitions exactly once, from `pending` to a terminal state — `succeeded` / `failed` / `canceled` / `declined` — recorded via `updated_at`. `failed` (processing error or timeout) and `declined` (card issuer rejected the charge) are distinct states, since MASTERPLAN.md's Fraud Prevention treats repeated failures as a signal. Every other field — `amount`, `tip_amount`, `waiter_membership_id`, `restaurant_id`, `processor`, `processor_payment_id`, `currency`, `payment_method`, `idempotency_key` — never changes after creation. `idempotency_key` must reference a row in `IdempotencyKey` (ADR-004) — every Payment-creating request must supply one.
+**Rules:** Immutable once created, with one exception (ADR-018): `status` transitions exactly once, from `pending` to a terminal state — `succeeded` / `failed` / `canceled` / `declined` — recorded via `updated_at`. **(ADR-085: until Sprint 16 this rule described three states nothing ever wrote. `PaymentService` wrote `pending`, the `payment_intent.succeeded` webhook wrote `succeeded`, and that was the entire set — so an abandoned or declined payment stayed `pending` forever and held a slot in `PaymentReconciliationService`'s oldest-first batch of 100 for the life of the database. `PaymentReconciliationService` now writes `canceled` when Stripe reports the PaymentIntent canceled, and `failed` when Stripe reports it does not exist. `declined` still has no writer.) `failed` (processing error or timeout) and `declined` (card issuer rejected the charge) are distinct states, since MASTERPLAN.md's Fraud Prevention treats repeated failures as a signal. Every other field — `amount`, `tip_amount`, `waiter_membership_id`, `restaurant_id`, `processor`, `processor_payment_id`, `currency`, `payment_method`, `idempotency_key` — never changes after creation. `idempotency_key` must reference a row in `IdempotencyKey` (ADR-004) — every Payment-creating request must supply one.
 
 **Tip fields (ADR-022, revised ADR-033):** `amount` is the full amount charged to the card — bill and tip combined, matching the single "Card Payment" step in UX_MAP.md's Payment Flow — never split into two client-facing fields. `tip_amount` is the caller-submitted tip portion of it (`tip_amount <= amount`, validated at request time); `amount - tip_amount` is the bill-only amount every platform-fee computation must use (ADR-021: fee excludes tips). `waiter_membership_id` (ADR-033, Sprint 13) is an explicit terminal selection — "who actually served this table" — validated as a real, `ACTIVE`, reachable Membership at the Restaurant, with no Role restriction (any staff member, not only one holding a Waiter Role). No longer derived from the authenticated caller (ADR-022's original mechanism) — the caller and the tip recipient are two independently tracked facts now (`AuditLog` records both, ADR-033 Decision 4). Required when `tip_amount > 0` (enforced at the request boundary, before Stripe is ever called); `null` when `tip_amount` is 0 — nobody to attribute.
 
@@ -330,11 +330,15 @@ OutboxEvent
 ############################################################
 **Purpose:** Guarantees every Ledger write reliably reaches its projections (ADR-003).
 
-**Fields:** id, aggregate_type, aggregate_id, event_type, payload, created_at, published_at (nullable), attempts
+**Fields:** id, aggregate_type, aggregate_id, event_type, payload, created_at, published_at (nullable), attempts, next_attempt_at, abandoned_at (nullable), abandoned_reason (nullable)
 
 **Rules (ADR-069 amendment):** `event_type` now decides the consumer. Every row is still inserted in the same transaction as the fact it describes — but that fact is no longer always a Ledger write: `email.send_requested` is inserted alongside an `EmailDelivery` row instead, and its `payload.text` is replaced with a marker once the message has gone, because an email body is the one payload that can hold a credential.
 
 **Rules:** Inserted in the same database transaction as the JournalEntry/LedgerLine it describes. This is an operational table, not permanent financial history — rows may be purged a fixed time after `published_at` is set.
+
+**Rules (ADR-083):** `next_attempt_at` is when the poller may try this event again, defaulting to `now()` so an event that has never failed is selected exactly as it was before the column existed. Only a failed dispatch pushes it forward, by a delay that doubles from 2s to a five-minute cap.
+
+**Rules (ADR-085 amendment) — the row has two ways to leave the queue, and they are not the same:** `published_at` means the event was handled; `abandoned_at` means it never can be, and `abandoned_reason` records the handler's own words for why. A row carries at most one of them. Abandonment is set only when a handler raises `PermanentRejection` — today, a `journal_entry.*` payload whose `journalEntryId` is missing or not a well-formed UUID, which refers to no JournalEntry and therefore has no Wallet behind it to leave wrong. **Never by age and never by attempt count**: a projection that is real but currently failing keeps being retried forever, because abandoning one would leave a Wallet permanently wrong and nothing has decided that giving up on money is ever right. Abandoned rows are kept, not deleted — they are the only record that something produced work this system could not use.
 
 ---
 

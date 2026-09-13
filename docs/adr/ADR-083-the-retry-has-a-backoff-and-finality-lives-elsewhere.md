@@ -1,6 +1,6 @@
 ---
 title: ADR-083 — The retry has a backoff, and finality lives elsewhere
-version: 1.1.0
+version: 1.2.0
 status: Accepted
 classification: Important
 owner: Founder
@@ -171,6 +171,22 @@ around.
 **The reason this is a decision and not a cleanup:** whichever is chosen changes what an
 `operational alert` line means, and something downstream will eventually be wired to that meaning.
 Choosing it silently is how a channel ends up with a rule nobody can state.
+
+**Amendment, 2026-09-13 — D is built, and the alert question it was listed under is still open.**
+[ADR-085](ADR-085-a-queue-with-only-one-exit.md) takes option D's *mechanism*: a handler can now say
+"this will never succeed" (`PermanentRejection`), `poll()` stops selecting such an event, and the
+same class does the same job in `PaymentReconciliationService`. It arrived from the other side —
+[ADR-084](ADR-084-two-bounded-queues-that-never-drain.md) reached the identical change while asking
+why two bounded queues never drain — and one edit closes both, which is an argument for it rather
+than a coincidence.
+
+**What it does NOT settle is the defect this option was listed under.** D was one of four answers to
+*"expected behaviour wears the wording of an incident"*, and ADR-085 changes no alert's channel,
+gate or count: an unusable payload alerted once at attempt five and now alerts once at attempt one,
+saying it was abandoned. The volume problem in test is now genuinely gone — such events are
+concluded rather than retried — but by removing the events, not by deciding what the line means. A
+real stuck money event still logs ERROR with the phrase *operational alert* on every attempt, and
+choosing that is still the Founder's.
 
 ## What this does not close
 

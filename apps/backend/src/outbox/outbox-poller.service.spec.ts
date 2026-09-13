@@ -52,6 +52,45 @@ function buildEvent(type: string, dataObject: Record<string, unknown>) {
   };
 }
 
+/**
+ * ADR-085. A projection handler that fails the way a real one fails — transiently, and only for the
+ * events a test nominates.
+ *
+ * **Why this had to be introduced, and what it replaced.** Every test in this file that needed "an
+ * event that fails on every attempt" used to produce one by writing `journalEntryId:
+ * "not-a-valid-uuid"` — a payload the poller rejects before it ever reaches a handler. That was a
+ * fine way to make dispatch fail while failure had only one meaning. It has two now: such an event
+ * is REJECTED on the first attempt and never reaches a second, so every assertion about backoff,
+ * about attempt counts, and about the alert at five attempts would have been asserting something
+ * that can no longer happen.
+ *
+ * **Why it delegates instead of throwing unconditionally, which is the part that was got wrong
+ * first and is worth keeping written down.** The first version threw for every event. That turns
+ * the poller into something that can never drain ANYTHING — so in a full parallel suite, where
+ * other files are writing legitimate outbox rows the whole time, the head fills with events this
+ * poller refuses to publish and the test's own event, sorting newest, is never reached. Three tests
+ * failed that way and the symptom was `attempts` standing at 0: **the starvation this file now
+ * tests for, reproduced accidentally inside the test harness.** Failing only the nominated
+ * `journalEntryId`s keeps the poller a working poller for everything else.
+ */
+function walletProjectionFailingFor(
+  prisma: PrismaService,
+  failing: Set<string>,
+): WalletProjectionService {
+  const real = new WalletProjectionService(prisma);
+  return {
+    handleJournalEntryEvent: async (
+      journalEntryId: string,
+      tx: Parameters<WalletProjectionService["handleJournalEntryEvent"]>[1],
+    ) => {
+      if (failing.has(journalEntryId)) {
+        throw new Error("simulated transient projection failure");
+      }
+      return real.handleJournalEntryEvent(journalEntryId, tx);
+    },
+  } as unknown as WalletProjectionService;
+}
+
 const fakeLogger = {
   setContext: () => undefined,
   info: () => undefined,
@@ -324,14 +363,16 @@ describe("OutboxPollerService (real database)", () => {
   );
 
   it(
-    "a malformed event fails, increments attempts, and leaves published_at null — proves the retry path is real, not just the success path",
+    "a malformed event is REJECTED on its first and only attempt: abandoned_at is set, a reason is " +
+      "recorded, and published_at stays null — ADR-085, and the pair for it is the transient-crash " +
+      "test below, where the identical dispatch failure must NOT be terminal",
     async () => {
       const badEvent = await prisma.outboxEvent.create({
         data: {
           aggregateType: "JournalEntry",
           aggregateId: randomUUID(),
           eventType: "journal_entry.payment_captured",
-          payload: { journalEntryId: "not-a-valid-uuid" }, // Postgres will reject this as a UUID filter
+          payload: { journalEntryId: "not-a-valid-uuid" }, // refers to no JournalEntry at all
         },
       });
 
@@ -341,9 +382,17 @@ describe("OutboxPollerService (real database)", () => {
         await poller.poll();
       }
 
-      const after = await prisma.outboxEvent.findUnique({ where: { id: badEvent.id } });
-      expect(after?.publishedAt).toBeNull();
-      expect(after?.attempts).toBe(1);
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: badEvent.id } });
+      expect(after.attempts, "the rejection was not counted as an attempt").toBe(1);
+      expect(
+        after.publishedAt,
+        "an abandoned event must never be marked published — it was not published, it was given up on",
+      ).toBeNull();
+      expect(
+        after.abandonedAt,
+        "a payload referring to no work was queued for retry forever",
+      ).not.toBeNull();
+      expect(after.abandonedReason).toContain("journalEntryId");
     },
     BACKLOG_SAFE_TIMEOUT_MS,
   );
@@ -444,11 +493,18 @@ describe("OutboxPollerService (real database)", () => {
 // the first describe block's own tests stay unaffected by this one.
 describe("OutboxPollerService alerting (ADR-031/032)", () => {
   const prisma = new PrismaService();
+  /** The `journalEntryId`s this block wants to fail; everything else projects for real. */
+  const failingIds = new Set<string>();
   let walletProjection: WalletProjectionService;
 
   beforeAll(async () => {
     await prisma.$connect();
-    walletProjection = new WalletProjectionService(prisma);
+    // ADR-085. This block drives ONE event's attempts past the alert threshold, which is only
+    // possible for an event that keeps being retried — so the failure it needs is a transient one,
+    // produced in the handler rather than by a payload the poller now rejects outright. Scoped to
+    // this block's own events, so its pollers still drain everything else and its own event is
+    // actually reached.
+    walletProjection = walletProjectionFailingFor(prisma, failingIds);
   });
 
   // ADR-083. Only `Date` is faked, never timers: Prisma's own connection and query timeouts are
@@ -480,17 +536,23 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
     return sendAlert.mock.calls.filter((call) => (call[0] as string).includes(eventId));
   }
 
-  // A deliberately, permanently malformed event (no valid journalEntryId) — same technique as the
-  // "malformed event" test above — fails dispatch() deterministically on every single poll, with
-  // no dependency on webhook/payment scaffolding, which is all this describe block needs to drive
-  // one event's own `attempts` past MAX_ATTEMPTS_BEFORE_ALERT.
+  // A WELL-FORMED event whose handler fails every time (see walletProjectionThatFailsTransiently)
+  // — it passes payload validation, reaches the handler, and fails there, deterministically, on
+  // every poll. That is what this block needs: an event that keeps being retried, so one event's
+  // own `attempts` can cross MAX_ATTEMPTS_BEFORE_ALERT.
+  //
+  // `randomUUID()` is a valid UUID that matches no JournalEntry, which under ADR-085 is a
+  // successful no-op rather than a failure — so the failure genuinely comes from the stubbed
+  // handler and from nothing else.
   async function seedFailingEvent() {
+    const journalEntryId = randomUUID();
+    failingIds.add(journalEntryId);
     return prisma.outboxEvent.create({
       data: {
         aggregateType: "JournalEntry",
         aggregateId: randomUUID(),
         eventType: "journal_entry.payment_captured",
-        payload: { journalEntryId: "not-a-valid-uuid" },
+        payload: { journalEntryId },
       },
     });
   }
@@ -711,13 +773,18 @@ describe("OutboxPollerService routing by eventType (ADR-069)", () => {
 // every event type alike (what the constant's old comment claimed existed).
 describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
   const prisma = new PrismaService();
+  /** The `journalEntryId`s this block wants to fail; everything else projects for real. */
+  const failingIds = new Set<string>();
   let poller: OutboxPollerService;
 
   beforeAll(async () => {
     await prisma.$connect();
+    // ADR-085. Every "failing money event" in this block must fail TRANSIENTLY: the whole block
+    // is about a schedule of retries, and a rejected event has no schedule — it is concluded on its
+    // first attempt. The failure therefore lives in the handler, not in the payload.
     poller = new OutboxPollerService(
       prisma,
-      new WalletProjectionService(prisma),
+      walletProjectionFailingFor(prisma, failingIds),
       emailOutboxThatMustNotBeCalled(),
       fakeLogger,
       fakeAlertServiceNoop,
@@ -754,15 +821,28 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
     vi.setSystemTime(new Date(Date.now() + 1_000));
   }
 
-  /** Permanently malformed on purpose: it fails deterministically on every attempt, so what is
-   *  being measured is the schedule rather than the failure. */
-  async function seedFailingMoneyEvent(createdAt?: Date) {
+  /** A well-formed id this block's handler will refuse — used by the rows built inline below. */
+  function failingId(): string {
+    const id = randomUUID();
+    failingIds.add(id);
+    return id;
+  }
+
+  /** Well-formed, and failing deterministically inside the handler on every attempt, so what is
+   *  being measured is the schedule rather than the failure.
+   *
+   *  It used to carry `journalEntryId: "not-a-valid-uuid"`, which was the same thing until ADR-085
+   *  gave that payload a different meaning: a malformed payload is now REJECTED on the first
+   *  attempt, so there would be no second attempt for any of these tests to measure. */
+  async function seedTransientlyFailingMoneyEvent(createdAt?: Date) {
+    const journalEntryId = randomUUID();
+    failingIds.add(journalEntryId);
     return prisma.outboxEvent.create({
       data: {
         aggregateType: "JournalEntry",
         aggregateId: randomUUID(),
         eventType: "journal_entry.payment_captured",
-        payload: { journalEntryId: "not-a-valid-uuid" },
+        payload: { journalEntryId },
         ...(createdAt ? { createdAt } : {}),
       },
     });
@@ -790,7 +870,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
           aggregateType: "JournalEntry",
           aggregateId: randomUUID(),
           eventType: "journal_entry.payment_captured",
-          payload: { journalEntryId: "not-a-valid-uuid" },
+          payload: { journalEntryId: failingId() },
           // Five seconds ahead — far beyond any real skew, so the assertion is about the RULE
           // ("never attempted means due") rather than about this machine's clocks.
           nextAttemptAt: new Date(Date.now() + 5_000),
@@ -817,7 +897,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
           aggregateType: "JournalEntry",
           aggregateId: randomUUID(),
           eventType: "journal_entry.payment_captured",
-          payload: { journalEntryId: "not-a-valid-uuid" },
+          payload: { journalEntryId: failingId() },
           attempts: 3,
           nextAttemptAt: new Date(Date.now() + 60_000),
         },
@@ -847,7 +927,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
     "a failing event is not retried immediately, and each gap is longer than the one before — " +
       "discriminating: with no backoff every poll retries it, which is how one event reached 5,293 attempts",
     async () => {
-      const event = await seedFailingMoneyEvent();
+      const event = await seedTransientlyFailingMoneyEvent();
       advancePastInsert();
 
       await poller.poll();
@@ -909,7 +989,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
       // THE DISCRIMINATING PAIR with the test above: same age, opposite answer. An implementation
       // that applied one ceiling to every event type would pass that test and fail this one, and
       // the damage would be a Wallet left permanently wrong rather than an email not sent.
-      const old = await seedFailingMoneyEvent(
+      const old = await seedTransientlyFailingMoneyEvent(
         new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS - 1000),
       );
       advancePastInsert();
@@ -922,5 +1002,175 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
       );
     },
     BACKLOG_SAFE_TIMEOUT_MS,
+  );
+});
+
+// ADR-085 — the queue's second exit, and the property the Founder named as the falsification:
+// a head made of rows that can never resolve must not stop fresh work from being done.
+//
+// Own PrismaService and own poller, same reason as the blocks above.
+describe("OutboxPollerService abandonment (ADR-085)", () => {
+  const prisma = new PrismaService();
+  let poller: OutboxPollerService;
+
+  const BATCH_SIZE = 50; // mirrors the constant in the service; the ballast below must exceed it
+
+  beforeAll(async () => {
+    await prisma.$connect();
+    poller = new OutboxPollerService(
+      prisma,
+      new WalletProjectionService(prisma),
+      emailOutboxThatMustNotBeCalled(),
+      fakeLogger,
+      fakeAlertServiceNoop,
+    );
+  });
+
+  // Same reasoning as the reconciliation block's own teardown: this test seeds more than one full
+  // batch on purpose, and owns what it seeded. Folded into the disconnect hook rather than added as
+  // a second afterAll, so nothing depends on which order two teardowns run in.
+  const seeded: string[] = [];
+
+  afterAll(async () => {
+    await prisma.outboxEvent.deleteMany({ where: { id: { in: seeded } } });
+    await prisma.$disconnect();
+  });
+
+  /** One event the poller can never dispatch: its payload refers to no JournalEntry. */
+  async function seedUnprocessable(createdAt: Date) {
+    return prisma.outboxEvent.create({
+      data: {
+        aggregateType: "JournalEntry",
+        aggregateId: randomUUID(),
+        eventType: "journal_entry.payment_captured",
+        payload: { journalEntryId: "not-a-valid-uuid" },
+        createdAt,
+      },
+    });
+  }
+
+  /** Records a seeded id so the teardown above can remove exactly this test's own rows. */
+  function track<T extends { id: string }>(row: T): T {
+    seeded.push(row.id);
+    return row;
+  }
+
+  it(
+    "a head of unprocessable rows is seen once and never again, and a fresh event behind it is " +
+      "published — THE HALF THAT REJECTS THE OLD IMPLEMENTATION is the attempt count: with no " +
+      "terminal state those same rows are re-selected every time their backoff expires, forever, " +
+      "and they are ordered ahead of everything newer by construction",
+    async () => {
+      // Sixty — more than one batch — dated far enough back that nothing else in this shared
+      // database sorts ahead of them, so the batch really is made of this test's own rows.
+      const base = Date.now() - 60 * 24 * 60 * 60 * 1000;
+      const ballast: string[] = [];
+      for (let i = 0; i < BATCH_SIZE + 10; i++) {
+        const row = track(await seedUnprocessable(new Date(base + i * 1000)));
+        ballast.push(row.id);
+      }
+      // One event immediately behind the ballast and ahead of everything else. Without a terminal
+      // state this is the row that waits: it is the 61st oldest, and the batch is 50.
+      const fresh = track(
+        await prisma.outboxEvent.create({
+          data: {
+            aggregateType: "JournalEntry",
+            aggregateId: randomUUID(),
+            eventType: "journal_entry.payment_captured",
+            // A valid UUID matching no JournalEntry: handleJournalEntryEvent finds no membership
+            // lines and succeeds as a no-op, which is a normal outcome (wallet-projection.service.ts)
+            // and exactly what makes this row's publication a statement about the QUEUE rather than
+            // about the projection.
+            payload: { journalEntryId: randomUUID() },
+            createdAt: new Date(base + (BATCH_SIZE + 10) * 1000),
+          },
+        }),
+      );
+
+      // Two polls: the first takes 50 of the ballast, the second the remaining 10 and the fresh
+      // event. Both are needed with OR without the fix — a first pass over rows nobody has looked
+      // at costs the same either way. The difference is everything after it.
+      await poller.poll();
+      await poller.poll();
+
+      const published = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: fresh.id } });
+      expect(
+        published.publishedAt,
+        "a fresh event behind a head of unprocessable rows was never dispatched",
+      ).not.toBeNull();
+
+      const abandoned = await prisma.outboxEvent.count({
+        where: { id: { in: ballast }, abandonedAt: { not: null } },
+      });
+      expect(abandoned, "unprocessable rows were left in the queue").toBe(ballast.length);
+
+      // The steady state of a real database: every one of those rows is due again, because hours
+      // have passed. This is not an artificial condition — it is the condition the dev database
+      // was measured in (every stuck row eligible, next_attempt_at long past).
+      await prisma.outboxEvent.updateMany({
+        where: { id: { in: ballast } },
+        data: { nextAttemptAt: new Date(Date.now() - 60_000) },
+      });
+      const before = await prisma.outboxEvent.aggregate({
+        where: { id: { in: ballast } },
+        _sum: { attempts: true },
+      });
+
+      await poller.poll();
+
+      const after = await prisma.outboxEvent.aggregate({
+        where: { id: { in: ballast } },
+        _sum: { attempts: true },
+      });
+      expect(
+        after._sum.attempts,
+        "rows the queue had already given up on were selected again, which is the defect itself",
+      ).toBe(before._sum.attempts);
+    },
+    120_000,
+  );
+
+  it(
+    "a TRANSIENT failure is never abandoned — it counts, backs off and stays in the queue, which " +
+      "is the discriminating pair for the test above: the same dispatch throws, the same row " +
+      "shape, and the opposite answer, because this one refers to real work",
+    async () => {
+      const journalEntryId = randomUUID();
+      const transientPoller = new OutboxPollerService(
+        prisma,
+        walletProjectionFailingFor(prisma, new Set([journalEntryId])),
+        emailOutboxThatMustNotBeCalled(),
+        fakeLogger,
+        fakeAlertServiceNoop,
+      );
+      const event = track(
+        await prisma.outboxEvent.create({
+          data: {
+            aggregateType: "JournalEntry",
+            aggregateId: randomUUID(),
+            eventType: "journal_entry.payment_captured",
+            payload: { journalEntryId },
+          },
+        }),
+      );
+
+      for (let i = 0; i < 40; i++) {
+        const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+        if (current.attempts > 0) break;
+        await transientPoller.poll();
+      }
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(after.attempts, "a transient failure was not counted").toBe(1);
+      expect(
+        after.abandonedAt,
+        "a transient handler failure was treated as terminal — this is how a real Wallet projection would be silently dropped",
+      ).toBeNull();
+      expect(
+        after.nextAttemptAt.getTime(),
+        "a transient failure did not schedule a retry",
+      ).toBeGreaterThan(after.createdAt.getTime());
+    },
+    120_000,
   );
 });

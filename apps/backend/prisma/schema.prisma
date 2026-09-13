@@ -747,10 +747,23 @@ model OutboxEvent {
   /// raw SQL in the hottest query this service has.
   nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
 
-  // Index Strategy — the poller's query, which filters on both columns together. The composite
-  // covers `published_at` alone as its prefix, so it replaces the single-column index rather than
-  // joining it.
-  @@index([publishedAt, nextAttemptAt])
+  /// ADR-085. The queue's second exit: this event will never be dispatched, and nothing is lost
+  /// by saying so. Set only when a handler raises `PermanentRejection` — a payload that refers to
+  /// no real work — never by age, never by attempt count, and never for an event whose projection
+  /// is real but currently failing. `published_at` stays null forever on such a row, because it
+  /// was never published; the two columns answer different questions and neither substitutes for
+  /// the other.
+  abandonedAt DateTime? @map("abandoned_at")
+
+  /// Why it was abandoned, in the words the handler used. A terminal state with no explanation is
+  /// a row nobody can act on later (CLAUDE_RULES.md, Error Philosophy) — and "what did this system
+  /// give up on, and why" is exactly the question an operator asks after an incident.
+  abandonedReason String? @map("abandoned_reason")
+
+  // Index Strategy — the poller's query, which filters on all three columns together. The
+  // composite covers `published_at` alone as its prefix, so it replaces the single-column index
+  // rather than joining it.
+  @@index([publishedAt, abandonedAt, nextAttemptAt])
   @@map("outbox_event")
 }
 
