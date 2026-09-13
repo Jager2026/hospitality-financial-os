@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.20.0
+version: 2.21.0
 status: Active
 classification: Internal
 owner: Founder
@@ -106,6 +106,14 @@ Membership
 **Relationships:** Membership → User · Membership → Organization · Membership → Restaurant (nullable) · Membership → one Wallet
 
 **Rules:** `restaurant_id IS NULL` means the role applies across every Restaurant inside `organization_id` (e.g. a chain owner). A restaurant-scoped Membership always carries both `organization_id` and `restaurant_id`. One User may hold many Memberships — including more than one inside the same Organization, as long as each is scoped to a different Restaurant. Inviting an email address that already belongs to a User attaches a new Membership to that existing User at acceptance time (see MembershipInvitation) — it never creates a duplicate User row.
+
+---
+
+**Rules (ADR-088) — at most ONE `ACTIVE` Membership per (User, Organization, Restaurant):** enforced by the partial unique index `membership_one_active_per_scope`, which lives in the migration because Prisma's schema language expresses neither a `WHERE` nor `NULLS NOT DISTINCT` on a unique index. Two ACTIVE rows for one person at one employer would be **two Wallets** by ADR-006, with their tips split between them.
+
+The index is partial on `status`, **not on `deleted_at`**, and that is a fact about this schema rather than a preference: removing somebody is `MembershipService.disable`, which writes `inactive` and leaves the row, while **nothing anywhere writes `deleted_at` on a membership**. A partial index on `deleted_at IS NULL` would therefore match every row and block re-inviting somebody who once worked here — which `invite()` deliberately permits, since it does not check for an existing Membership at all. Closing a Restaurant touches no membership.
+
+`NULLS NOT DISTINCT` is the half that is easy to leave out: `restaurant_id` is NULL for an org-wide role (ADR-005), and Postgres treats NULLs as distinct by default — so without it the **widest grant in the system** would be the one case left unconstrained.
 
 ---
 
