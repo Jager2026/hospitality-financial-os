@@ -1,6 +1,6 @@
 ---
 title: ADR-090 — The dispute handler converges
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -88,6 +88,13 @@ that answers with an error.
 `funds_withdrawn` is the moment Stripe actually takes the money, and this system posts its
 provisional loss on `created` instead — consistent as a design, and worth a deliberate look on its
 own axis rather than a silent one here.
+
+**That look happened the same day: [ADR-091](ADR-091-what-the-ledger-converges-by.md).** It measured
+both outcomes of `closed` and found the Ledger converges on the disputed amount — by `REFUND_CONTRA`
+— and that a second number Stripe moves, the **dispute fee**, is modelled nowhere (OC-14). It also
+confirmed by delivery what this table asserts from routing: `funds_withdrawn` and
+`funds_reinstated` reach the service, are logged at debug, have their claim marked `COMPLETED`, and
+leave the Ledger unchanged.
 
 ---
 
