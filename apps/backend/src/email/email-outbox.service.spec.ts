@@ -6,6 +6,7 @@ import {
   EmailOutboxService,
   ABANDON_UNDELIVERED_AFTER_MS,
   ABANDONED_TEXT,
+  DELIVERED_TEXT,
 } from "./email-outbox.service";
 import { EmailSendError, type EmailService } from "./email.service";
 
@@ -276,5 +277,76 @@ describe("EmailOutboxService (real database)", () => {
     // The one way this change could do harm: a retry after redaction would put the marker itself
     // in front of a real person. The transport must not have been called at all.
     expect(calls, "an abandoned event must not reach the transport").toEqual([]);
+  });
+
+  // ── The erasure race, and it is the reason both payload writes stopped being object literals ──
+  //
+  // `handle()` reads the payload at the top and used to write `{ to, subject, text }` back at the
+  // bottom. Between those two moments `redact-user.ts` can tombstone `outbox_event.payload->>'to'`
+  // for a person who asked to be forgotten — and the write then put the original address straight
+  // back.
+  //
+  // Measured on 2026-09-13 rather than imagined: `erasure-leaves-nothing.e2e.spec.ts` failed with
+  // *"the address survives in: outbox_event.payload (1 row)"*, and the surviving row was one a
+  // poller had just concluded — `attempts: 1`, `abandoned_at` set, body redacted, `to` back to
+  // `erasure-sweep-…@example.test`.
+  //
+  // The two tests below reproduce it **deterministically**, by doing the erasure's write between
+  // the read and the write instead of hoping two workers interleave. They are a pair: the address
+  // has to survive being forgotten on BOTH exits from `handle`, and an implementation that fixed
+  // only the failure path would pass one of them.
+  const TOMBSTONE = "redacted-user-0000@erased.invalid";
+
+  it("an erasure landing mid-dispatch is not undone by a SUCCESSFUL send — the payload write replaces the body, never the recipient", async () => {
+    const { service } = serviceWith("ok");
+    const original = `${randomUUID()}@example.invalid`;
+    const { event } = await enqueueOne(service, original);
+
+    // The erasure, landing after the poller read the row and before it writes. `event` still holds
+    // the pre-erasure payload, which is exactly the poller's situation.
+    await prisma.$executeRaw`
+      UPDATE "outbox_event"
+      SET payload = jsonb_set(payload::jsonb, '{to}', to_jsonb(${TOMBSTONE}::text))
+      WHERE id = ${event.id}::uuid
+    `;
+
+    await service.handle(event);
+
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    const payload = after.payload as { to: string; text: string };
+    expect(
+      payload.to,
+      "a completed dispatch wrote the pre-erasure address back over the tombstone",
+    ).toBe(TOMBSTONE);
+    expect(payload.text, "the body still has to go — the fix must not cost the redaction").toBe(
+      DELIVERED_TEXT,
+    );
+    expect(after.publishedAt).not.toBeNull();
+  });
+
+  it("nor by a FAILING send that abandons the event — the discriminating half: a fix applied to one exit leaves the other restoring the address", async () => {
+    const { service } = serviceWith("fail");
+    const original = `${randomUUID()}@example.invalid`;
+    const { event } = await enqueueOne(service, original);
+    const aged = await prisma.outboxEvent.update({
+      where: { id: event.id },
+      data: { createdAt: new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS - 1000) },
+    });
+
+    await prisma.$executeRaw`
+      UPDATE "outbox_event"
+      SET payload = jsonb_set(payload::jsonb, '{to}', to_jsonb(${TOMBSTONE}::text))
+      WHERE id = ${event.id}::uuid
+    `;
+
+    await expect(service.handle(aged)).rejects.toThrow(EmailSendError);
+
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    const payload = after.payload as { to: string; text: string };
+    expect(
+      payload.to,
+      "an abandoned dispatch wrote the pre-erasure address back over the tombstone",
+    ).toBe(TOMBSTONE);
+    expect(payload.text).toBe(ABANDONED_TEXT);
   });
 });

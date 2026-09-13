@@ -9,7 +9,7 @@ const FIXTURE_RESTAURANT = "Harness Sweep Test Restaurant";
 /**
  * ADR-086. The pre-run sweep deletes rows, so it gets the same scrutiny as anything else that does.
  *
- * Five tests, and **two of them are the ones that matter** — each is the half that rejects a lazier
+ * Six tests, and **two of them are the ones that matter** — each is the half that rejects a lazier
  * implementation of its own mechanism:
  *
  *   - *REFUSES a PENDING payment with a Ledger entry behind it.* A sweep that simply deletes
@@ -228,5 +228,34 @@ describe("the harness sweep (ADR-086)", () => {
     const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: money.id } });
     expect(after.abandonedAt).toBeNull();
     await prisma.outboxEvent.delete({ where: { id: money.id } });
+  });
+
+  it("redacts the body of every email event it concludes, and leaves the recipient alone — the conclusion takes the event out of the poller for good, so this is the last chance ADR-075 gets", async () => {
+    const live = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "HarnessSweepFixture",
+        aggregateId: randomUUID(),
+        eventType: "email.send_requested",
+        payload: {
+          to: "someone@example.invalid",
+          subject: "You have been invited",
+          text: "https://app.example/accept?token=a-real-looking-credential",
+        },
+      },
+    });
+
+    await concludeUndeliverableEmails(prisma, [live.id]);
+
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: live.id } });
+    const payload = after.payload as { to: string; text: string };
+    expect(
+      payload.text,
+      "an invitation body — address and a live token — was kept forever by a cleanup meant to tidy up",
+    ).not.toContain("token=");
+    expect(
+      payload.to,
+      "the redaction rewrote the recipient, which would undo an erasure that had already tombstoned it",
+    ).toBe("someone@example.invalid");
+    await prisma.outboxEvent.delete({ where: { id: live.id } });
   });
 });
