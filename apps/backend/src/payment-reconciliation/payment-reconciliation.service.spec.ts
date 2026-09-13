@@ -355,7 +355,22 @@ describe("PaymentReconciliationService concluding a stuck payment (ADR-085)", ()
     await prisma.$connect();
   });
 
+  // This block deliberately seeds more than one full batch (111 payments) to reproduce a starved
+  // head, and then removes exactly what it created — matched by its own `pi_adr085_` prefix, never
+  // by age and never by shape. Best effort by nature: ADR-082 records that teardown does not run on
+  // a killed or crashed run, which is why the e2e database is truncated up front instead. The dev
+  // database cannot be, so a test that knowingly writes a hundred rows owning them afterwards is
+  // the most that is available here — and what it leaves behind if this never runs are CONCLUDED
+  // rows, which by ADR-085 no longer occupy the queue at all.
   afterAll(async () => {
+    const mine = await prisma.payment.findMany({
+      where: { processorPaymentId: { startsWith: "pi_adr085_" } },
+      select: { id: true, idempotencyKey: true },
+    });
+    await prisma.payment.deleteMany({ where: { id: { in: mine.map((p) => p.id) } } });
+    await prisma.idempotencyKey.deleteMany({
+      where: { key: { in: mine.map((p) => p.idempotencyKey) } },
+    });
     await prisma.$disconnect();
   });
 

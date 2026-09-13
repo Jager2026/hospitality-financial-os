@@ -992,7 +992,13 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
     );
   });
 
+  // Same reasoning as the reconciliation block's own teardown: this test seeds more than one full
+  // batch on purpose, and owns what it seeded. Folded into the disconnect hook rather than added as
+  // a second afterAll, so nothing depends on which order two teardowns run in.
+  const seeded: string[] = [];
+
   afterAll(async () => {
+    await prisma.outboxEvent.deleteMany({ where: { id: { in: seeded } } });
     await prisma.$disconnect();
   });
 
@@ -1009,6 +1015,12 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
     });
   }
 
+  /** Records a seeded id so the teardown above can remove exactly this test's own rows. */
+  function track<T extends { id: string }>(row: T): T {
+    seeded.push(row.id);
+    return row;
+  }
+
   it(
     "a head of unprocessable rows is seen once and never again, and a fresh event behind it is " +
       "published — THE HALF THAT REJECTS THE OLD IMPLEMENTATION is the attempt count: with no " +
@@ -1020,24 +1032,26 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
       const base = Date.now() - 60 * 24 * 60 * 60 * 1000;
       const ballast: string[] = [];
       for (let i = 0; i < BATCH_SIZE + 10; i++) {
-        const row = await seedUnprocessable(new Date(base + i * 1000));
+        const row = track(await seedUnprocessable(new Date(base + i * 1000)));
         ballast.push(row.id);
       }
       // One event immediately behind the ballast and ahead of everything else. Without a terminal
       // state this is the row that waits: it is the 61st oldest, and the batch is 50.
-      const fresh = await prisma.outboxEvent.create({
-        data: {
-          aggregateType: "JournalEntry",
-          aggregateId: randomUUID(),
-          eventType: "journal_entry.payment_captured",
-          // A valid UUID matching no JournalEntry: handleJournalEntryEvent finds no membership
-          // lines and succeeds as a no-op, which is a normal outcome (wallet-projection.service.ts)
-          // and exactly what makes this row's publication a statement about the QUEUE rather than
-          // about the projection.
-          payload: { journalEntryId: randomUUID() },
-          createdAt: new Date(base + (BATCH_SIZE + 10) * 1000),
-        },
-      });
+      const fresh = track(
+        await prisma.outboxEvent.create({
+          data: {
+            aggregateType: "JournalEntry",
+            aggregateId: randomUUID(),
+            eventType: "journal_entry.payment_captured",
+            // A valid UUID matching no JournalEntry: handleJournalEntryEvent finds no membership
+            // lines and succeeds as a no-op, which is a normal outcome (wallet-projection.service.ts)
+            // and exactly what makes this row's publication a statement about the QUEUE rather than
+            // about the projection.
+            payload: { journalEntryId: randomUUID() },
+            createdAt: new Date(base + (BATCH_SIZE + 10) * 1000),
+          },
+        }),
+      );
 
       // Two polls: the first takes 50 of the ballast, the second the remaining 10 and the fresh
       // event. Both are needed with OR without the fix — a first pass over rows nobody has looked
