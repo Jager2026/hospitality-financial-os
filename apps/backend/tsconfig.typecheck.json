@@ -9,10 +9,17 @@
   //
   // No rootDir and no outDir here: this configuration never emits, so the constraint that made
   // the build config exclude these directories does not apply.
+  //
+  // ADR-086 added `scripts/`, which the argument above had always covered and the include had not.
+  // `redact-user.ts` erases a real person's personal data on request and `seed-portal-demo.ts`
+  // deletes and rebuilds an Organization; both were outside every compiler in this repository.
+  // Adding them surfaced zero errors, and the include was verified the way any new instrument is —
+  // by planting a type error in `scripts/` and confirming it is reported, then removing it and
+  // confirming the run is clean. A silent include that matched nothing would have looked identical.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "prisma/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "prisma/**/*.ts", "scripts/**/*.ts"]
 }

@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.23.0
+version: 2.24.0
 status: Active
 classification: Critical
 priority: Highest
@@ -231,6 +231,10 @@ The asymmetry is what makes this worth a rule: a broken checker usually fails by
 This is a rule because of how #196 went, and the failure was not the number — the number was right. A reproduction budget was set at thirteen full-suite runs, found to carry a **51% chance of showing nothing** at the defect's own recorded rate, and correctly extended to sixty, where that falls to 4.6%. Every step of that reasoning holds. What was never said out loud, at any point, is that sixty runs of a 3-minute suite is **three hours** — and it became visible only after the evening had been spent. Nobody chose to spend it; the arithmetic did, and the arithmetic has no standing to.
 
 So, whenever a budget is proposed in units of attempts, runs, samples or iterations: **measure one unit, multiply, and state both numbers together** — "sixty runs, about three hours" — at the moment the budget is proposed, not in the report afterwards. If the unit cost is not yet known, that is itself the first measurement, and it is cheap: one run.
+
+**Amendment, from getting it wrong in the other direction.** Everything above is about a MEASUREMENT budget, where the unit is a run and a run costs machine time: one unit measured, multiplied, is a real number with something underneath it. **Implementation work has no such unit, and carrying the same confident arithmetic across produces a figure that only sounds like the first kind.** A session that had planned to say "five to six hours" for a queue-head change finished it in about fifty minutes — wrong by a factor of six, and the error would have been invisible in the report, because an invented number and a measured one are written in the same voice.
+
+So the rule has two halves and the second is the one that gets skipped: **name the budget where the unit is known; where it is not known, say there is no estimate, and say what the first thing you learn would be.** "I do not know how long this takes, and the first measurement will tell us whether it is one shape of problem or the other" is information the Founder can act on. **A number pulled from the air is worse than an honest "I don't know", because nobody plans against an admission and everybody plans against a number.**
 
 Two things follow from the same reasoning, and both were got wrong before they were got right:
 

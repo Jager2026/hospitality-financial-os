@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { assertLocalDatabase } from "../prisma/database-locality";
 import { seedCurrencies, seedRbac } from "../prisma/seed";
 
 // Vitest's `globalSetup` runs exactly ONCE, in its own process, before any test file's worker
@@ -31,9 +32,127 @@ export async function setup(): Promise<void> {
   await seedCurrencies(prisma);
   await seedRbac(prisma);
 
+  const swept = await sweepStuckTestPayments(prisma);
+  console.log(
+    `[db] swept ${swept.swept} stuck PENDING payment${swept.swept === 1 ? "" : "s"} left by earlier runs` +
+      (swept.kept > 0
+        ? ` — kept ${swept.kept} with a Ledger entry or a Tip behind them, which a sweep must never delete`
+        : ""),
+  );
   await reportAccumulatedRows(prisma);
 
   await prisma.$disconnect();
+}
+
+/**
+ * ADR-086. Removes the `PENDING` Payment rows a previous run left behind, **before** this one
+ * starts.
+ *
+ * ## Why the harness does this and not the specs
+ *
+ * Measured on 2026-09-13: a full backend suite leaves **+17 stuck PENDING payments**, 16 of them
+ * with no Transaction at all. `PaymentReconciliationService` selects the oldest 100, so from an
+ * empty database the sixth run crosses the bound and five reconciliation tests fail on rows that
+ * have nothing to do with the code under test. Reproduced on `main` at 102 rows before this was
+ * written, not inferred from the arithmetic.
+ *
+ * ADR-085 gave both queues a way to conclude a row that can never succeed, and deliberately did not
+ * touch these: under a spec's own fake Stripe they answer `requires_payment_method`, which is
+ * honestly non-terminal. They are not a product defect. They are litter.
+ *
+ * **Two spec files could clean up after themselves — twelve cannot, and two of them could not
+ * anyway.** `permission-scope.e2e.spec.ts` and `critical-flow.e2e.spec.ts` drive the real HTTP
+ * pipeline, so the Payment is created by `PaymentService` inside the request and the spec never
+ * sees its id. Any design where the author of a spec has to remember something is a design that
+ * works until the thirteenth spec, and the thirteenth spec is always the one written in a hurry.
+ * So the cleanup is a property of the harness: nothing to remember, nothing to import, and it
+ * covers rows no spec could have registered.
+ *
+ * ## Why BEFORE the run rather than in a teardown
+ *
+ * ADR-082's finding, reused rather than rediscovered: **a teardown does not run on a killed or
+ * crashed run**, and those are exactly the runs that leave the most behind. Cleaning at the start
+ * means the sweep has already happened by the time anything can go wrong with it.
+ *
+ * ## What it deletes, and why this is a structural rule rather than a matcher
+ *
+ * Not by age, and not by any naming convention — an allow list by another name is a file somebody
+ * edits to make the build green, and a fixture-name matcher rots the moment a fixture is renamed.
+ * Two shapes, both of which the PRODUCT cannot produce:
+ *
+ *   1. **A `PENDING` Payment with no Transaction.** The product creates one only in the seconds
+ *      between a waiter presenting the terminal and a guest paying. Nobody is doing that at the
+ *      instant a test suite starts, and a developer who was can start it again.
+ *   2. **A `PENDING` Payment whose Transaction has no JournalEntry and no Tip.** In the product a
+ *      Transaction is written by the `payment_intent.succeeded` handler, on the same path that
+ *      posts the Ledger and sets the Payment `SUCCEEDED`. A completed Transaction with no Ledger
+ *      behind it, over a Payment still `PENDING`, is a row a fixture assembled by hand. All 16 of
+ *      those in the development database were measured to have exactly zero of each.
+ *
+ * **Anything with a JournalEntry or a Tip behind it is left alone and counted**, because that is
+ * financial history and no test-harness convenience is worth deleting it. If that number ever grows,
+ * it is telling you something a sweep must not answer.
+ *
+ * It deletes rows it did not create, and that is stated plainly rather than hidden: it is a rule
+ * about a development database, not about this run's own rows. `assertLocalDatabase` is what keeps
+ * that sentence true.
+ *
+ * @param onlyPaymentIds narrows the candidates to these ids **in addition to** every rule above,
+ *   never instead of one. The production caller passes nothing; `harness-sweep.spec.ts` passes its
+ *   own rows, because calling the real unrestricted sweep from inside a running suite would delete
+ *   the in-flight payments of every spec executing in parallel beside it. What the narrowing cannot
+ *   prove is the `status: "PENDING"` filter — so that spec seeds a SUCCEEDED payment of its own and
+ *   asserts it survives, which proves it directly rather than by inspection.
+ */
+export async function sweepStuckTestPayments(
+  prisma: PrismaClient,
+  onlyPaymentIds?: string[],
+): Promise<{ swept: number; kept: number }> {
+  await assertLocalDatabase(
+    prisma,
+    "the test harness removes stuck PENDING payments left by previous runs",
+  );
+
+  const pending = await prisma.payment.findMany({
+    where: { status: "PENDING", ...(onlyPaymentIds ? { id: { in: onlyPaymentIds } } : {}) },
+    select: {
+      id: true,
+      idempotencyKey: true,
+      transaction: {
+        select: {
+          id: true,
+          tip: { select: { id: true } },
+          _count: { select: { journalEntries: true } },
+        },
+      },
+    },
+  });
+
+  const sweepable = pending.filter(
+    (p) =>
+      p.transaction === null ||
+      (p.transaction._count.journalEntries === 0 && p.transaction.tip === null),
+  );
+  const kept = pending.length - sweepable.length;
+
+  if (sweepable.length > 0) {
+    const paymentIds = sweepable.map((p) => p.id);
+    const transactionIds = sweepable
+      .map((p) => p.transaction?.id)
+      .filter((id): id is string => id !== undefined);
+
+    // Order is forced by the foreign keys and is worth stating: Transaction points at Payment, and
+    // Payment points at IdempotencyKey, so the chain is deleted from the far end inwards.
+    await prisma.$transaction([
+      prisma.transaction.deleteMany({ where: { id: { in: transactionIds } } }),
+      prisma.payment.deleteMany({ where: { id: { in: paymentIds } } }),
+      prisma.idempotencyKey.deleteMany({
+        where: { key: { in: sweepable.map((p) => p.idempotencyKey) } },
+      }),
+    ]);
+  }
+
+  return { swept: sweepable.length, kept };
 }
 
 /**
