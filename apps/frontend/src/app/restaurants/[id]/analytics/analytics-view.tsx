@@ -569,7 +569,11 @@ function Performance({
   it: {
     currentPeriod: { revenue: string; tips: string; transactionCount: number };
     previousPeriod: { revenue: string; tips: string; transactionCount: number };
-    changeBasisPoints: { revenue: string | null; tips: string | null };
+    changeBasisPoints: {
+      revenue: string | null;
+      tips: string | null;
+      transactionCount: string | null;
+    };
   };
   currency: string;
   moneyLocale: string;
@@ -595,7 +599,12 @@ function Performance({
         label: t("analytics.performance.transactions"),
         now: String(it.currentPeriod.transactionCount),
         before: String(it.previousPeriod.transactionCount),
-        change: null,
+        // The API computes this one too. An earlier version passed `null` here and rendered the
+        // zero-baseline sentence — so the screen said "nothing was taken in the period before"
+        // directly beside the 40 payments taken in the period before. Found by looking at the
+        // demo fixture, which is what the fixture is for: no test asserted this row's wording,
+        // and both halves of the contradiction were individually correct.
+        change: it.changeBasisPoints.transactionCount,
       },
     ];
 
@@ -663,7 +672,7 @@ function Report({
         <dt className="text-muted">{t("analytics.report.averageTip")}</dt>
         <dd className="text-right tabular-nums">
           {it.averageTipBasisPoints === null
-            ? t("analytics.performance.noBaseline")
+            ? t("analytics.report.noAverage")
             : formatBasisPoints(it.averageTipBasisPoints, moneyLocale)}
         </dd>
       </dl>

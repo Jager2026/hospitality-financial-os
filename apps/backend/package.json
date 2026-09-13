@@ -19,7 +19,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "redact:user": "tsx scripts/redact-user.ts",
     "db:reset": "prisma migrate reset --force",
-    "demo:dashboard": "tsx scripts/seed-dashboard-demo.ts"
+    "demo:portal": "tsx scripts/seed-portal-demo.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.29",

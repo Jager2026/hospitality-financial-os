@@ -24,7 +24,7 @@
     "preflight:deploy": "node scripts/preflight-deploy.js",
     "deploy:backend": "pnpm run preflight:deploy && railway up --service backend --detach",
     "deploy:frontend": "pnpm run preflight:deploy && railway up --service frontend --detach",
-    "demo:dashboard": "pnpm --filter backend run demo:dashboard && pnpm run dev"
+    "demo:portal": "node scripts/demo-portal.js"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
