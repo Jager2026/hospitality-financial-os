@@ -32,6 +32,14 @@ export async function setup(): Promise<void> {
   await seedCurrencies(prisma);
   await seedRbac(prisma);
 
+  const concluded = await concludeUndeliverableEmails(prisma);
+  if (concluded > 0) {
+    console.log(
+      `[db] concluded ${concluded} undeliverable email event${concluded === 1 ? "" : "s"} left by ` +
+        `earlier runs — EmailService refuses to send outside production, so none of them could ever publish`,
+    );
+  }
+
   const swept = await sweepStuckTestPayments(prisma);
   console.log(
     `[db] swept ${swept.swept} stuck PENDING payment${swept.swept === 1 ? "" : "s"} left by earlier runs` +
@@ -42,6 +50,59 @@ export async function setup(): Promise<void> {
   await reportAccumulatedRows(prisma);
 
   await prisma.$disconnect();
+}
+
+/**
+ * ADR-086. Concludes the `email.send_requested` events earlier runs left unpublished.
+ *
+ * **The rule is a fact about this environment, not about the rows.** `EmailService.send` refuses
+ * outright unless `NODE_ENV === "production"` — a deliberate decision with its own comment, so the
+ * e2e suite cannot make live calls to Resend with a placeholder key. Every email event written
+ * outside production is therefore **unpublishable by construction**: not old, not named like a
+ * fixture, not merely stuck. It cannot succeed here, which is exactly what `PermanentRejection`
+ * means, and ADR-085 already built the right way to record that.
+ *
+ * **So it marks rather than deletes**, and the distinction is ADR-075's: the row is the trace of a
+ * send that was decided on, and removing it would destroy the record while leaving the recipient's
+ * address one table over in `EmailDelivery` anyway. `abandoned_at` takes it out of the queue and
+ * `abandoned_reason` says why, which is all that was needed.
+ *
+ * **Why it is here at all**, since ADR-085 concluded the unusable money events and this work's first
+ * draft said the outbox needed no sweep: that claim rested on 16 eligible rows, and 16 was a
+ * snapshot rather than a property. Email events fail, back off, and become eligible again in waves,
+ * so a heavy session pushes the eligible count back over `OutboxPollerService`'s batch of 50 — it
+ * was 51 on the run that exposed this, and the poller's own alerting spec lost its event behind
+ * them. ADR-075's twenty-four-hour window does end it, but a day is longer than an afternoon.
+ *
+ * @param onlyEventIds narrows the candidates, used only by `harness-sweep.spec.ts` — calling the
+ *   unrestricted version from inside a running suite would conclude the email events of every spec
+ *   executing in parallel beside it.
+ */
+export async function concludeUndeliverableEmails(
+  prisma: PrismaClient,
+  onlyEventIds?: string[],
+): Promise<number> {
+  await assertLocalDatabase(
+    prisma,
+    "the test harness concludes email events that no environment but production could ever send",
+  );
+
+  const result = await prisma.outboxEvent.updateMany({
+    where: {
+      eventType: "email.send_requested",
+      publishedAt: null,
+      abandonedAt: null,
+      ...(onlyEventIds ? { id: { in: onlyEventIds } } : {}),
+    },
+    data: {
+      abandonedAt: new Date(),
+      abandonedReason:
+        "Left unpublished by an earlier test run. EmailService refuses to send outside production, " +
+        "so this event could never have been delivered from this environment (ADR-086).",
+    },
+  });
+
+  return result.count;
 }
 
 /**

@@ -115,6 +115,35 @@ rows is the last thing that should exist in two hand-written versions — this r
 a hand-copied permission matrix drift four Permissions and three Roles out of date, and ADR-011
 exists because two copies of one document answered the same question differently.
 
+## The email half, and a claim this document had to take back
+
+The first version of this decision swept payments only, and said in as many words that **the outbox
+needed no sweep**, on the grounds that 775 unpublished events contained only **16 eligible** ones —
+the rest being past ADR-075's twenty-four-hour window or already concluded by ADR-085.
+
+The next full gate run failed on `OutboxPollerService`'s alerting spec, which lost its own event
+behind **51 eligible rows**. Sixteen was a *snapshot*, and it was read as a *property*. Email events
+fail, back off, and become eligible again in waves, so the eligible count breathes across the batch
+size of 50 rather than sitting still under it — and the window that does finally end them is a day,
+which is longer than an afternoon of work.
+
+**The rule for these is a fact about the environment rather than about the rows.**
+`EmailService.send` refuses outright unless `NODE_ENV === "production"` — a deliberate decision
+with its own comment, so that the e2e suite cannot make live calls to Resend with a placeholder key.
+An email event written anywhere else is therefore **unpublishable by construction**: not old, not
+named like a fixture, not merely stuck. It cannot succeed here, which is precisely what
+`PermanentRejection` means.
+
+**So the harness marks these rather than deleting them**, using ADR-085's own `abandoned_at` and
+`abandoned_reason`. That respects ADR-075's reasoning where deletion would not: the row is the
+trace of a send that was decided on, and removing it would destroy that record while leaving the
+recipient's address one table over in `EmailDelivery` anyway. It also means the mechanism is the
+product's, used by the harness, rather than a second mechanism invented for tests.
+
+The discriminating pair is a money event of the same age, which must **not** be concluded — a rule
+written as "abandon what has not published" would pass the email test and fail that one, and the
+damage would be a Wallet left permanently wrong rather than an email not sent.
+
 ---
 
 ## Falsification
@@ -124,14 +153,16 @@ failed at 102 stale rows; with the sweep in place the run reports `[db] swept 12
 payments left by earlier runs` and **437 of 437 pass**. After that run the database holds 17 again —
 the per-run figure, and it can no longer compound.
 
-**At the unit level, three tests in `test/harness-sweep.spec.ts`**, and the discriminating one is the
-second: a sweep that simply deletes everything stuck passes the first test and fails the second.
+**At the unit level, five tests in `test/harness-sweep.spec.ts`**, two of which are the halves that
+reject a lazier version of their own mechanism.
 
 | test | rejects |
 |---|---|
 | takes a bare `PENDING` row, and the Transaction shell of one with no Ledger | a sweep that does nothing |
 | **REFUSES a `PENDING` row with a JournalEntry behind it** | **a sweep that deletes everything stuck** |
 | never considers a row that is not `PENDING` | a sweep whose status filter is missing |
+| concludes an unpublished email event, keeping the row and its reason | a conclusion that deletes, or one that does nothing |
+| **REFUSES a money event of the same age** | **a rule written as "abandon what has not published"** |
 
 The third exists for a specific reason. The sweep takes an optional `onlyPaymentIds` narrowing —
 used **only** by that spec, because calling the real unrestricted sweep from inside a running suite
@@ -158,11 +189,7 @@ looked exactly like a clean pass.
 
 ## What this does not do
 
-- **The outbox is not swept, and that was measured rather than assumed.** After ADR-085 the
-  development database held 775 unpublished events of which **16 were eligible** — the rest are
-  emails past their ADR-075 window or rows already concluded. The queue is healthy; the row count is
-  history. A second sweep would be solving a number rather than a problem.
-- **It does not make the development database clean**, only its payment queue non-accumulating.
+- **It does not make the development database clean**, only its two queues non-accumulating.
   Organizations, restaurants and ledger entries still grow, and `pnpm run db:reset` remains the
   answer when a failure smells of stale data.
 - **It does not replace ADR-085's open case.** An abandoned payment in production still stays

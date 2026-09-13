@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sweepStuckTestPayments } from "./global-setup";
+import { concludeUndeliverableEmails, sweepStuckTestPayments } from "./global-setup";
 
 /** This file owns every row created under this name — see the teardown. */
 const FIXTURE_RESTAURANT = "Harness Sweep Test Restaurant";
@@ -9,11 +9,17 @@ const FIXTURE_RESTAURANT = "Harness Sweep Test Restaurant";
 /**
  * ADR-086. The pre-run sweep deletes rows, so it gets the same scrutiny as anything else that does.
  *
- * **The discriminating pair is the second test, not the first.** A sweep that deletes every stuck
- * PENDING payment passes the first test trivially; what a sweep must never do is take a row with
- * financial history behind it, and only the second test rejects that implementation. The third
- * exists because the narrowing parameter (see `sweepStuckTestPayments`) cannot prove the
- * `status: "PENDING"` filter — a SUCCEEDED row of this spec's own proves it directly.
+ * Five tests, and **two of them are the ones that matter** — each is the half that rejects a lazier
+ * implementation of its own mechanism:
+ *
+ *   - *REFUSES a PENDING payment with a Ledger entry behind it.* A sweep that simply deletes
+ *     everything stuck passes the first test and fails this one.
+ *   - *REFUSES a money event of the same age.* A conclusion rule written as "abandon what has not
+ *     published" passes the email test and fails this one — and the damage would be a Wallet left
+ *     permanently wrong rather than an email not sent, which is ADR-075's own asymmetry.
+ *
+ * The `SUCCEEDED` case exists because the narrowing parameter (see `sweepStuckTestPayments`) cannot
+ * prove the `status: "PENDING"` filter; a SUCCEEDED row of this spec's own proves it directly.
  */
 describe("the harness sweep (ADR-086)", () => {
   const prisma = new PrismaClient();
@@ -185,5 +191,42 @@ describe("the harness sweep (ADR-086)", () => {
     expect(result.swept).toBe(0);
     expect(result.kept).toBe(0);
     expect(await prisma.payment.findUnique({ where: { id: succeeded.id } })).not.toBeNull();
+  });
+
+  async function seedOutboxEvent(eventType: string) {
+    return prisma.outboxEvent.create({
+      data: {
+        aggregateType: "HarnessSweepFixture",
+        aggregateId: randomUUID(),
+        eventType,
+        payload: { to: "nobody@example.invalid", subject: "s", text: "t" },
+      },
+    });
+  }
+
+  it("concludes an unpublished email event, keeping the row and recording why — it is marked, never deleted, because the row is the trace of a send that was decided on (ADR-075)", async () => {
+    const email = await seedOutboxEvent("email.send_requested");
+
+    const concluded = await concludeUndeliverableEmails(prisma, [email.id]);
+
+    expect(concluded).toBe(1);
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: email.id } });
+    expect(after.abandonedAt, "an undeliverable email event was left in the queue").not.toBeNull();
+    expect(after.abandonedReason).toContain("outside production");
+    expect(
+      after.publishedAt,
+      "an abandoned event must never be marked published — it was not sent",
+    ).toBeNull();
+  });
+
+  it("REFUSES a money event of the same age — the discriminating pair: the rule is about what THIS ENVIRONMENT can send, and a journal-entry projection has nothing to do with an email provider", async () => {
+    const money = await seedOutboxEvent("journal_entry.payment_captured");
+
+    const concluded = await concludeUndeliverableEmails(prisma, [money.id]);
+
+    expect(concluded, "a money projection was concluded by a rule about email").toBe(0);
+    const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: money.id } });
+    expect(after.abandonedAt).toBeNull();
+    await prisma.outboxEvent.delete({ where: { id: money.id } });
   });
 });
