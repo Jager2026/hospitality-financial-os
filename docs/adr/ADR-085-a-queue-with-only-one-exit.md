@@ -186,6 +186,46 @@ complete.
 after a window measured against real payment latency, then conclude as `CANCELED` through the same
 `conclude()` path this change introduces. The mechanism is already here; only the policy is missing.
 
+### Established as fact, because "non-terminal" was doing too much work in the sentence above
+
+**Does an abandoned payment happen in production, or only in tests that create one and walk away?**
+It happens in production, and it is not an edge case. `PaymentService.createPaymentIntent` writes
+the `PENDING` row **before the customer pays** — the row exists from the moment the waiter presents
+the terminal, by ADR-015's design, which keeps the Ledger write off the request path. Every guest
+who looks at the screen and does not tap, every card that fails, every session that ends when the
+table gets up, leaves one. The tests reproduce the shape because the shape is the ordinary one.
+
+**How long does it stay PENDING, and what closes it?** **Nothing closes it, and that was checked
+rather than assumed.** Two writers of `Payment.status` exist in this codebase and they write
+`PENDING` and `SUCCEEDED`. On Stripe's side, its own documentation describes cancellation as an
+action *you* take; the one automatic transition to `canceled` it names is a PaymentIntent
+*confirmed too many times*, which is a count and not a clock. The `cancellation_reason` enum does
+carry Stripe-internal values (`automatic`, `expired`), so Stripe can cancel an intent on its own
+— but nothing in the documentation states when that happens for a direct-charge card intent, so
+**this system cannot be built on it**. Recorded as a gap rather than answered, because a behaviour
+nobody can cite is not a behaviour to depend on.
+
+**So the consequence is the third thing the Founder named, and it is confirmed:** reconciliation
+will pick over abandoned payments forever. It is the identical queue-head defect, on the other
+service, arriving through a row that is unresolvable for a reason nothing here classifies as
+permanent — and it is the part this decision does **not** close. What this change does is make it
+closable in one line the day the policy exists: `conclude(payment, "CANCELED", …)` is already
+written, tested, and falsified.
+
+### The eight rows that had a Transaction, and why they are a different thing
+
+The dev database's stale `PENDING` rows split 104 / 8, and the eight were kept while the rest were
+deleted on the grounds that a Transaction is visible on a screen. **They are not a different kind of
+row; they are a shape the product cannot produce.** All eight are `pi_scope_*`, written by
+`permission-scope.e2e.spec.ts`, which assembles a Payment and a `completed` Transaction by hand —
+and behind them are **zero JournalEntry rows and zero Tip rows**. In production the Transaction is
+created by the `payment_intent.succeeded` handler, on the same path that sets the Payment
+`SUCCEEDED`; a completed Transaction over a `PENDING` Payment is a state no code writes.
+
+So they are test residue as much as the 104 were, and they are **not** the abandoned-payment case:
+an abandoned payment has no Transaction, because nothing ever succeeded. They were kept for
+screen-visibility, which is a reason about a developer's demo data and not a reason about the queue.
+
 ---
 
 ## Alert semantics: what changed, and what did not
