@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.21.0
+version: 2.22.0
 status: Active
 classification: Internal
 owner: Founder
@@ -212,6 +212,10 @@ Payment
 
 ---
 
+**Rules (ADR-089):** `processor_payment_id` is **UNIQUE**. A Stripe PaymentIntent id names one intent, and two code paths — the capture handler and reconciliation — look a Payment up by it with `findFirst`, which would silently pick one row of N. No path was found that produces a duplicate (`POST /payments` is behind `IdempotencyInterceptor`, `idempotency_key` is unique, and `createPaymentIntent` sends no idempotency key to Stripe so every call yields a fresh intent), so this is an **assertion of an invariant rather than a fix** — recorded as such because "not found" is not "impossible".
+
+---
+
 ############################################################
 # ENTITY
 Transaction
@@ -286,6 +290,10 @@ Refund
 
 ---
 
+**Rules (ADR-089):** `processor_refund_id` is **UNIQUE**. Measured: a `charge.refunded` redelivered under a different event id inserts nothing — the handler compares the cumulative refunded amount against what the Ledger has already reversed and returns early. That guard is correct; the index is the same statement made where it cannot be forgotten.
+
+---
+
 ############################################################
 # ENTITY
 Chargeback
@@ -297,6 +305,10 @@ Chargeback
 **Relationships:** Chargeback → Transaction · one-or-more JournalEntry reference this Chargeback back via `JournalEntry.chargeback_id` (ADR-017) — genuinely one-to-many, not just symmetric with Refund/Adjustment: the provisional-loss entry and, if the dispute is later won, the reversal entry (ADR-016) are two separate JournalEntry rows against the same Chargeback.
 
 **Rules:** Same compensating-entry rule as Refund. Historical Chargeback data feeds fraud detection (see SYSTEM_ARCHITECTURE).
+
+---
+
+**Rules (ADR-089) — this one closes a REPRODUCED defect, not an invariant:** `processor_dispute_id` is **UNIQUE**. One `charge.dispute.created` delivered twice under two different event ids produced **two Chargeback rows and two CHARGEBACK journal entries** — the same dispute debited twice. Nothing caught it: the event-id claim sees two different ids, the refund path's cumulative guard has no counterpart here, the balance trigger checks that each entry balances and knows nothing about whether another describes the same dispute, and `PaymentReconciliationService` selects `status = PENDING` while a disputed payment is `SUCCEEDED` — so it never looks. After the index the second delivery **fails** rather than duplicating, which is better and not the whole answer; teaching the handler to recognise a dispute it already holds is webhook-deduplication semantics and has its own change.
 
 ---
 

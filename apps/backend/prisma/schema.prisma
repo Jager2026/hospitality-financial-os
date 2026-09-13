@@ -183,6 +183,17 @@ model Restaurant {
   organizationId        String       @map("organization_id") @db.Uuid
   name                  String
   legalName             String       @map("legal_name")
+  /// ADR-089 — DELIBERATELY NOT UNIQUE, both of them, and the reason is written here because the
+  /// next audit will propose the opposite and will look right doing it.
+  ///
+  /// One UAB owns several venues. A restaurant group registers once and opens five addresses, and
+  /// every one of those Restaurants carries the same company number and the same VAT number.
+  /// Making either unique would return "this company is already registered" to a group opening its
+  /// second venue — that is, to **the best customer this product can acquire**, at the exact moment
+  /// they are expanding.
+  ///
+  /// The identifier that IS one-per-venue is `stripeAccountId`, and it is unique. A company code is
+  /// an attribute of the owner, not a name for the venue, and constraining it confuses the two.
   companyNumber         String       @map("company_number")
   vatNumber             String       @map("vat_number")
   email                 String
@@ -489,7 +500,10 @@ model Payment {
   id                        String        @id @default(uuid()) @db.Uuid
   restaurantId              String        @map("restaurant_id") @db.Uuid
   processor                 String
-  processorPaymentId        String        @map("processor_payment_id")
+  /// ADR-089. UNIQUE: a Stripe PaymentIntent id names one intent. `captureFromPaymentIntentId`
+  /// and reconciliation both look a Payment up by this column with `findFirst`, which silently
+  /// picks one row of N — this makes that assumption checkable instead of implied.
+  processorPaymentId        String        @unique @map("processor_payment_id")
   amount                    BigInt // minor units (ADR-001) — full card charge, bill + tip combined
   // Sprint 6, ADR-022: caller-submitted tip portion of `amount` (tipAmount <= amount, validated at
   // request time). `amount` itself never changes meaning — the bill/tip split lives here, not by
@@ -655,7 +669,9 @@ model Tip {
 model Refund {
   id                String       @id @default(uuid()) @db.Uuid
   transactionId     String       @map("transaction_id") @db.Uuid // many Refunds per Transaction allowed
-  processorRefundId String       @map("processor_refund_id")
+  /// ADR-089. UNIQUE: a Stripe refund id names one refund. Redelivery is already stopped by the
+  /// handler's cumulative-amount guard; this is the same statement made where it cannot be forgotten.
+  processorRefundId String       @unique @map("processor_refund_id")
   amount            BigInt // minor units (ADR-001)
   currency          String       @db.Char(3)
   reason            String
@@ -685,7 +701,10 @@ model Refund {
 model Chargeback {
   id                 String           @id @default(uuid()) @db.Uuid
   transactionId      String           @map("transaction_id") @db.Uuid
-  processorDisputeId String           @map("processor_dispute_id")
+  /// ADR-089. UNIQUE, and this one closes a REPRODUCED defect rather than asserting an invariant:
+  /// one `charge.dispute.created` delivered twice under different event ids produced two Chargeback
+  /// rows and two CHARGEBACK journal entries — the same dispute debited twice.
+  processorDisputeId String           @unique @map("processor_dispute_id")
   reason             String
   amount             BigInt // minor units (ADR-001)
   currency           String           @db.Char(3)

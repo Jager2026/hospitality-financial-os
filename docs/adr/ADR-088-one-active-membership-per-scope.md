@@ -1,6 +1,6 @@
 ---
 title: ADR-088 — One ACTIVE Membership per scope, and the constraint that says so
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -203,3 +203,11 @@ the position `membership` was in this morning.
 **No migration for them here.** That is a second risk with its own blast radius — three indexes over
 tables holding money, each needing its own check for pre-existing duplicates — and it gets its own
 change.
+
+**Done on the same day, in [ADR-089](ADR-089-a-stripe-id-names-one-thing.md)** — and the measurement
+there changed what the three rows above mean. Only **one** of them was a reachable defect: a
+`charge.dispute.created` delivered twice under different event ids produced two Chargebacks and two
+CHARGEBACK journal entries. `payment` and `refund` turned out to be guarded already — by a status
+check and by a cumulative-amount guard respectively, both rules in one code path — so their indexes
+are assertions rather than fixes. The row above that reads *"guarded today by rules upstream"* was
+right about the shape and could not say which of the three the rule actually failed to cover.
