@@ -1,6 +1,6 @@
 ---
 title: ARCHITECTURE_DECISIONS
-version: 1.48.0
+version: 1.49.0
 status: Active — ADR-001..056; ADR-057 onward in docs/adr/
 classification: Internal
 owner: Founder
@@ -1591,6 +1591,19 @@ Lives in `repo-invariants.spec.ts`, resolves `git merge-base origin/main HEAD`, 
 **Fails loudly rather than skipping when git history is unavailable.** A check reporting "nothing to compare" is indistinguishable, in a green run, from one that compared and passed — the exact failure ADR-050 records for the frontend build guard. It therefore throws, naming `fetch-depth: 0` as the fix. **That makes `ci.yml`'s checkout depth load-bearing rather than incidental**, and the line says so.
 
 **Falsified in all three directions asked for:** editing a document without a bump fails, naming the document; the same edit with a bump passes; a change outside `docs/` does not trigger it at all. The third matters as much as the first — an invariant that fired on every commit would be turned off within a week.
+
+**Amendment, 2026-09-13 — where it is enforced, closed by a discriminating pair rather than by a passing run.** The question left open was whether this invariant is a property of CI or only of a local habit, and a local habit is not a mechanism. **It runs in CI, on the pushed SHA**, inside the `lint-typecheck-test-build` job, which executes the backend suite that contains `repo-invariants.spec.ts`. The evidence is two runs on one branch, eight minutes apart:
+
+| SHA | run | what it establishes |
+|---|---|---|
+| `e46a11a` | CI **failure**, 2026-09-12 10:35:53Z | `repository invariants > makes a changed document move its own version (ADR-056)` — *"These documents changed without their `version:` moving … Offending documents: `docs/adr/ADR-084-two-bounded-queues-that-never-drain.md`"* |
+| `b665f20` | CI **success**, 2026-09-12 10:43:15Z | the commit is *"docs(adr-084): move the version, because the document moved"* — an edit that moved a version and nothing else |
+
+**The pair is the proof; a green run would not have been.** That is this ADR's own argument turned on itself: a passing check cannot be distinguished from a check that ran on nothing. The failure names the offending document, so the invariant had input, evaluated it and rejected it; the next commit changed one version line and it passed. The verdict therefore depends on the thing the invariant claims to measure, in CI, on the SHA that was pushed.
+
+**No variant of the local gate's ordering is needed.** The branch that would have required one — *"it holds only locally"* — did not occur, and designing for it would have been designing for a measurement that came back the other way.
+
+**And a correction to a phrase this project has used: "cosmetic, for correctness" does not mean free.** Moving a version because the document moved is cosmetic in content, and in the wrong order it costs a full CI round trip — push, wait, fail, fix, push, wait — measured above at **eight minutes for a one-line edit**. The price is not in making the change; it is in learning from a machine, after a push, that it was needed. `pnpm run gate` runs this same invariant locally, and that is the whole of the difference between eight minutes and none.
 
 ---
 

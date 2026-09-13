@@ -1,6 +1,6 @@
 ---
 title: CLAUDE_RULES
-version: 2.24.0
+version: 2.25.0
 status: Active
 classification: Critical
 priority: Highest
@@ -164,6 +164,40 @@ Two things about the shape of the budget, both learned the same way:
 - **Put it on the suite, not in the global config.** A raised global default silently covers tests that do far less, which is where the same defect would next hide. The budget belongs where the cost is — the file that spawns processes.
 - **Check that the option is actually read.** A green suite does not distinguish "the budget applies" from "the budget was ignored and today's machine was fast enough". Set it to `1` and confirm every case in the file times out; that is the same discriminating-pair standard the Workspace Hygiene section demands of any instrument, applied to a configuration value.
 
+Architecture Review, for any code that reads a row and later writes it back: **between the read and the write, the state is not yours.** One rule at two scales, not two rules — the shape is always a snapshot, then something that takes time, then a write expressed in terms of a world that has stopped existing. Whatever moved in between is overwritten in silence.
+
+- **The environment you changed yourself.** Working on a branch already squash-merged; pushing while the gate is red; a server started by hand still holding files and still polling the development database (#203).
+- **The row another worker is touching.** `EmailOutboxService` wrote a whole payload back and restored an address a concurrent erasure had just removed (#208). `acceptInvitation` read an invitation, hashed a password — hundreds of milliseconds — and then stamped it accepted: two concurrent accepts, two Memberships (#211).
+
+The two differ only in what the other actor is — a process, a parallel worker, or an earlier version of yourself — and not in the remedy, which is always to make the write itself carry the condition the read assumed.
+
+**The class is NOT closed, and saying that is part of the rule.** Two fixes and one constraint are not a mechanism: nothing detects the shape, because no linter can see the interval between two statements, and the survey that found the third instance found it by *reading*, which is the weakest instrument available. What closes, each time, is one consequence in one place. Anyone who writes "the read-modify-write class is handled" is describing three repairs, not a property.
+
+Architecture Review, for any constraint, index or guard, **the scope is what it covers in rows — measured — and not what its syntax appears to say.** Two cases, one property:
+
+- **A predicate over a column nothing writes is true of every row.** A partial index `WHERE deleted_at IS NULL` on a table where nothing ever sets `deleted_at` is a full index wearing a partial one's clothes. That one was mine, proposed in a review, and it would have read as narrower than it was for as long as it lived.
+- **A NULL inside a natural key lifts out exactly the rows that contain it** — and those are almost always the rows meaning *applies to everything*. A unique index over `(user_id, organization_id, restaurant_id)` constrains no org-wide Membership at all, since two NULLs are never equal: **1,450 rows outside a constraint that reads as covering them** (ADR-088). `NULLS NOT DISTINCT` is the remedy on PG15+, and it is decided per column rather than inherited from the previous index that needed it.
+
+**One question settles both: how many rows does this constraint actually cover?** A `count(*)` over its own predicate answers it in a second. Reading the DDL answers a different question, and answers it confidently.
+
+Architecture Review, for a change to *when* something runs: **a schedule is a concurrency parameter, even when it looks like configuration.** ADR-087 did not create the erasure race in #208 — it made it reachable, by moving a write from minutes after a row was created to seconds after, which is precisely the window erasure works in. The change was correct in its own terms and woke a defect that had been asleep somewhere unrelated.
+
+Intervals, backoffs, batch sizes and retry delays all belong to this class. The review question is not "is the new value sensible" but **what else runs in the window this opens, and what now overlaps that did not before.**
+
+Architecture Review, for a write that must happen only once — **the idiom has a name here, and it is written down so a fourth author does not invent a fourth way.** *Conditional write, row count as the signal:* the write itself carries the condition, and the number of rows it touched is the answer to "was I first?". The consequence hangs on that number, never on the method having reached its end.
+
+| where | the conditional write | the signal |
+|---|---|---|
+| `RestaurantService.createOnboardingLink` | `updateMany … where { onboardingLinkFirstRequestedAt: null }` | `count === 1` |
+| `MembershipInvitationService.accept` (ADR-088) | `updateMany … where { acceptedAt: null }` | `count === 1` |
+| `WebhooksService.handleDisputeCreated` (ADR-090) | `INSERT … ON CONFLICT DO NOTHING` | `inserted === 1` |
+
+**And why not a blind `upsert`:** it returns a row whether it inserted or updated, so nothing downstream can separate *I created this* from *someone already had it*. Where the consequence is a Ledger entry, that indistinguishable row is the entry going out twice.
+
+Security Review, and the widest of these: **coverage accumulated case by case is not a property of the pipeline.** Six webhook-redelivery cases were measured against the real database (ADR-089). Four different mechanisms prevent a duplicate — an idempotency key that is a primary key, an early return on status, a unique constraint on `transaction.payment_id`, a cumulative-amount comparison inside one handler — and the sixth was prevented by nothing. **Not one of the four was chosen for coverage**; each was written for its own local reason and covers its case by consequence.
+
+So the rule is what follows from that: **the next event type inherits zero.** It is protected by exactly what its author remembers to think about, and by nothing structural. The diagnostic sign is the part worth carrying — **from the outside all six looked equally handled.** Reading predicted the wrong guard twice in a row on that same table: a unique constraint credited with stopping a sequential redelivery that a status check actually stopped, and a refund path expected to duplicate that does not. Only execution separates a guarded path from one that has simply never been hit.
+
 ---
 
 # Review Depth Scales With Risk
@@ -226,6 +260,12 @@ Never refactor for ego. Refactor because future engineers deserve better.
 
 The asymmetry is what makes this worth a rule: a broken checker usually fails by **finding something**, and a finding is exactly what an audit is looking for, so nothing about the result feels wrong. **Before reporting what a tool you just wrote has found, run it against a case whose answer you already know** — one that must come back clean and one that must come back dirty. That is the same discriminating-pair standard the tests are held to, applied to the instrument rather than the subject.
 
+**A derivative of the real thing survives a spot check by construction, and that is what makes it dangerous.** Anything produced by perturbing something real — a fixture built from the seed, a document generated from another document, a mock-up built over the design tokens — presents the checker with two or three values that are right, because most of it *is* the original. The perturbation lives in the part nobody sampled.
+
+Measured on `PlainTabs_Landing_V2.html`, which carries a palette that is nearly the system's: `#FF8A80` against `--error #FF8A7A`, four of six hex digits identical; and `#726D64` — the most checkable value in the file, the one a reviewer reaches for first — genuinely *is* `--n-500`, while also being the value that gives 3.97 against its own background where the contrast floor is 4.5.
+
+**So a derivative is checked in full or it is not checked.** Sampling it is not a weaker version of checking; it is a procedure whose result is the same whether the artifact is correct or not.
+
 **A measurement budget stated in attempts is not a budget until it is stated in hours, and the conversion happens BEFORE the first attempt.** "Sixty runs" and "three hours of this evening" are the same decision described at two different levels of honesty, and only the second one is a decision the Founder can take or refuse. The first hides the cost inside an arithmetic that feels like rigour.
 
 This is a rule because of how #196 went, and the failure was not the number — the number was right. A reproduction budget was set at thirteen full-suite runs, found to carry a **51% chance of showing nothing** at the defect's own recorded rate, and correctly extended to sixty, where that falls to 4.6%. Every step of that reasoning holds. What was never said out loud, at any point, is that sixty runs of a 3-minute suite is **three hours** — and it became visible only after the evening had been spent. Nobody chose to spend it; the arithmetic did, and the arithmetic has no standing to.
@@ -269,6 +309,8 @@ If the dependency is real, stacking is still allowed — but then plan the rebas
 **The second half matters more than the first, because it is the case where stacking is justified — and there the cost is paid either way: in the plan, or in a conflict.** Nothing about stacking makes the replay optional; it only decides whether it happens as scheduled work or as a surprise, at the moment someone is trying to land something else. Scheduling it is strictly cheaper: the same commits move, but nobody is mid-merge and guessing whether a conflict is structural or real.
 
 The same applies to processes, not only files. A server started by hand to verify something is shared state for as long as it lives: it holds a port, and — if it points at the development database — it keeps running its background jobs against the same rows the test suite is about to assert on. Stop what you started before running the suite, and confirm the port is actually free rather than assuming the kill worked.
+
+**And confirm it by the process tree, not by the port — the port lies whenever a watcher is involved.** `nest --watch` is a parent that restarts its child; between one child dying and the next one binding, the socket is honestly free. The check passes, the server is alive, and the suite runs against a process still polling the same database. **The reliable signal is the process tree matched by command line, killed from the root.** It is the same shape as a comparison that is present but never evaluated: an instrument answering a question adjacent to the one being asked, and answering it correctly.
 
 **A variable's optionality is a claim about consequences, and nothing re-checks that claim when a new dependency arrives.** `.optional()` or a `.default()` says, in effect, "the system works acceptably without this." That is usually true when written and quietly stops being true the moment some new code depends on the value — and the code that creates the dependency is never the code that declared the optionality, so nobody is looking at both. The failure is silent by construction: the app boots, the config validates, and one behaviour is simply missing. Three instances in this codebase, all found in one audit and all since closed (ADR-045): `ALERT_WEBHOOK_URL` became load-bearing when `unhandledRejection` started reporting-and-continuing instead of exiting; `FRONTEND_URL`'s localhost default became a customer-facing failure when it became Stripe's onboarding `return_url`; `NODE_ENV`'s development default silently disabled ADR-038's own boot-time liveness probe. **When adding a dependency on a value, check how that value is declared — and when declaring something optional, the honest form of the claim is what specifically still works without it.**
 

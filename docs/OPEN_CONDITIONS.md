@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.5.0
+version: 1.6.0
 status: Active
 classification: Critical
 owner: Founder
@@ -37,6 +37,14 @@ ADR-078).
 
 **How to use it in prose.** Reference the id — *"blocked on OC-1"* — rather than restating the
 condition inline. A restated condition is a second copy that goes stale on its own.
+
+**The form of a trigger: it goes on the PRECONDITION, never on the occurrence.** *"The first
+dispute"* is a useless trigger, because a dispute is the very thing that produces the wrong data —
+by the time it fires, the row it was supposed to protect already exists and the cost is already
+paid. *"The first venue taking real traffic"* is the same condition moved one step earlier, to
+before a dispute is possible at all. Every row below states its trigger in that form, and a row
+whose trigger names the event it is meant to survive is written wrong and should be rewritten
+rather than kept.
 
 **Not checked by anything.** ADR-078 costed a CI check that reports rows older than N days and
 never fails the build; it is not built, and this file is not enforced by the gate. It is read
@@ -119,6 +127,11 @@ the two rules as recorded can be read two ways and the readings differ by €750
 Both readings are consistent with the two sentences as written; they cannot both be right. **This
 is a question with a numeric answer, which makes it a good one to put to the registrar** — along
 with whether the €14.02 covers everything or is one line of several.
+
+**The call is to Registrų centras, 8 700 55 000.** Recorded as a number rather than as "a call to
+the registrar", because a task without a phone number in it is a task that stays a sentence. Two
+questions, both with numeric answers: how much capital must be paid before filing, and whether
+€14.02 is the whole fee.
 
 ### The three sub-questions this did not touch
 
@@ -352,6 +365,181 @@ adopting those two surfaces would silently break an accessibility floor that
 `tokens.contrast.spec.ts`. **Numbers from that file are not to be taken** — not into the landing,
 not into a deck, not as "close enough" for a mockup, because a mockup is where a value gets copied
 from.
+
+---
+
+## OC-7 — The dispute handler's `default` branch acknowledges what it does not recognise
+
+| | |
+|---|---|
+| **Status** | Open. Measured, not inferred: delivered against the real database on 2026-09-13 (ADR-090, ADR-091). |
+| **Open since** | 2026-09-13 |
+| **What closes it** | An **enumerated list of deliberately-ignored event types**, so that anything outside it is logged as *unknown* instead of silently joining the ignored. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Nothing today. It gates the correctness of the first handler somebody writes for an event type Stripe adds later. |
+| **Trigger** | **The first venue taking real traffic** — before a dispute is possible. |
+
+`charge.dispute.updated` and `charge.dispute.funds_withdrawn` fall to `default`: logged at debug,
+claim marked `COMPLETED`, Ledger untouched. For those two that is the intended behaviour. The
+problem is that it is also the behaviour for **every event type that does not exist yet** — a new
+one is treated as handled the first time it arrives, and nothing anywhere says it was not.
+
+The mechanism is not a handler per type; it is a list. Naming the ignored types costs a few lines
+and converts silence into a signal. It is a row rather than an edit because deciding *which* types
+are deliberately ignored is a judgment about the integration, not a refactor.
+
+---
+
+## OC-8 — `createPaymentIntent` sends no idempotency key to Stripe
+
+| | |
+|---|---|
+| **Status** | Open. Measured 2026-09-13 (ADR-089): request options carry only `{ stripeAccount }`. |
+| **Open since** | 2026-09-13 |
+| **What closes it** | Passing an idempotency key in `StripeService.createPaymentIntent`'s request options. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Nothing today, and the reason is measured rather than assumed. |
+| **Trigger** | **The first venue taking real traffic.** |
+
+**We demand idempotency of our own callers and offer none to the vendor.** `POST /payments` carries
+`IdempotencyInterceptor`, `payment.idempotency_key` is unique — and the outbound call to Stripe has
+no key at all. The asymmetry is what makes it harmless today: every retried creation yields a *fresh*
+intent id, so a duplicate cannot masquerade as the original, and no path was found that produces two
+Payment rows for one intent. That is *not found*, written as the weaker of the two statements.
+
+**The price of fixing this does not grow with time** — it is one argument to one call — which is
+exactly why it belongs on a list instead of in a sprint.
+
+---
+
+## OC-9 — Webhook deduplication as a general mechanism is not built, and that is a decision
+
+| | |
+|---|---|
+| **Status** | Open **by decision**, 2026-09-13. |
+| **Open since** | 2026-09-13 |
+| **What closes it** | A decision about the shape, taken across all six redelivery cases at once — not adopted from inside one handler. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | It is the standing reason not to generalise ADR-090's idiom by reflex. |
+
+Six cases, four different guards, and until ADR-090 a sixth guarded by nothing (ADR-089's table).
+Picking one shape while looking at one handler means adopting it without having examined the other
+five — and the measurement that produced that table corrected two confident readings on the way, so
+the survey is not optional.
+
+**This row exists so the absence stays a decision rather than decaying into an assumption.** The
+general form of the risk is in `CLAUDE_RULES.md`: coverage accumulated case by case is not a
+property of the pipeline, and the next event type inherits zero.
+
+---
+
+## OC-10 — A poller test asserts about the depth of the queue, not about its own events
+
+| | |
+|---|---|
+| **Status** | Open, 2026-09-13. |
+| **Open since** | 2026-09-13 |
+| **What closes it** | Scoping the assertion to the events the test itself created — **isolation, not cleanup**. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Nothing in the product. It is a flake source, and flakes are how a suite stops being read. |
+
+Draining the queue makes a run pass; it does not make the assertion true. ADR-086 did the right
+thing by excluding money events from the harness sweep, and that is a **different requirement** from
+this one: *"do not delete it"* and *"do not let it reach the assertion"* are two rules, and only the
+second makes the test independent of whatever else the shared development database happens to hold.
+
+---
+
+## OC-11 — The recovery window is three days, and one thing about it is not found
+
+| | |
+|---|---|
+| **Status** | Open as a **vendor bound**, true today. |
+| **Open since** | 2026-09-13 (quoted from Stripe's own documentation in ADR-090) |
+| **What closes it** | Nothing closes it. It is a constraint to design against, and it changes only if Stripe changes it. |
+| **Owner** | Founder operationally; AI Technical Co-Founder for design. |
+| **What it gates** | How long the webhook endpoint may be down before loss becomes permanent. |
+
+> "Stripe attempts to deliver events to your destination for **up to three days** with an exponential
+> back off in live mode."
+
+An endpoint down longer than that loses events irrecoverably — there is no catch-up mechanism on our
+side, and reconciliation does not cover the gap (**OC-12**).
+
+**Whether Stripe disables an endpoint by itself under sustained failure is NOT FOUND in the
+documentation reachable from `stripe docs`.** Recorded as *not found*, never as *does not happen*: a
+vendor guarantee holds inside the bounds the vendor states, and this one is unstated.
+
+---
+
+## OC-12 — Reconciliation answers "did it arrive", never "is what arrived correct"
+
+| | |
+|---|---|
+| **Status** | Open as a **boundary of the mechanism**, not as a defect. 2026-09-13. |
+| **Open since** | 2026-09-13 |
+| **What closes it** | Nothing. It is recorded so the next audit does not credit it with coverage it does not have. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Any claim that reconciliation is a safety net for correctness. |
+
+`PaymentReconciliationService` selects `status = 'PENDING'`. A payment carrying a dispute is
+`SUCCEEDED`. A payment captured twice is `SUCCEEDED`. **It never looks at either row at all** — so
+for that class it is neither a detector after the fact nor a prevention before it. It is not a
+mechanism at all there, which is a sharper statement than "it is late".
+
+And that is what it should be. Reconciliation answers whether a payment that left us reached a
+terminal state; a mechanism answering that question cannot also answer whether the terminal state is
+right. This row exists because the **name** suggests the wider meaning, and a reader in six months
+will take the name at its word.
+
+---
+
+## OC-13 — Where the natural key is issued by a vendor, the constraint was missing
+
+| | |
+|---|---|
+| **Status** | The three known instances are **closed** (ADR-089). **The regularity is the open part.** |
+| **Open since** | 2026-09-13 |
+| **What closes it** | Nothing closes it. It is a question to ask of every new table that carries an identifier issued elsewhere. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | The review of any new table with an external identifier. |
+
+`payment.processor_payment_id`, `refund.processor_refund_id` and `chargeback.processor_dispute_id`
+were each the natural key of their row, and not one of the three was unique. Where the key is
+**ours** — `payment.idempotency_key`, `transaction.payment_id`, `restaurant.stripe_account_id` — the
+constraint was there from the first migration.
+
+**The split is not random, which is what makes it a regularity worth writing down.** A column this
+system generates reads as an identity; a column copied out of a vendor's payload reads as data. It
+is an identity either way. The check is one line of review: *if a column holds an identifier issued
+elsewhere and names exactly one thing, it is unique — or the reason it is not is written next to the
+field.* `restaurant.company_number` and `restaurant.vat_number` are the recorded exception, and the
+reason sits beside them in `schema.prisma`: one UAB legitimately owns several venues.
+
+---
+
+## OC-14 — The dispute fee is real money that nothing records
+
+| | |
+|---|---|
+| **Status** | Open. Measured 2026-09-13 (**ADR-091**). |
+| **Open since** | 2026-09-13 |
+| **What closes it** | A decision about where a **processor cost** lives in the Ledger — there is no account for one today — and then an entry actually posted for it. |
+| **Owner** | Founder. It is a cost question before it is a schema question. |
+| **What it gates** | The accuracy of any per-restaurant profitability figure, once disputes exist. |
+| **Trigger** | **The first venue taking real traffic** — not the first dispute, which is the event that produces the gap. |
+
+Stripe debits the payment amount **and** the dispute fee, and does not return the fee whether the
+dispute is won or lost — both quoted verbatim in ADR-091. This Ledger posts the amount and nothing
+else: `ledger_account` holds no processor-cost account (`processor_clearing`,
+`restaurant_revenue_payable`, `tip_payable`, `platform_fee_revenue`, `tax_payable`,
+`refund_contra`) and `journal_entry_type` holds no entry a fee could be.
+
+**Nothing recorded is wrong; something real is unrecorded.** That is the distinction that makes this
+a condition rather than a defect — every number in the Ledger balances, and the missing entry is for
+an event this system does not process. Its **size is also unknown**: the fee is per-network and
+per-contract, and this project has never seen a live one. Measuring that is part of closing the row,
+not a precondition for opening it.
 
 ---
 
