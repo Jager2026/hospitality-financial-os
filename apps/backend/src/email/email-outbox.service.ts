@@ -59,7 +59,7 @@ export const EMAIL_OUTBOX_AGGREGATE_TYPE = "EmailDelivery";
 
 /** What an email request carries. The BODY IS HERE, which is the uncomfortable part and is stated
  * rather than hidden: the Outbox must persist what is to be sent, so anything in `text` is at rest
- * for as long as the payload is. `redactPayload` below bounds that to the delivery window. ADR-069
+ * for as long as the payload is. `redactBody` below bounds that to the delivery window. ADR-069
  * records the consequence for the invitation token specifically, which is a decision for the
  * change that introduces it, not this one. */
 interface EmailPayload {
@@ -178,13 +178,8 @@ export class EmailOutboxService {
           where: { id: delivery.id },
           data: { status: "SENT", providerMessageId, lastError: null },
         });
-        await tx.outboxEvent.update({
-          where: { id: event.id },
-          data: {
-            publishedAt: new Date(),
-            payload: redactPayload({ to, subject }),
-          },
-        });
+        await tx.outboxEvent.update({ where: { id: event.id }, data: { publishedAt: new Date() } });
+        await redactBody(tx, event.id, DELIVERED_TEXT);
       });
     } catch (err) {
       // THE TRACE. A failed send that leaves nothing behind is silence, and silence is
@@ -221,10 +216,7 @@ export class EmailOutboxService {
           // invitation that text contains a token. The token itself stops working after seven days
           // by ADR-070's expiry query, but the body also carries the address, and nothing bounded
           // that at all.
-          await tx.outboxEvent.update({
-            where: { id: event.id },
-            data: { payload: { to, subject, text: ABANDONED_TEXT } },
-          });
+          await redactBody(tx, event.id, ABANDONED_TEXT);
         }
       });
 
@@ -263,6 +255,43 @@ export class EmailOutboxService {
  * This makes an email event non-replayable, which for a *money* event would be wrong and here is
  * the point: replaying a send is precisely what must not happen.
  */
-function redactPayload(payload: Pick<EmailPayload, "to" | "subject">): Prisma.InputJsonValue {
-  return { to: payload.to, subject: payload.subject, text: "[redacted after delivery]" };
+export const DELIVERED_TEXT = "[redacted after delivery]";
+
+/**
+ * Replaces the payload's `text` and **touches nothing else**.
+ *
+ * ## Why this is a `jsonb_set` rather than an object literal, which is the whole point
+ *
+ * Both call sites used to write `{ to, subject, text }` from locals read at the TOP of
+ * `handle()`. That is a read-modify-write across an await boundary, and between the read and the
+ * write another transaction can change the row — which is not hypothetical here, because the thing
+ * most likely to change it is **an erasure**.
+ *
+ * `redact-user.ts` tombstones `outbox_event.payload->>'to'` for a person who has asked to be
+ * forgotten. A poller holding a pre-erasure copy then finished its dispatch and wrote the original
+ * address straight back. Measured on 2026-09-13: `erasure-leaves-nothing.e2e.spec.ts` failed with
+ * *"the address survives in: outbox_event.payload (1 row)"*, and the surviving row was the one a
+ * poller had just concluded — `attempts: 1`, `abandoned_at` set, body redacted, and `to` back
+ * to `erasure-sweep-…@example.test`.
+ *
+ * **The race is older than the failure; ADR-087 is what made it fire.** Before it, the failure path
+ * rewrote the payload only for an event past ADR-075's twenty-four-hour window, so a freshly
+ * created row was never rewritten and nothing could be clobbered. Concluding a policy refusal on
+ * the first attempt moved that write to within seconds of the row being created — which is exactly
+ * when an erasure is likely to be running in the same suite.
+ *
+ * Replacing only the body removes the class rather than narrowing the window: whatever `to` is
+ * stored at the moment of the write survives, tombstone or not, because this statement never
+ * mentions it.
+ */
+async function redactBody(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  text: string,
+): Promise<void> {
+  await tx.$executeRaw`
+    UPDATE "outbox_event"
+    SET payload = jsonb_set(payload::jsonb, '{text}', to_jsonb(${text}::text))
+    WHERE id = ${eventId}::uuid
+  `;
 }

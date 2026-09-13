@@ -1,6 +1,6 @@
 ---
 title: ADR-075 — The Outbox payload outlives what it carried, and one of its two dangers expires on its own
-version: 1.1.0
+version: 1.2.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -223,3 +223,43 @@ the same missing mechanism is already blocking `AuditLog` and `EmailDelivery`.
 **Trigger, if none is chosen now: before the first venue onboards staff.** That is the moment
 invitations start failing against real addresses, and it is already the trigger on the consent gap
 (ADR-070), so the two arrive together.
+
+---
+
+## Amendment, 2026-09-13 — the redaction was a read-modify-write, and an erasure lost the race
+
+**The body went, and the recipient came back.** Both payload writes in `EmailOutboxService.handle`
+— the one after a successful send and the one that abandons — rewrote the whole payload from
+`{ to, subject, text }` read at the *top* of the method. That is a read-modify-write spanning a
+network call, and the transaction most likely to change the row in between is the one that matters
+most: `redact-user.ts` tombstoning `outbox_event.payload->>'to'` for a person who asked to be
+forgotten.
+
+**Measured, not imagined.** On 2026-09-13 `erasure-leaves-nothing.e2e.spec.ts` failed with *"ADR-052
+says an erasure empties the person. The address survives in: outbox_event.payload (1 row)"*. The
+surviving row was one a poller in another worker had just concluded — `attempts: 1`,
+`abandoned_at` set, body correctly redacted, and `to` back to the pre-erasure
+`erasure-sweep-…@example.test`.
+
+**The race is older than the failure, and [ADR-087](ADR-087-the-channel-carries-incidents.md) is what
+made it fire.** Before it, the failure path rewrote the payload only for an event past the
+twenty-four-hour window above — so a row created seconds ago was never rewritten, and there was
+nothing to clobber. Concluding a policy refusal on the first attempt moved that write to within
+seconds of the row being created, which is exactly when an erasure is likely to be running in the
+same suite. A latent race became a reliable one, by a change that had nothing to do with erasure.
+
+**The fix removes the class rather than narrowing the window.** Both writes are now one statement
+that replaces `text` and mentions nothing else:
+
+```sql
+UPDATE "outbox_event" SET payload = jsonb_set(payload::jsonb, '{text}', to_jsonb($1::text))
+WHERE id = $2::uuid
+```
+
+Whatever `to` is stored at the moment of the write survives — tombstone or not — because the
+statement cannot express an opinion about it.
+
+**Falsified both ways.** Two tests put the erasure's own write *between* the read and the write,
+deterministically rather than by hoping two workers interleave, and assert the tombstone survives on
+**both** exits from `handle`. Restoring the object-literal writes fails both, naming the address
+each time. They are a pair because a fix applied to one exit leaves the other restoring the address.

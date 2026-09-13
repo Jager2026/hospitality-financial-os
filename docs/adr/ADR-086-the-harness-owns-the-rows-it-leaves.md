@@ -1,6 +1,6 @@
 ---
 title: ADR-086 — The harness owns the rows it leaves
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Important
 owner: Founder
@@ -194,3 +194,26 @@ looked exactly like a clean pass.
   answer when a failure smells of stale data.
 - **It does not replace ADR-085's open case.** An abandoned payment in production still stays
   `PENDING` forever; this sweep exists on exactly one machine and reaches nothing a customer touches.
+
+---
+
+## Amendment, 2026-09-13 — concluding an email event has to take its body with it
+
+**This decision left 644 invitation bodies in one development database**, each holding a recipient's
+address and a raw acceptance token, and it did so by being tidy.
+
+The mechanism: concluding an event sets `abandoned_at`, which removes it from the poller's query
+**for good** — and it was the poller, through `EmailOutboxService.handle`, that redacted the body
+under [ADR-075](ADR-075-the-outbox-payload-outlives-what-it-carried.md). So an event this sweep
+concluded could never reach the code that strips it. The row that had been *waiting* to be redacted
+became a row that would *never* be redacted, and nothing said so.
+
+**ADR-075 applies to a conclusion reached in the harness exactly as it does to one reached by the
+poller.** The sweep now redacts the body in the same pass, written as SQL over the stored value
+rather than as an object literal — for the same reason the product's own redaction was rewritten on
+the same day: this statement must not be able to overwrite a `to` that an erasure has already
+tombstoned.
+
+Measured on the database it had filled: **644 unredacted abandoned bodies before, 0 after**, and the
+sweep runs at every suite start so it stays that way. A test asserts the body goes and the recipient
+does not — the second half being the one that would catch a fix written as a payload literal.

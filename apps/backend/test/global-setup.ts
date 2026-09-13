@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { ABANDONED_TEXT } from "../src/email/email-outbox.service";
 import { assertLocalDatabase } from "../prisma/database-locality";
 import { seedCurrencies, seedRbac } from "../prisma/seed";
 
@@ -101,6 +102,26 @@ export async function concludeUndeliverableEmails(
         "so this event could never have been delivered from this environment (ADR-086).",
     },
   });
+
+  // ADR-075 applies to a conclusion reached here exactly as it does to one reached by the poller,
+  // and the first version of this function forgot it. Concluding an event takes it out of the
+  // poller's query for good, so `EmailOutboxService.handle` will never run on it — and it was
+  // `handle` that redacted the body. The result was 611 rows in one development database holding a
+  // live invitation body: the recipient's address and a raw acceptance token, kept permanently by
+  // a cleanup written to make things tidier.
+  //
+  // The body goes; the row, its type, its timestamps and the `EmailDelivery` record beside it all
+  // stay, which is ADR-075's own division. Written as SQL over the stored value rather than as an
+  // object literal for the same reason `redactBody` is: this statement must not be able to
+  // overwrite a `to` that an erasure has already tombstoned.
+  await prisma.$executeRaw`
+    UPDATE "outbox_event"
+    SET payload = jsonb_set(payload::jsonb, '{text}', to_jsonb(${ABANDONED_TEXT}::text))
+    WHERE event_type = 'email.send_requested'
+      AND abandoned_at IS NOT NULL
+      AND published_at IS NULL
+      AND payload::jsonb ->> 'text' IS DISTINCT FROM ${ABANDONED_TEXT}
+  `;
 
   return result.count;
 }
