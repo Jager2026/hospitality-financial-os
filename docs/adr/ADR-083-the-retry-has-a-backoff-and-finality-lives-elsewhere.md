@@ -1,6 +1,6 @@
 ---
 title: ADR-083 — The retry has a backoff, and finality lives elsewhere
-version: 1.2.0
+version: 1.3.0
 status: Accepted
 classification: Important
 owner: Founder
@@ -184,9 +184,20 @@ than a coincidence.
 *"expected behaviour wears the wording of an incident"*, and ADR-085 changes no alert's channel,
 gate or count: an unusable payload alerted once at attempt five and now alerts once at attempt one,
 saying it was abandoned. The volume problem in test is now genuinely gone — such events are
-concluded rather than retried — but by removing the events, not by deciding what the line means. A
-real stuck money event still logs ERROR with the phrase *operational alert* on every attempt, and
-choosing that is still the Founder's.
+concluded rather than retried — but by removing the events, not by deciding what the line means.
+
+**Closed on 2026-09-13 by [ADR-087](ADR-087-the-channel-carries-incidents.md): the channel carries
+incidents, and the classification is made by the CAUSE at the place that knows it.** Option D was
+taken and option B came with it as a consequence — the line that says *operational alert* now fires
+on the poll that sends one, and a still-failing event afterwards reports at WARN. A and C were
+refused: A leaves the phrase meaning two things, and C rate-limits expected behaviour instead of
+removing it from a channel meant for incidents.
+
+**D was re-costed rather than assumed, and that is the part worth carrying forward.** It was called
+"the largest of the four" because it needed a way for a handler to say *this will never succeed* —
+which ADR-085 had since built for an unrelated reason. What remained was one readonly field, one
+new throw site and three call sites. **A deferred option's price is not a constant, and what makes
+it cheaper is usually work done for something else.**
 
 ## What this does not close
 

@@ -155,7 +155,10 @@ describe("PaymentReconciliationService (real database)", () => {
   );
 
   it(
-    "alerts (does not self-heal) when Stripe reports the payment is still not succeeded, and marks reconciliationAlertSentAt",
+    "does NOT alert when Stripe reports the payment simply has not been made — the guest walked " +
+      "away, which is expected behaviour and not an incident (ADR-087). This test previously " +
+      "asserted the opposite, and that assertion is the twenty-alerts-a-shift defect written down " +
+      "as a specification",
     async () => {
       const restaurant = await seedRestaurant();
       const payment = await seedPendingPayment(restaurant.id, PENDING_THRESHOLD_MS + 60_000);
@@ -173,21 +176,29 @@ describe("PaymentReconciliationService (real database)", () => {
         fakeLogger,
       );
 
+      // Cycled until Stripe has actually been asked about THIS payment — otherwise "no alert"
+      // could mean "the row was never reached", which would pass for the wrong reason.
       await reconcileUntil(service, () =>
-        sendAlert.mock.calls.some((c) => (c[0] as string).includes(payment.id)),
+        retrievePaymentIntent.mock.calls.some((c) => c[1] === payment.processorPaymentId),
       );
 
-      const alertsForThisPayment = sendAlert.mock.calls.filter((c) =>
-        (c[0] as string).includes(payment.id),
-      );
-      expect(alertsForThisPayment).toHaveLength(1);
-      expect(alertsForThisPayment[0][0]).toContain("requires_payment_method");
+      expect(
+        retrievePaymentIntent.mock.calls.some((c) => c[1] === payment.processorPaymentId),
+        "Stripe was never asked about this payment, so the assertion below proves nothing",
+      ).toBe(true);
+      expect(
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes(payment.id)),
+        "an abandoned checkout raised an operational alert",
+      ).toHaveLength(0);
       expect(
         captureFromPaymentIntentId.mock.calls.some((c) => c[0] === payment.processorPaymentId),
+        "a payment Stripe has not confirmed was captured anyway",
       ).toBe(false);
 
+      // Still PENDING and still un-alerted: nothing was concluded and nothing was announced.
       const after = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
-      expect(after.reconciliationAlertSentAt).not.toBeNull();
+      expect(after.status).toBe("PENDING");
+      expect(after.reconciliationAlertSentAt).toBeNull();
     },
     RECONCILIATION_SAFE_TIMEOUT_MS,
   );
@@ -200,8 +211,12 @@ describe("PaymentReconciliationService (real database)", () => {
       const captureFromPaymentIntentId = vi.fn().mockResolvedValue(undefined);
       const sendAlert = vi.fn().mockResolvedValue(undefined);
 
-      // Cycle(s): still stuck — alerts once, however many reconcile() calls it takes to reach it.
-      const stillStuck = vi.fn().mockResolvedValue({ id: "doesnt-matter", status: "processing" });
+      // Cycle(s): Stripe cannot be reached — an INCIDENT, so it alerts once, however many
+      // reconcile() calls it takes to reach it. ADR-087 changed the cause this test uses and not
+      // what it is about: it used to drive the once-gate with `processing`, which no longer alerts
+      // at all because Stripe having an answer is not an incident. The gate itself is unchanged and
+      // still worth proving.
+      const stillStuck = vi.fn().mockRejectedValue(new Error("simulated Stripe outage"));
       const service1 = new PaymentReconciliationService(
         prisma,
         fakeStripe(stillStuck),
@@ -597,6 +612,166 @@ describe("PaymentReconciliationService concluding a stuck payment (ADR-085)", ()
         retrievePaymentIntent.mock.calls.some((c) => c[1] === behind),
         "a payment behind a head of unresolvable rows was never reached",
       ).toBe(true);
+    },
+    120_000,
+  );
+});
+
+// ADR-087 — expected behaviour leaves the alert channel, and the condition worth waking for
+// enters it.
+describe("PaymentReconciliationService alert semantics (ADR-087)", () => {
+  const prisma = new PrismaService();
+  const BATCH_SIZE = 100; // mirrors the constant in the service
+
+  beforeAll(async () => {
+    await prisma.$connect();
+  });
+
+  // This block seeds a full batch on purpose; it removes exactly what it created. ADR-086's sweep
+  // would take these too — they are bare PENDING rows — but leaving a hundred of them for the next
+  // run to clean is not the same as not making the mess.
+  afterAll(async () => {
+    const mine = await prisma.payment.findMany({
+      where: { processorPaymentId: { startsWith: "pi_adr087_" } },
+      select: { id: true, idempotencyKey: true },
+    });
+    await prisma.payment.deleteMany({ where: { id: { in: mine.map((p) => p.id) } } });
+    await prisma.idempotencyKey.deleteMany({
+      where: { key: { in: mine.map((p) => p.idempotencyKey) } },
+    });
+    await prisma.$disconnect();
+  });
+
+  async function seedRestaurant87() {
+    const org = await prisma.organization.create({ data: { name: "ADR-087 Test Org" } });
+    return prisma.restaurant.create({
+      data: {
+        organizationId: org.id,
+        name: "ADR-087 Test Restaurant",
+        legalName: "ADR-087 Test Restaurant UAB",
+        companyNumber: `RC87-${randomUUID()}`,
+        vatNumber: `LT87${randomUUID()}`,
+        email: `restaurant-${randomUUID()}@example.com`,
+        phone: "+37060000011",
+        country: "LT",
+        currency: "EUR",
+        defaultCustomerLocale: "en",
+        timezone: "Europe/Vilnius",
+        address: "Test address",
+        stripeAccountId: `acct_fake_${randomUUID()}`,
+      },
+    });
+  }
+
+  async function seedStuck87(restaurantId: string, processorPaymentId: string, createdAt: Date) {
+    const key = `adr087-${randomUUID()}`;
+    await prisma.idempotencyKey.create({
+      data: {
+        key,
+        endpointScope: "/payments",
+        requestFingerprint: "test",
+        status: "COMPLETED",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    return prisma.payment.create({
+      data: {
+        restaurantId,
+        processor: "stripe",
+        processorPaymentId,
+        amount: 1000n,
+        tipAmount: 0n,
+        currency: "EUR",
+        status: "PENDING",
+        paymentMethod: "card",
+        idempotencyKey: key,
+        createdAt,
+      },
+    });
+  }
+
+  function build(
+    retrievePaymentIntent: ReturnType<typeof vi.fn>,
+    sendAlert: ReturnType<typeof vi.fn>,
+  ) {
+    return new PaymentReconciliationService(
+      prisma,
+      { retrievePaymentIntent } as unknown as StripeService,
+      { captureFromPaymentIntentId: vi.fn() } as unknown as WebhooksService,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { sendAlert } as any,
+      fakeLogger,
+    );
+  }
+
+  it(
+    "a CANCELED PaymentIntent is concluded and NOT alerted — the discriminating pair is the " +
+      "resource_missing test above, which concludes identically and DOES alert. Same method, same " +
+      "terminal write, opposite answer, and the only difference is why the payment ended",
+    async () => {
+      const restaurant = await seedRestaurant87();
+      const piId = `pi_adr087_cancelled_${randomUUID()}`;
+      const payment = await seedStuck87(
+        restaurant.id,
+        piId,
+        new Date(Date.now() - PENDING_THRESHOLD_MS - 60_000),
+      );
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      const retrievePaymentIntent = vi.fn(async (_acct: unknown, id: unknown) => ({
+        id: String(id),
+        status: id === piId ? "canceled" : "requires_payment_method",
+      })) as unknown as ReturnType<typeof vi.fn>;
+      const service = build(retrievePaymentIntent, sendAlert);
+
+      for (let i = 0; i < 5; i++) {
+        const row = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+        if (row.status !== "PENDING") break;
+        await service.reconcile();
+      }
+
+      const after = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      expect(after.status, "a canceled PaymentIntent was not concluded").toBe("CANCELED");
+      expect(
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes(payment.id)),
+        "a guest who walked away raised an operational alert — twenty of these is one evening",
+      ).toHaveLength(0);
+      expect(after.reconciliationAlertSentAt).toBeNull();
+    },
+    RECONCILIATION_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "a saturated head alerts ONCE, on the cycle it becomes saturated, and not again while it stays " +
+      "that way — discriminating: a condition re-announced every cycle is one alert every five " +
+      "minutes forever, which is the same decay measured in rows instead of payments",
+    async () => {
+      const restaurant = await seedRestaurant87();
+      // Backdated so these are the oldest stuck rows in the database and the batch really is made
+      // of them. A full batch is the condition: nothing newer is reached at all.
+      const base = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        await seedStuck87(restaurant.id, `pi_adr087_ballast_${randomUUID()}`, new Date(base + i));
+      }
+
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      // Non-terminal for everything: nothing is concluded, so the head stays saturated across both
+      // cycles and the second cycle is a real test of the edge trigger rather than of recovery.
+      const retrievePaymentIntent = vi.fn(async (_acct: unknown, id: unknown) => ({
+        id: String(id),
+        status: "requires_payment_method",
+      })) as unknown as ReturnType<typeof vi.fn>;
+      const service = build(retrievePaymentIntent, sendAlert);
+
+      await service.reconcile();
+      const saturationAlerts = () =>
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes("Head Saturated"));
+      expect(
+        saturationAlerts(),
+        "a full batch — nothing newer is being checked at all — was not reported",
+      ).toHaveLength(1);
+
+      await service.reconcile();
+      expect(saturationAlerts(), "the same standing condition was announced twice").toHaveLength(1);
     },
     120_000,
   );

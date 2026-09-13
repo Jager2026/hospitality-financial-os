@@ -14,6 +14,7 @@ import {
   EMAIL_OUTBOX_EVENT_TYPE,
   type EmailOutboxService,
 } from "../email/email-outbox.service";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import { OutboxPollerService, retryDelayMs } from "./outbox-poller.service";
 
 /** ADR-069. The poller gained a second dispatch target; this file is about the FIRST one. A handler
@@ -1195,5 +1196,165 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
       ).toBeGreaterThan(after.createdAt.getTime());
     },
     120_000,
+  );
+});
+
+// ADR-087 — what the phrase `operational alert` means, decided.
+//
+// **One environment, three causes, three answers.** That is the whole point: nothing in this block
+// changes NODE_ENV, and nothing in the implementation consults it. A rule that silenced the channel
+// outside production would pass a test that set NODE_ENV and would do nothing for the first
+// restaurant, which is the failure this decision exists to avoid.
+describe("OutboxPollerService alert semantics (ADR-087)", () => {
+  const prisma = new PrismaService();
+  const seeded: string[] = [];
+
+  beforeAll(async () => {
+    await prisma.$connect();
+  });
+
+  afterAll(async () => {
+    await prisma.outboxEvent.deleteMany({ where: { id: { in: seeded } } });
+    await prisma.$disconnect();
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** An email handler that fails one specific way, so the CAUSE is the only variable here. */
+  function emailHandlerThrowing(err: unknown): EmailOutboxService {
+    return {
+      handle: async () => {
+        throw err;
+      },
+    } as unknown as EmailOutboxService;
+  }
+
+  function pollerWith(emailOutbox: EmailOutboxService, sendAlert: ReturnType<typeof vi.fn>) {
+    return new OutboxPollerService(
+      prisma,
+      new WalletProjectionService(prisma),
+      emailOutbox,
+      fakeLogger,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { sendAlert } as any,
+    );
+  }
+
+  async function seedEmailEvent() {
+    const row = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "MembershipInvitation",
+        aggregateId: randomUUID(),
+        eventType: EMAIL_OUTBOX_EVENT_TYPE,
+        payload: { to: "nobody@example.invalid", subject: "s", text: "t" },
+      },
+    });
+    seeded.push(row.id);
+    // The same reason the ADR-083 block needs it: `next_attempt_at` defaults to the DATABASE clock,
+    // which keeps running while the test process's `Date` is frozen.
+    vi.setSystemTime(new Date(Date.now() + 1_000));
+    return row;
+  }
+
+  /** Bounded catch-up on THIS event, the discipline the rest of this file already uses. */
+  async function pollUntil(
+    poller: OutboxPollerService,
+    id: string,
+    done: (row: { attempts: number; abandonedAt: Date | null }) => boolean,
+    maxIterations = 20,
+  ): Promise<void> {
+    for (let i = 0; i < maxIterations; i++) {
+      const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id } });
+      if (done(current)) return;
+      await poller.poll();
+      vi.setSystemTime(new Date(Date.now() + retryDelayMs(current.attempts + 1)));
+    }
+  }
+
+  it(
+    "EXPECTED: a policy refusal concludes the event and raises no alert — an implementation that " +
+      "alerts here is the one that fills the channel with the system working correctly",
+    async () => {
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      const poller = pollerWith(
+        emailHandlerThrowing(
+          PermanentRejection.expected("Refusing to send outside production (NODE_ENV=test)."),
+        ),
+        sendAlert,
+      );
+      const event = await seedEmailEvent();
+
+      await pollUntil(poller, event.id, (row) => row.abandonedAt !== null);
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(
+        after.abandonedAt,
+        "an event that can never be sent was left in the queue",
+      ).not.toBeNull();
+      expect(after.abandonedReason).toContain("Refusing to send");
+      expect(
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes(event.id)),
+        "expected behaviour raised an operational alert",
+      ).toHaveLength(0);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "INCIDENT: a rejection that is NOT expected concludes the event AND alerts — the " +
+      "discriminating pair for the test above: same method, same conclusion, opposite answer, and " +
+      "the only difference is why",
+    async () => {
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      const poller = pollerWith(
+        emailHandlerThrowing(new PermanentRejection("the payload refers to no real work")),
+        sendAlert,
+      );
+      const event = await seedEmailEvent();
+
+      await pollUntil(poller, event.id, (row) => row.abandonedAt !== null);
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(after.abandonedAt).not.toBeNull();
+      expect(
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes(event.id)),
+        "an incident was concluded silently, which is ADR-045's invisible failure",
+      ).toHaveLength(1);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
+  );
+
+  it(
+    "PROVIDER FAILURE: a real outage is not concluded and still reaches the channel at the " +
+      "threshold — in the SAME environment as the silent case above, which is what makes the " +
+      "distinction one of cause rather than one of NODE_ENV",
+    async () => {
+      const sendAlert = vi.fn().mockResolvedValue(undefined);
+      const poller = pollerWith(
+        emailHandlerThrowing(new Error("Resend responded 500: Internal Server Error")),
+        sendAlert,
+      );
+      const event = await seedEmailEvent();
+
+      await pollUntil(poller, event.id, (row) => row.attempts >= 5);
+
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(
+        after.abandonedAt,
+        "a provider outage concluded the event — a real invitation would have been dropped",
+      ).toBeNull();
+      expect(after.attempts).toBeGreaterThanOrEqual(5);
+      expect(
+        sendAlert.mock.calls.filter((c) => (c[0] as string).includes(event.id)),
+        "a provider outage was silent",
+      ).toHaveLength(1);
+    },
+    BACKLOG_SAFE_TIMEOUT_MS,
   );
 });

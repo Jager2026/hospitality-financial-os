@@ -254,14 +254,30 @@ export class OutboxPollerService {
       });
 
       if (attempts >= MAX_ATTEMPTS_BEFORE_ALERT) {
-        this.logger.error(
-          { eventId: event.id, eventType: event.eventType, attempts, err },
-          "OutboxEvent has failed repeatedly — operational alert (SYSTEM_ARCHITECTURE.md: Outbox Lag)",
-        );
+        // ADR-087. The line that says *operational alert* now appears on the poll that actually
+        // sends one, and nowhere else.
+        //
+        // It used to fire at ERROR on every attempt past the threshold, by a deliberate decision
+        // ("still fires every time, for anyone tailing logs directly") that was reasonable on its
+        // own and wrong in combination: the phrase names the thing a person is meant to answer,
+        // and it was being emitted thousands of times a run for one event nobody had to answer.
+        // A follow-up is still reported — at WARN, with the attempt count, which is what somebody
+        // tailing logs actually needs — but the wording that means *incident* is spent once.
+        if (attempts === MAX_ATTEMPTS_BEFORE_ALERT) {
+          this.logger.error(
+            { eventId: event.id, eventType: event.eventType, attempts, err },
+            "OutboxEvent has failed repeatedly — operational alert (SYSTEM_ARCHITECTURE.md: Outbox Lag)",
+          );
+        } else {
+          this.logger.warn(
+            { eventId: event.id, eventType: event.eventType, attempts, err },
+            "OutboxEvent is still failing past the alert threshold — already reported, not a new incident",
+          );
+        }
+
         // Fires exactly once per event, on the poll that crosses the threshold — not on every
         // subsequent retry past it, which would page the same incident again every 2 seconds
-        // (POLL_INTERVAL_MS) for as long as the event stays stuck. The log line above still fires
-        // every time, unchanged, for anyone tailing logs directly.
+        // (POLL_INTERVAL_MS) for as long as the event stays stuck.
         if (attempts === MAX_ATTEMPTS_BEFORE_ALERT) {
           // AlertService itself never throws (it catches its own delivery failures) — this
           // try/catch is defense in depth anyway, not redundancy: a throw here would otherwise
@@ -298,17 +314,22 @@ export class OutboxPollerService {
    * and would leave `abandoned_reason` with nothing to be attached to. It stays, unpublished
    * forever, with a terminal timestamp — queryable as "what has this system given up on".
    *
-   * **The alert fires here, once, and this is a change worth naming rather than burying.** Before
-   * this method existed, a malformed event reached `MAX_ATTEMPTS_BEFORE_ALERT` and alerted on the
-   * fifth attempt, about ten seconds after it was written. It now alerts on the first, because
-   * there will not be a fifth. The NUMBER of alerts for such an event is unchanged — one — and the
-   * message says what actually happened instead of "has failed repeatedly". What is unchanged is
-   * everything about the existing threshold: a transient failure still counts to five and still
-   * alerts there, on the same channel, with the same wording.
+   * **The alert fires here once — for an incident, and not for an expected outcome (ADR-087).**
+   * A malformed payload is an incident: `LedgerService` writes `journalEntryId` in the same
+   * transaction that creates the entry it names, so the product cannot produce one, and its
+   * existence means something upstream is wrong. `EmailService` refusing to send outside
+   * production is not: that is this system doing what it was built to do. Both are concluded here
+   * and both are recorded; only the first reaches the channel a person answers.
    *
-   * A silent terminal state would be the worse design by a long way: it is precisely the shape of
-   * ADR-045's invisible restart loop, where a system that has stopped doing something looks, from
-   * outside, exactly like one that is fine.
+   * **The classification is read, never re-derived.** `rejection.isIncident` was decided at the
+   * throw site, which is the only place that knows WHY the row can never succeed. Deciding it here,
+   * from the shape of the failure, is precisely the conflation ADR-087 ends — from here a policy
+   * refusal and a provider outage look identical.
+   *
+   * A silent terminal state for an INCIDENT would be the worse design by a long way: it is exactly
+   * the shape of ADR-045's invisible restart loop, where a system that has stopped doing something
+   * looks, from outside, like one that is fine. A silent terminal state for something the system
+   * decided on is just quiet.
    */
   private async abandon(event: OutboxEvent, rejection: PermanentRejection): Promise<void> {
     const reason = rejection.message.slice(0, 1000);
@@ -323,15 +344,23 @@ export class OutboxPollerService {
 
     // Unconditional and before the alert — ADR-038's rule, the same ordering as main.ts's own
     // unhandled-rejection handler: an alert that exists only when ALERT_WEBHOOK_URL happens to be
-    // set is not an alert, so the log line is the mechanism that is always there.
-    this.logger.error(
-      { eventId: event.id, eventType: event.eventType, reason },
-      "OutboxEvent abandoned — it can never be dispatched (ADR-085)",
-    );
+    // set is not an alert, so the log line is the mechanism that is always there. The LEVEL follows
+    // the cause for the same reason the alert does: an ERROR line emitted by expected behaviour
+    // decays into noise exactly as fast as an alert would.
+    const context = { eventId: event.id, eventType: event.eventType, reason };
+    if (rejection.isIncident) {
+      this.logger.error(context, "OutboxEvent abandoned — it can never be dispatched (ADR-085)");
+    } else {
+      this.logger.info(
+        context,
+        "OutboxEvent concluded — refused by policy, which is the designed outcome (ADR-087)",
+      );
+      return;
+    }
 
-    // Same defence in depth as the threshold alert below-and-above: AlertService catches its own
-    // delivery failures, but a throw escaping here would propagate out of dispatch() into poll()'s
-    // for-loop, which has no per-event guard, and abort the rest of the batch.
+    // Same defence in depth as the threshold alert above: AlertService catches its own delivery
+    // failures, but a throw escaping here would propagate out of dispatch() into poll()'s for-loop,
+    // which has no per-event guard, and abort the rest of the batch.
     try {
       await this.alertService.sendAlert(
         `Outbox Abandoned: OutboxEvent ${event.id} (${event.eventType}) will never be dispatched. ${reason}`,

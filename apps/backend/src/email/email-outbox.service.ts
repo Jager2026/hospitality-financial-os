@@ -1,8 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import type { OutboxEvent, Prisma } from "@prisma/client";
 import { PinoLogger } from "nestjs-pino";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import { PrismaService } from "../prisma/prisma.service";
-import { EmailSendError, EmailService } from "./email.service";
+import { EmailService } from "./email.service";
 
 /**
  * ADR-069 — email as an Outbox consumer: the request half and the dispatch half.
@@ -190,8 +191,20 @@ export class EmailOutboxService {
       // indistinguishable from success. The status and the provider's own words are written here,
       // then the error is rethrown so the poller's existing attempt counter and its alert at five
       // failures still fire — this records what happened, it does not swallow it.
-      const message = err instanceof EmailSendError ? err.message : String(err);
-      const abandoned = Date.now() - event.createdAt.getTime() >= ABANDON_UNDELIVERED_AFTER_MS;
+      const message = err instanceof Error ? err.message : String(err);
+
+      // ADR-087. A permanent rejection is abandonment NOW rather than in twenty-four hours, and the
+      // body has to go with it for exactly ADR-075's reason: there is nothing left to send, and an
+      // invitation body carries a token and an address. Waiting out a window that can only end the
+      // same way would leave both sitting in the payload for a day, for no gain.
+      //
+      // Rejections are the reason this had to be said out loud rather than left implicit: before
+      // ADR-087 the refusal outside production was an ordinary failure, so it aged into the window
+      // like any other and the redaction happened on schedule. Now the poller concludes the event
+      // on the first attempt, and without this clause the redaction would simply never run.
+      const rejected = err instanceof PermanentRejection;
+      const abandoned =
+        rejected || Date.now() - event.createdAt.getTime() >= ABANDON_UNDELIVERED_AFTER_MS;
 
       await this.prisma.$transaction(async (tx) => {
         await tx.emailDelivery.update({
@@ -216,10 +229,22 @@ export class EmailOutboxService {
       });
 
       if (abandoned) {
-        this.logger.error(
-          { eventId: event.id, deliveryId: delivery.id, createdAt: event.createdAt },
-          "Email delivery abandoned after the retry window — body redacted, record kept (ADR-075)",
-        );
+        // The LEVEL follows the cause, not the outcome (ADR-087). Both branches abandon and both
+        // redact; only one of them is something gone wrong. A refusal this system decided on is
+        // reported at `info`, because an ERROR line that fires on expected behaviour is the same
+        // rubber stamp as an alert that does.
+        const context = { eventId: event.id, deliveryId: delivery.id, createdAt: event.createdAt };
+        if (rejected) {
+          this.logger.info(
+            context,
+            "Email send refused by policy — event concluded, body redacted, record kept (ADR-087)",
+          );
+        } else {
+          this.logger.error(
+            context,
+            "Email delivery abandoned after the retry window — body redacted, record kept (ADR-075)",
+          );
+        }
       }
 
       throw err;
