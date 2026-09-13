@@ -53,7 +53,8 @@ function buildEvent(type: string, dataObject: Record<string, unknown>) {
 }
 
 /**
- * ADR-085. A projection handler that fails the way a real one fails: transiently.
+ * ADR-085. A projection handler that fails the way a real one fails — transiently, and only for the
+ * events a test nominates.
  *
  * **Why this had to be introduced, and what it replaced.** Every test in this file that needed "an
  * event that fails on every attempt" used to produce one by writing `journalEntryId:
@@ -63,13 +64,29 @@ function buildEvent(type: string, dataObject: Record<string, unknown>) {
  * about attempt counts, and about the alert at five attempts would have been asserting something
  * that can no longer happen.
  *
- * The replacement fails where a real outage fails — inside the handler, on a well-formed event
- * referring to real work — which is what those tests were always about.
+ * **Why it delegates instead of throwing unconditionally, which is the part that was got wrong
+ * first and is worth keeping written down.** The first version threw for every event. That turns
+ * the poller into something that can never drain ANYTHING — so in a full parallel suite, where
+ * other files are writing legitimate outbox rows the whole time, the head fills with events this
+ * poller refuses to publish and the test's own event, sorting newest, is never reached. Three tests
+ * failed that way and the symptom was `attempts` standing at 0: **the starvation this file now
+ * tests for, reproduced accidentally inside the test harness.** Failing only the nominated
+ * `journalEntryId`s keeps the poller a working poller for everything else.
  */
-function walletProjectionThatFailsTransiently(): WalletProjectionService {
+function walletProjectionFailingFor(
+  prisma: PrismaService,
+  failing: Set<string>,
+): WalletProjectionService {
+  const real = new WalletProjectionService(prisma);
   return {
-    handleJournalEntryEvent: async () => {
-      throw new Error("simulated transient projection failure");
+    handleJournalEntryEvent: async (
+      journalEntryId: string,
+      tx: Parameters<WalletProjectionService["handleJournalEntryEvent"]>[1],
+    ) => {
+      if (failing.has(journalEntryId)) {
+        throw new Error("simulated transient projection failure");
+      }
+      return real.handleJournalEntryEvent(journalEntryId, tx);
     },
   } as unknown as WalletProjectionService;
 }
@@ -476,14 +493,18 @@ describe("OutboxPollerService (real database)", () => {
 // the first describe block's own tests stay unaffected by this one.
 describe("OutboxPollerService alerting (ADR-031/032)", () => {
   const prisma = new PrismaService();
+  /** The `journalEntryId`s this block wants to fail; everything else projects for real. */
+  const failingIds = new Set<string>();
   let walletProjection: WalletProjectionService;
 
   beforeAll(async () => {
     await prisma.$connect();
     // ADR-085. This block drives ONE event's attempts past the alert threshold, which is only
     // possible for an event that keeps being retried — so the failure it needs is a transient one,
-    // produced in the handler rather than by a payload the poller now rejects outright.
-    walletProjection = walletProjectionThatFailsTransiently();
+    // produced in the handler rather than by a payload the poller now rejects outright. Scoped to
+    // this block's own events, so its pollers still drain everything else and its own event is
+    // actually reached.
+    walletProjection = walletProjectionFailingFor(prisma, failingIds);
   });
 
   // ADR-083. Only `Date` is faked, never timers: Prisma's own connection and query timeouts are
@@ -524,12 +545,14 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
   // successful no-op rather than a failure — so the failure genuinely comes from the stubbed
   // handler and from nothing else.
   async function seedFailingEvent() {
+    const journalEntryId = randomUUID();
+    failingIds.add(journalEntryId);
     return prisma.outboxEvent.create({
       data: {
         aggregateType: "JournalEntry",
         aggregateId: randomUUID(),
         eventType: "journal_entry.payment_captured",
-        payload: { journalEntryId: randomUUID() },
+        payload: { journalEntryId },
       },
     });
   }
@@ -750,6 +773,8 @@ describe("OutboxPollerService routing by eventType (ADR-069)", () => {
 // every event type alike (what the constant's old comment claimed existed).
 describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
   const prisma = new PrismaService();
+  /** The `journalEntryId`s this block wants to fail; everything else projects for real. */
+  const failingIds = new Set<string>();
   let poller: OutboxPollerService;
 
   beforeAll(async () => {
@@ -759,7 +784,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
     // first attempt. The failure therefore lives in the handler, not in the payload.
     poller = new OutboxPollerService(
       prisma,
-      walletProjectionThatFailsTransiently(),
+      walletProjectionFailingFor(prisma, failingIds),
       emailOutboxThatMustNotBeCalled(),
       fakeLogger,
       fakeAlertServiceNoop,
@@ -796,6 +821,13 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
     vi.setSystemTime(new Date(Date.now() + 1_000));
   }
 
+  /** A well-formed id this block's handler will refuse — used by the rows built inline below. */
+  function failingId(): string {
+    const id = randomUUID();
+    failingIds.add(id);
+    return id;
+  }
+
   /** Well-formed, and failing deterministically inside the handler on every attempt, so what is
    *  being measured is the schedule rather than the failure.
    *
@@ -803,12 +835,14 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
    *  gave that payload a different meaning: a malformed payload is now REJECTED on the first
    *  attempt, so there would be no second attempt for any of these tests to measure. */
   async function seedTransientlyFailingMoneyEvent(createdAt?: Date) {
+    const journalEntryId = randomUUID();
+    failingIds.add(journalEntryId);
     return prisma.outboxEvent.create({
       data: {
         aggregateType: "JournalEntry",
         aggregateId: randomUUID(),
         eventType: "journal_entry.payment_captured",
-        payload: { journalEntryId: randomUUID() },
+        payload: { journalEntryId },
         ...(createdAt ? { createdAt } : {}),
       },
     });
@@ -836,7 +870,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
           aggregateType: "JournalEntry",
           aggregateId: randomUUID(),
           eventType: "journal_entry.payment_captured",
-          payload: { journalEntryId: randomUUID() },
+          payload: { journalEntryId: failingId() },
           // Five seconds ahead — far beyond any real skew, so the assertion is about the RULE
           // ("never attempted means due") rather than about this machine's clocks.
           nextAttemptAt: new Date(Date.now() + 5_000),
@@ -863,7 +897,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
           aggregateType: "JournalEntry",
           aggregateId: randomUUID(),
           eventType: "journal_entry.payment_captured",
-          payload: { journalEntryId: randomUUID() },
+          payload: { journalEntryId: failingId() },
           attempts: 3,
           nextAttemptAt: new Date(Date.now() + 60_000),
         },
@@ -1101,21 +1135,24 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
       "is the discriminating pair for the test above: the same dispatch throws, the same row " +
       "shape, and the opposite answer, because this one refers to real work",
     async () => {
+      const journalEntryId = randomUUID();
       const transientPoller = new OutboxPollerService(
         prisma,
-        walletProjectionThatFailsTransiently(),
+        walletProjectionFailingFor(prisma, new Set([journalEntryId])),
         emailOutboxThatMustNotBeCalled(),
         fakeLogger,
         fakeAlertServiceNoop,
       );
-      const event = await prisma.outboxEvent.create({
-        data: {
-          aggregateType: "JournalEntry",
-          aggregateId: randomUUID(),
-          eventType: "journal_entry.payment_captured",
-          payload: { journalEntryId: randomUUID() },
-        },
-      });
+      const event = track(
+        await prisma.outboxEvent.create({
+          data: {
+            aggregateType: "JournalEntry",
+            aggregateId: randomUUID(),
+            eventType: "journal_entry.payment_captured",
+            payload: { journalEntryId },
+          },
+        }),
+      );
 
       for (let i = 0; i < 40; i++) {
         const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
