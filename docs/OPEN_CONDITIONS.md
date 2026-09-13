@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.4.0
+version: 1.5.0
 status: Active
 classification: Critical
 owner: Founder
@@ -268,6 +268,90 @@ Three options, costed in `UX_MAP.md` and not decided: extend the existing gate t
 message says *"Registration is not open yet"* — wrong words here), write a sibling gate with its
 own wording, or keep the reliance and accept that publishing one document without the other opens
 the hole. **Whoever publishes the platform terms must read this row on the same day.**
+
+---
+
+## OC-6 — The V2 landing imagery carries third-party marks, and its palette is not the system's
+
+| | |
+|---|---|
+| **Status** | Open. **Gates nothing today**, and that is measured rather than assumed — see below. |
+| **Open since** | 2026-09-13 (when `PlainTabs Landing V2.html`, a Claude Design export, was reviewed) |
+| **What closes it** | **Our own photography.** Not a crop, not a retouch, not a different generation — frames this project shot and owns. |
+| **Owner** | Founder |
+| **What it gates** | Nothing yet. It becomes blocking the moment any of those frames is proposed for the landing, the pitch deck, or an investor presentation. |
+
+### The marks
+
+Two of the frames carry marks that are not ours:
+
+- **"Verifone"**, legible on a payment terminal in close-up. Verifone is a live manufacturer of
+  payment terminals — **a direct competitor on hardware**, which is the worst possible logo to put
+  on the device in our own marketing.
+- **"BRÜKKE"**, invented, on another frame. Nobody's mark, which is a different problem and a
+  smaller one: it is a fictitious business presented as a customer.
+
+### Why this is a written row and not a check, stated because the instinct is to build one
+
+**The marks are inside the pixels.** Measured on the file: **nine** `<img>` elements, **every one
+with `alt=""`**, each `src` a bare UUID rather than a filename. Searching the file for `Verifone`
+returns **zero** — and it would return zero for any competitor's name, any trademark, any legible
+text in any frame.
+
+So no lint rule, no invariant and no CI check this project could write would ever see this. **A
+person looking at the picture is the only detector there is**, which is exactly the class
+`OPEN_CONDITIONS.md` exists for: a condition no code change can signal.
+
+### It gates nothing today, verified rather than asserted
+
+Neither the file nor any of its asset ids appears anywhere in the working tree — checked across the
+repository, not only in `apps/frontend/`. The frames are used in no landing, no deck and no investor
+material. **This row exists so that stays true on purpose rather than by nobody having got round to
+it.**
+
+### The palette — and it is worse than "different numbers"
+
+The file does not carry *a different* palette. It carries **the real one with invented steps mixed
+into it**, and several of the invented steps are one or two hex digits away from a real token:
+
+| in the file | in `tokens.css` | |
+|---|---|---|
+| `#161615`, `#FFE500`, `#EFECE4`, `#ECEBE7`, `#0F0E0C`, `#F4F3F0`, `#726D64` | the same values | **genuine tokens** |
+| `#0E0E0D` | `#0F0E0C` (`--n-950`) | one digit in R, one in B |
+| `#F5F4F0` | `#F4F3F0` (`--n-50`) | one digit in R, one in G |
+| `#5F5D56` | `#5C5852` (`--n-600`) | near |
+| `#FF8A80` | `#FF8A7A` (`--error`) | **four of six digits identical** |
+| `#6FBF87` | `#7BD68F` (`--success`) | near |
+| `#141312`, `#E4E2DD`, `#D8D5CF`, `#FAFAF8`, `#D9D5CB`, `#928D84` | — | no counterpart at all |
+
+**That mixture is the hazard.** A reader spot-checking two or three values would find them correct
+and conclude the file is authoritative. `#726D64` in particular *is* `--n-500`, so the one value
+most likely to be checked is the one that passes.
+
+### What adopting two of them would cost, measured
+
+`--text-muted` is `#726D64` on the guest terminal, and `tokens.css` records its own floor: it clears
+4.5 on `--surface` (`#F4F3F0`) at **4.63**, and on the next step down (`#ECEBE7`) it is **4.31** and
+fails. Two of the invented surfaces sit below that step:
+
+```
+#726D64 on #F5F4F0  = 4.67   passes
+#726D64 on #E4E2DD  = 3.97   FAILS the 4.5 floor
+#726D64 on #D8D5CF  = 3.51   FAILS the 4.5 floor
+```
+
+**The calculator was checked against answers already written down** before it was believed — it
+reproduces `tokens.css`'s own 4.63, 4.31 and 5.14 exactly. So this is not a difference of taste:
+adopting those two surfaces would silently break an accessibility floor that
+`tokens.contrast.spec.ts` asserts, on the one screen a stranger has to read in ten seconds.
+
+### The rule
+
+**There is one source of colour: `apps/frontend/src/styles/tokens.css`.** The ladder was derived in
+[ADR-072](adr/ADR-072-the-portal-is-dark.md) and is asserted by
+`tokens.contrast.spec.ts`. **Numbers from that file are not to be taken** — not into the landing,
+not into a deck, not as "close enough" for a mockup, because a mockup is where a value gets copied
+from.
 
 ---
 
