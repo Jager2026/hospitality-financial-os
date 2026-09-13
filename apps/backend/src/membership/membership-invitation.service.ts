@@ -239,8 +239,23 @@ export class MembershipInvitationService {
       acceptedVersion = dto.acceptedTermsVersion;
     }
 
-    const passwordHash =
-      existing === null && dto.password !== undefined ? await hashPassword(dto.password) : null;
+    // Hashed BEFORE the transaction and no longer conditional on the snapshot.
+    //
+    // `hashPassword` is bcrypt at this project's cost factor — hundreds of milliseconds, and
+    // deliberately so. It touches no database, and it used to sit between reading `existing` and
+    // writing the Membership, which is what made a race that needs two requests to overlap
+    // overlap reliably.
+    //
+    // **Moving it is not the fix and must never be mistaken for one.** On its own it would narrow
+    // the window from hundreds of milliseconds to microseconds, which makes the defect rare
+    // instead of absent — and a rare concurrency defect is harder to diagnose than a reliable one.
+    // The fix is the claim below; this line only stops the hash from being part of the interval.
+    //
+    // It now hashes whenever a password was supplied, rather than only when the snapshot says the
+    // User is new. The cost is one wasted hash in the rare case where somebody sends a password
+    // for an account that already exists; the gain is that no decision taken here depends on a
+    // read that the transaction is about to redo.
+    const passwordHash = dto.password !== undefined ? await hashPassword(dto.password) : null;
 
     /**
      * One transaction for all four writes, and the User moved inside it.
@@ -261,8 +276,45 @@ export class MembershipInvitationService {
      * itself.
      */
     return await this.prisma.$transaction(async (tx) => {
+      // THE SERIALISATION POINT, and it is first on purpose.
+      //
+      // A conditional write on the invitation row: whoever flips `accepted_at` from NULL wins,
+      // and `count` says which caller that was. The second concurrent accept gets 0 and stops
+      // here, before it can create anything. The invitation row — one per acceptance, by
+      // definition — is the only thing in this flow that both callers must touch, which is what
+      // makes it the right row to serialise on.
+      //
+      // The idiom is `RestaurantService.createOnboardingLink`'s, not a new one: a write whose
+      // `where` carries the condition, so the database decides rather than a snapshot.
+      //
+      // Reproduced before this existed: two concurrent accepts of one invitation produced **two
+      // Memberships, five runs out of five** — by ADR-006 that is two Wallets for one person at
+      // one employer, with their tips split between them.
+      const claimed = await tx.membershipInvitation.updateMany({
+        where: { id: invitation.id, acceptedAt: null },
+        data: { acceptedAt: new Date() },
+      });
+      if (claimed.count !== 1) {
+        throw new AppException("INVITATION_INVALID", "Invalid or expired invitation.", 400);
+      }
+
+      // Read INSIDE the transaction, after the claim. `existing` above is a snapshot taken before
+      // a network call to HIBP and before bcrypt, and it decides only what this request had to
+      // supply — never what gets written. Whether a User exists is asked again here, where the
+      // answer is the one the write will act on.
+      const current = await tx.user.findUnique({ where: { email: dto.email } });
+      if (current === null && passwordHash === null) {
+        // Unreachable through the request shapes this method accepts — a User is never deleted,
+        // only tombstoned by `redact-user.ts` — and stated as an error rather than left to write a
+        // row with no credential if that ever stops being true.
+        throw new AppException(
+          "VALIDATION_ERROR",
+          "Password is required to accept this invitation.",
+          400,
+        );
+      }
       const user =
-        existing ??
+        current ??
         (await createUserAccount(tx, {
           email: dto.email,
           displayName: dto.displayName as string,
@@ -292,10 +344,8 @@ export class MembershipInvitationService {
         },
       });
 
-      await tx.membershipInvitation.update({
-        where: { id: invitation.id },
-        data: { acceptedAt: new Date() },
-      });
+      // `accepted_at` was already stamped by the claim above — an unconditional update here was
+      // the write that let two callers both finish.
 
       return membership;
     });

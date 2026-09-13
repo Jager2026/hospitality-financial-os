@@ -88,7 +88,22 @@ describe("MembershipInvitationService (real database)", () => {
     inviterUserId = inviter.id;
   });
 
+  // The concurrency test below seeds a User and, on a broken implementation, more than one
+  // Membership for it. Scoped to this fixture's own email prefix rather than to one run's ids, so a
+  // run killed before reaching here leaves rows the next run clears — and so a run that FAILS,
+  // which is the interesting one, does not leave duplicate ACTIVE memberships behind. That matters
+  // more than tidiness here: those rows are exactly what the new unique index refuses, so leaving
+  // them would make the next migration fail on this developer's machine.
+  //
+  // The Users themselves are left alone: other tables reference them, and deleting a User is
+  // redact-user.ts's job, not a spec's.
   afterAll(async () => {
+    const mine = await prisma.user.findMany({
+      where: { email: { startsWith: "race-" } },
+      select: { id: true },
+    });
+    await prisma.membership.deleteMany({ where: { userId: { in: mine.map((u) => u.id) } } });
+
     await prisma.$disconnect();
   });
 
@@ -402,4 +417,58 @@ describe("MembershipInvitationService (real database)", () => {
 
     expect(membership.organizationId).toBe(organizationId);
   });
+
+  // ── The race, reproduced before it was fixed ────────────────────────────────────────────────
+  //
+  // `accept()` read the User outside its transaction, hashed a password (bcrypt, deliberately
+  // slow), and only then opened the transaction that creates the Membership and stamps the
+  // invitation. The invitation lookup filters `acceptedAt: null`, so the READ was guarded; the
+  // write was `update({ where: { id } })` with no condition, so nothing serialised two accepts.
+  //
+  // **Which half is reproduced, and why it has to be this one.** With a brand-new email both
+  // callers reach `createUserAccount`, and `User.email @unique` aborts the second transaction —
+  // the path is protected by a constraint that happens to exist. When the User already exists
+  // both callers skip creation, both create a Membership, and **nothing at all stands in the
+  // way**. That asymmetry is the argument for the constraint added here: the code is safe exactly
+  // where a constraint is, and nowhere else.
+  it(
+    "two concurrent accepts of one invitation create exactly ONE Membership and accept the " +
+      "invitation once — reproduced against the real database before it was fixed, and failing " +
+      "then with two rows",
+    async () => {
+      const email = `race-${randomUUID()}@example.com`;
+      // The User pre-exists, which is an ordinary case: somebody already on the platform invited
+      // to a second Organization. It is also the half no constraint covered.
+      const user = await prisma.user.create({
+        data: {
+          email,
+          displayName: "Already A User",
+          passwordHash: "not-a-real-hash",
+          locale: "en",
+        },
+      });
+      const token = await inviteAndReadToken({ email, roleId }, organizationId, inviterUserId);
+
+      const results = await Promise.allSettled([
+        service.accept({ email, token }),
+        service.accept({ email, token }),
+      ]);
+
+      const memberships = await prisma.membership.count({
+        where: { userId: user.id, organizationId },
+      });
+      expect(
+        memberships,
+        "one invitation produced two Memberships — by ADR-006 that is two Wallets for one person " +
+          "at one employer, and their tips split between them",
+      ).toBe(1);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      expect(
+        fulfilled,
+        "both accepts succeeded, so the invitation was accepted twice",
+      ).toHaveLength(1);
+    },
+    30_000,
+  );
 });
