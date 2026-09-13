@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PinoLogger } from "nestjs-pino";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 
 /**
  * ADR-069 — the Resend transport, and nothing else.
@@ -51,7 +52,12 @@ export interface SendEmailResult {
 }
 
 /** Thrown when Resend did not accept the message. Carries the provider's own text so the delivery
- * record can store why, rather than only that. */
+ * record can store why, rather than only that.
+ *
+ * **It means Resend was asked and said no — nothing else.** It used to carry the refusal below as
+ * well, which is how "this system is working as designed" and "the email provider is down" became
+ * the same error, indistinguishable at every catch site downstream (ADR-087). The docstring above
+ * had said the narrower thing all along; the code did not. */
 export class EmailSendError extends Error {
   constructor(message: string) {
     super(message);
@@ -101,7 +107,22 @@ export class EmailService {
     // The consequence, stated rather than left to be discovered: the wire itself is exercised in
     // production and nowhere else. That is exactly what the single live verification is for.
     if (this.nodeEnv !== "production") {
-      throw new EmailSendError(
+      // ADR-087. A POLICY REFUSAL, and it is a different kind of thing from a failed send, so it
+      // no longer throws the provider's error type.
+      //
+      // `PermanentRejection.expected` says two things at once, and both are true here and only
+      // here: the send can never succeed (nothing will hand this message to Resend from this
+      // environment, on this or any later attempt), and **nobody should be woken for it** — this is
+      // the system doing exactly what it was built to do. Before this, the refusal counted as a
+      // dispatch failure, was retried to five attempts, and then announced itself in the channel a
+      // person is meant to answer.
+      //
+      // **The environment is the CAUSE, not the classification.** What is recorded is "we refused
+      // by policy", which would be just as expected if the policy were a per-restaurant suppression
+      // in production — and a real Resend outage in this same environment still raises
+      // `EmailSendError` and still reaches the channel. Nothing here is silent because it is not
+      // production; it is silent because refusing was the plan.
+      throw PermanentRejection.expected(
         `Refusing to send outside production (NODE_ENV=${this.nodeEnv}). ` +
           `The message was recorded but never handed to Resend.`,
       );

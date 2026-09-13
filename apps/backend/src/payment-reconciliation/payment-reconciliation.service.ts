@@ -25,6 +25,9 @@ const BATCH_SIZE = 100; // same bounded-query discipline as OutboxPollerService'
  * cycle, the same "exactly once" reasoning as that mechanism's own threshold check. */
 @Injectable()
 export class PaymentReconciliationService {
+  /** Edge-trigger state for `reportHeadPressure` — see its docstring for why it lives in memory. */
+  private headSaturated = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
@@ -57,6 +60,8 @@ export class PaymentReconciliationService {
       take: BATCH_SIZE,
       include: { restaurant: true },
     });
+
+    await this.reportHeadPressure(stuck.length);
 
     for (const payment of stuck) {
       // One Payment's own failure (Stripe error, a bug in self-healing, an alert delivery
@@ -106,11 +111,11 @@ export class PaymentReconciliationService {
       // loudly as before; what it no longer does is ask the same unanswerable question every five
       // minutes forever from the head of the batch.
       if (err instanceof PermanentRejection) {
-        await this.conclude(
-          payment,
-          "FAILED",
-          `Payment ${payment.id} has been PENDING for over 15 minutes and Stripe does not have it. ${err.message}`,
-        );
+        // An INCIDENT, and it is the discriminating pair for the canceled branch below: the same
+        // method, the same conclusion, the opposite answer about the channel. A PaymentIntent id
+        // Stripe has never heard of means our records and the processor's have diverged, which
+        // nothing in the ordinary course produces and nobody can act on without being told.
+        await this.conclude(payment, "FAILED", err.message, { incident: true });
         return;
       }
 
@@ -143,44 +148,114 @@ export class PaymentReconciliationService {
     // intent at Stripe first, which is an outward action against a customer's payment and a
     // product decision, not an engineering one — recorded as the open case in ADR-085.
     if (intentStatus === "canceled") {
-      await this.conclude(
-        payment,
-        "CANCELED",
-        `Payment ${payment.id} has been PENDING for over 15 minutes and Stripe reports it was canceled.`,
-      );
+      // ADR-087. Concluded, recorded, and NOT alerted. A cancelled payment is the ordinary end of
+      // a card payment that did not happen — a guest who walked away, a card that was refused. It
+      // used to raise one operational alert per payment, which is how a channel meant for
+      // incidents fills with the second most common outcome in retail payments.
+      await this.conclude(payment, "CANCELED", "Stripe reports the PaymentIntent was canceled");
       return;
     }
 
-    await this.alert(
-      payment,
-      `Payment ${payment.id} has been PENDING for over 15 minutes. Stripe reports status="${intentStatus}".`,
+    // ADR-087. Every remaining status — requires_payment_method, requires_confirmation,
+    // requires_action, processing, requires_capture — means **Stripe has an answer and the answer
+    // is that this payment has not succeeded yet**. That is not an incident. It used to raise one
+    // alert per Payment, gated once by `reconciliationAlertSentAt`; at two hundred covers an
+    // evening and a tenth of them abandoned, that is twenty alerts a shift about nothing anyone
+    // can act on, and a real Outbox Lag alert arriving in that channel a week later is not read.
+    //
+    // **What is deliberately NOT hidden by removing it:** the row stays PENDING, and this worker
+    // goes on asking Stripe about it every five minutes forever. The alert was, by accident, the
+    // only thing that made that visible. `reportHeadPressure` replaces it with a statement about
+    // the CONDITION — the batch being full means newer stuck payments are not reached at all —
+    // which is the thing actually worth waking someone for, and which fires once rather than once
+    // per row. Ending the per-row work itself needs ADR-085's cancellation window, which is open
+    // with its own trigger.
+    //
+    // `processing` is the one status here that could earn its own rule later: a card intent does
+    // not sit in it for long. What "too long" means cannot be established at zero traffic, and
+    // inventing the number is the same mistake the cancellation window is deliberately not making.
+    this.logger.info(
+      { paymentId: payment.id, intentStatus },
+      "Stripe has an answer and it is not success — the payment has not been made, which is not an incident (ADR-087)",
     );
+  }
+
+  /**
+   * ADR-087. One alert about the QUEUE, on the cycle it becomes saturated — not one alert per row.
+   *
+   * A full batch means this worker selected `BATCH_SIZE` payments that have all been `PENDING`
+   * past the threshold, oldest first, and therefore **cannot see anything newer**. That is the
+   * failure ADR-084 named, arriving in production instead of in a developer's database, and it is
+   * an operational condition in the strict sense: the mechanism is no longer doing its job, and a
+   * person has to decide something.
+   *
+   * It is the replacement for a signal this change removed on purpose. Per-row alerts about
+   * abandoned payments were noise, but they were also — accidentally — the only evidence that the
+   * head was filling. Removing a signal without replacing it is how ADR-045's invisible restart
+   * loop happens: a system that has stopped working looks, from outside, exactly like one that is.
+   *
+   * **Edge-triggered, and the state is in memory, which has one consequence worth stating:** a
+   * restart re-announces a condition that is still true. That is the right behaviour rather than a
+   * defect — a new process has reported nothing yet, and a standing problem that nobody has been
+   * told about is worse than one mentioned twice.
+   */
+  private async reportHeadPressure(batchSize: number): Promise<void> {
+    const saturated = batchSize >= BATCH_SIZE;
+
+    if (saturated && !this.headSaturated) {
+      this.headSaturated = true;
+      this.logger.error(
+        { batchSize },
+        "Reconciliation head saturated — operational alert (SYSTEM_ARCHITECTURE.md: Outbox Lag)",
+      );
+      try {
+        await this.alertService.sendAlert(
+          `Reconciliation Head Saturated: ${batchSize} payments have been PENDING past the ` +
+            `threshold, which fills the whole batch. Payments newer than these are not being ` +
+            `checked against Stripe at all until they resolve.`,
+          { batchSize },
+        );
+      } catch (err) {
+        this.logger.warn({ err }, "AlertService.sendAlert() itself threw");
+      }
+      return;
+    }
+
+    if (!saturated && this.headSaturated) {
+      this.headSaturated = false;
+      this.logger.info({ batchSize }, "Reconciliation head is no longer saturated");
+    }
   }
 
   /**
    * ADR-085. Writes the terminal status this Payment has actually reached, so it leaves the queue.
    *
-   * **The alert count is deliberately unchanged by this method.** `alert()` below is already
-   * gated on `reconciliationAlertSentAt` and fires at most once per Payment; every case routed
-   * here alerted exactly once before this change too, on the same channel, and still does. What
-   * changes is the wording (it now says what was concluded rather than describing a status) and
-   * the fact that the row stops being re-asked about afterwards.
+   * **Whether it also alerts is decided by the CALLER, because only the caller knows why**
+   * (ADR-087). Concluding is one action with two meanings: a cancelled payment is the ordinary end
+   * of a payment that did not happen, and a Payment whose intent Stripe has never heard of is a
+   * divergence between our records and the processor's that somebody has to look at. Reading that
+   * difference here — from a status enum — would be guessing from the outcome, which is exactly
+   * what put expected behaviour in an incident channel in the first place.
    *
-   * The alert is sent BEFORE the status is written, and the order is not arbitrary: `alert()`
-   * reads `payment.reconciliationAlertSentAt` from the row this method was handed, so writing the
-   * status first would change nothing about it — but a future edit that filtered alerting by
-   * status would silently stop announcing the very transitions most worth announcing. Sending
-   * first makes that impossible to introduce by accident.
+   * When it does alert, the alert is sent BEFORE the status is written, and the order is not
+   * arbitrary: `alert()` reads `payment.reconciliationAlertSentAt` from the row this method was
+   * handed, so writing the status first would change nothing about it — but a future edit that
+   * filtered alerting by status would silently stop announcing the very transitions most worth
+   * announcing. Sending first makes that impossible to introduce by accident.
    */
   private async conclude(
     payment: Payment,
     status: "CANCELED" | "FAILED",
-    message: string,
+    reason: string,
+    options: { incident?: boolean } = {},
   ): Promise<void> {
-    await this.alert(payment, message);
+    if (options.incident) {
+      await this.alert(payment, `Payment ${payment.id} was concluded as ${status}. ${reason}`);
+    }
+
     await this.prisma.payment.update({ where: { id: payment.id }, data: { status } });
-    this.logger.warn(
-      { paymentId: payment.id, status },
+    this.logger.info(
+      { paymentId: payment.id, status, reason },
       "Reconciliation concluded a stuck PENDING Payment — it can never succeed (ADR-085)",
     );
   }

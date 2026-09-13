@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import { EMAIL_FROM, EmailSendError, EmailService } from "./email.service";
 
 /**
@@ -156,6 +157,71 @@ describe("EmailService — the Resend transport (ADR-069)", () => {
       // The discriminating half: nothing reached the wire. An implementation that logged a warning
       // and sent anyway would satisfy nothing above and fail here.
       expect(called).toBe(false);
+    },
+  );
+
+  // ── ADR-087: which KIND of failure this was, which is the whole question ─────────────────────
+  //
+  // The two tests below are one discriminating pair. Both describe a send that did not happen;
+  // they differ only in WHY, and the answer about the alert channel differs with them. An
+  // implementation that threw the same error type for both — which is what this code did until
+  // ADR-087 — passes each test's first assertion and fails its second.
+
+  it(
+    "classifies the refusal as an EXPECTED rejection: concluded, recorded, and not an incident — " +
+      "this is the system doing what it was built to do, and nobody is woken for it",
+    async () => {
+      vi.stubGlobal("fetch", (async () =>
+        jsonResponse(200, { id: "msg_1" })) as unknown as typeof fetch);
+      const logger = {
+        setContext: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      };
+      const service = new EmailService(
+        {
+          getOrThrow: (key: string) => (key === "NODE_ENV" ? "test" : API_KEY),
+        } as unknown as ConstructorParameters<typeof EmailService>[0],
+        logger as unknown as ConstructorParameters<typeof EmailService>[1],
+      );
+
+      const err = await service
+        .send({ to: "a@b.invalid", subject: "s", text: "t", idempotencyKey: "k" })
+        .then(() => null)
+        .catch((e: unknown) => e);
+
+      expect(err, "the refusal is a rejection: it can never succeed from here").toBeInstanceOf(
+        PermanentRejection,
+      );
+      expect(
+        (err as PermanentRejection).isIncident,
+        "a policy refusal was classified as an incident — this is the line that fills an alert channel with expected behaviour",
+      ).toBe(false);
+      expect(
+        err,
+        "the refusal still wore the provider's error type, which is what made it indistinguishable from an outage",
+      ).not.toBeInstanceOf(EmailSendError);
+    },
+  );
+
+  it(
+    "a provider rejection is NOT a PermanentRejection — Resend saying no today says nothing about " +
+      "tomorrow, so it stays transient and keeps reaching the alert channel at the threshold",
+    async () => {
+      const { service } = serviceWithFetch((async () =>
+        jsonResponse(500, { message: "Internal Server Error" })) as unknown as typeof fetch);
+
+      const err = await service
+        .send({ to: "a@b.invalid", subject: "s", text: "t", idempotencyKey: "k" })
+        .then(() => null)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(EmailSendError);
+      expect(
+        err,
+        "a provider failure was classified as permanent, which would conclude the event and drop a real send",
+      ).not.toBeInstanceOf(PermanentRejection);
     },
   );
 });
