@@ -1015,6 +1015,11 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
 
   const BATCH_SIZE = 50; // mirrors the constant in the service; the ballast below must exceed it
 
+  /** Every ballast id this block's own poller has alerted about — see the assertion that reads it.
+   *  It belongs to THIS poller's stub, so nothing another worker's poller does can reach it. */
+  const alertsForBallast: string[] = [];
+  const ballastIds = new Set<string>();
+
   beforeAll(async () => {
     await prisma.$connect();
     poller = new OutboxPollerService(
@@ -1022,7 +1027,15 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
       new WalletProjectionService(prisma),
       emailOutboxThatMustNotBeCalled(),
       fakeLogger,
-      fakeAlertServiceNoop,
+      {
+        sendAlert: (_message: string, context?: { eventId?: string }) => {
+          if (context?.eventId && ballastIds.has(context.eventId)) {
+            alertsForBallast.push(context.eventId);
+          }
+          return Promise.resolve();
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
     );
   });
 
@@ -1068,6 +1081,7 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
       for (let i = 0; i < BATCH_SIZE + 10; i++) {
         const row = track(await seedUnprocessable(new Date(base + i * 1000)));
         ballast.push(row.id);
+        ballastIds.add(row.id);
       }
       // One event immediately behind the ballast and ahead of everything else. Without a terminal
       // state this is the row that waits: it is the 61st oldest, and the batch is 50.
@@ -1111,21 +1125,30 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
         where: { id: { in: ballast } },
         data: { nextAttemptAt: new Date(Date.now() - 60_000) },
       });
-      const before = await prisma.outboxEvent.aggregate({
-        where: { id: { in: ballast } },
-        _sum: { attempts: true },
-      });
+
+      // THE HALF THAT REJECTS THE OLD IMPLEMENTATION, and it is asserted through the ALERT rather
+      // than through `attempts`, for a reason worth keeping.
+      //
+      // The first version compared the sum of `attempts` across the ballast before and after this
+      // poll. That is a statement about the ROWS, and the rows are shared: `critical-flow.e2e.spec.ts`
+      // imports this same service and runs `poll()` in a loop, in another worker, against the same
+      // database. Its batch is selected before this test abandons anything and its per-row
+      // increments land afterwards — the missing claim step this class's own comment describes,
+      // arriving as a flaky assertion. Measured: the sum moved by 11 on one full-gate run and by
+      // nothing on three others.
+      //
+      // `sendAlert` belongs to THIS poller's own stub, so nothing another worker does can reach it.
+      // A rejectable row that were selected again would be abandoned again, and `abandon()` alerts
+      // unconditionally — so the absence of an alert naming a ballast id is a statement about this
+      // poller's own batch, which is the thing under test.
+      alertsForBallast.length = 0;
 
       await poller.poll();
 
-      const after = await prisma.outboxEvent.aggregate({
-        where: { id: { in: ballast } },
-        _sum: { attempts: true },
-      });
       expect(
-        after._sum.attempts,
+        alertsForBallast,
         "rows the queue had already given up on were selected again, which is the defect itself",
-      ).toBe(before._sum.attempts);
+      ).toEqual([]);
     },
     120_000,
   );

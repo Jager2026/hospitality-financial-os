@@ -28,6 +28,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { PrismaClient, type Prisma } from "@prisma/client";
+import { assertLocalDatabase } from "../prisma/database-locality";
 import { hashPassword } from "../src/auth/password.util";
 import { deriveOnboardingStatus } from "../src/restaurant/onboarding-status.util";
 
@@ -40,33 +41,16 @@ const DEMO_PASSWORD = "LocalDemo!2026-not-a-real-secret";
 
 const EUR = "EUR";
 
+// ADR-086 moved the check itself into `prisma/database-locality.ts`, unchanged, because the test
+// harness needed the identical question answered before its own pre-run sweep — and a rule about
+// where it is safe to write to (or delete from) a database is the last thing that should exist in
+// two hand-written versions.
 async function assertLocal(prisma: PrismaClient): Promise<void> {
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("NODE_ENV is production. This script seeds demo data and will not run here.");
-  }
-
-  const [row] = await prisma.$queryRaw<{ host: string | null; db: string }[]>`
-    SELECT inet_server_addr()::text AS host, current_database() AS db
-  `;
-  const host = row?.host ?? null;
-
-  // null means a unix socket — the server is on this machine. Otherwise it must be loopback or a
-  // private range: 10/8, 172.16/12, 192.168/16, or IPv6 loopback.
-  const local =
-    host === null ||
-    host.startsWith("127.") ||
-    host === "::1" ||
-    host.startsWith("10.") ||
-    host.startsWith("192.168.") ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host);
-
-  if (!local) {
-    throw new Error(
-      `REFUSING: the database at ${host} (${row?.db}) is not on this machine or a private ` +
-        `network. This script only ever seeds a local development database.`,
-    );
-  }
-  console.log(`  database: ${row?.db} at ${host ?? "unix socket"} — local, proceeding\n`);
+  const { host, database } = await assertLocalDatabase(
+    prisma,
+    "this script seeds demo data and only ever seeds a local development database",
+  );
+  console.log(`  database: ${database} at ${host ?? "unix socket"} — local, proceeding\n`);
 }
 
 interface Restaurants {
