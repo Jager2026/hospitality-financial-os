@@ -13,7 +13,28 @@ import { ShiftService } from "./shift.service";
  * calendar-derived model does — fails the first assertion; one that back-dates the LedgerLine to
  * the shift's business date fails the second.
  */
-describe("ShiftService (real database)", () => {
+/**
+ * The timeout is on the suite because the cost is a property of the FILE, not of one test.
+ *
+ * Every case here builds a Nest testing module and talks to a real Postgres, and all six ran on
+ * vitest's 5000 ms default from the day they were written. **That default had always been inside
+ * the noise**: measured standalone on 2026-09-13, the whole file takes 2971 ms — comfortable — and
+ * the same file timed out at 5000 ms inside the full parallel suite on a run where nothing about
+ * shifts had changed. Passing alone and failing in the suite is the contamination direction
+ * (`CLAUDE.md`, the inversion diagnostic): the variable is contention for the shared database, not
+ * a window inside the test.
+ *
+ * This is the third file to need this and the rule that covers it is already written down, which
+ * is the part worth noting: a test that starts a process or talks to a real database gets its
+ * budget at the moment it is written, not when a run first goes red. Raising the GLOBAL default
+ * was refused for the same reason it was refused twice before — it would silently cover tests that
+ * do far less, which is exactly where the same defect would next hide.
+ *
+ * 30 seconds rather than a number tuned to today's measurement: the budget is there to stop a busy
+ * machine failing a correct test, and a value close to the observed cost would need re-tuning every
+ * time the suite grows.
+ */
+describe("ShiftService (real database)", { timeout: 30_000 }, () => {
   const prisma = new PrismaService();
   let shifts: ShiftService;
   let ledger: LedgerService;
