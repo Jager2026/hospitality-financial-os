@@ -3,6 +3,9 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sweepStuckTestPayments } from "./global-setup";
 
+/** This file owns every row created under this name — see the teardown. */
+const FIXTURE_RESTAURANT = "Harness Sweep Test Restaurant";
+
 /**
  * ADR-086. The pre-run sweep deletes rows, so it gets the same scrutiny as anything else that does.
  *
@@ -22,7 +25,7 @@ describe("the harness sweep (ADR-086)", () => {
     const restaurant = await prisma.restaurant.create({
       data: {
         organizationId: org.id,
-        name: "Harness Sweep Test Restaurant",
+        name: FIXTURE_RESTAURANT,
         legalName: "Harness Sweep Test Restaurant UAB",
         companyNumber: `HS-${randomUUID()}`,
         vatNumber: `LTHS${randomUUID()}`,
@@ -39,7 +42,47 @@ describe("the harness sweep (ADR-086)", () => {
     restaurantId = restaurant.id;
   });
 
+  // The one thing this spec MUST clean up itself, and the reason is the sweep working correctly.
+  //
+  // Its second test seeds a PENDING payment with a JournalEntry behind it precisely so the sweep
+  // refuses to take it — which means the next run's sweep will refuse it too, and the run after
+  // that. Left alone it would add exactly one un-sweepable row per run: the accumulation ADR-086
+  // was written to end, reintroduced by ADR-086's own test. Caught by reading the line the sweep
+  // prints ("kept 1 with a Ledger entry ..."), not by a failure.
+  //
+  // So the division is: the harness owns every row it can recognise as litter, and the one row it
+  // is right to refuse belongs to whoever deliberately made it un-refusable.
+  //
+  // Scoped to this fixture's own restaurant NAME rather than to this run's id, deliberately: a run
+  // that was killed before reaching here left rows nothing else can ever remove, and matching the
+  // name lets the next run clear them. It is not a global matcher — the name belongs to this file
+  // and nothing else creates it.
   afterAll(async () => {
+    const mine = await prisma.payment.findMany({
+      where: { restaurant: { name: FIXTURE_RESTAURANT } },
+      select: { id: true, idempotencyKey: true, transaction: { select: { id: true } } },
+    });
+    const transactionIds = mine
+      .map((p) => p.transaction?.id)
+      .filter((id): id is string => id !== undefined);
+    const entries = await prisma.journalEntry.findMany({
+      where: { transactionId: { in: transactionIds } },
+      select: { id: true },
+    });
+
+    // Innermost first, the foreign keys decide the order: LedgerLine -> JournalEntry ->
+    // Transaction -> Payment -> IdempotencyKey. Removing every line of an entry leaves it balanced
+    // at zero, so the deferred `ledger_line_balanced` constraint has nothing to object to.
+    await prisma.$transaction([
+      prisma.ledgerLine.deleteMany({ where: { journalEntryId: { in: entries.map((e) => e.id) } } }),
+      prisma.journalEntry.deleteMany({ where: { id: { in: entries.map((e) => e.id) } } }),
+      prisma.transaction.deleteMany({ where: { id: { in: transactionIds } } }),
+      prisma.payment.deleteMany({ where: { id: { in: mine.map((p) => p.id) } } }),
+      prisma.idempotencyKey.deleteMany({
+        where: { key: { in: mine.map((p) => p.idempotencyKey) } },
+      }),
+    ]);
+
     await prisma.$disconnect();
   });
 
