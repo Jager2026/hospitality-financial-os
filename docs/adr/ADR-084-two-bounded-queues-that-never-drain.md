@@ -1,6 +1,6 @@
 ---
 title: ADR-084 — Two bounded queues that never drain
-version: 1.2.0
+version: 1.3.0
 status: Superseded
 classification: Important
 owner: Founder
@@ -160,11 +160,14 @@ six months from now:
 - **The cleanup** answers *"this developer's database is over the bound today."* It is a fact about
   one machine at one moment, and it will be true again.
 - **Option B** would answer *"how does the PRODUCT deal with a queue head that never moves."* That
-  question is open, and it is the one that matters — a production queue has the same head, and no
-  amount of local tidying reaches it.
+  was the question that mattered — a production queue has the same head, and no amount of local
+  tidying reaches it. **It was answered on 2026-09-13 by [ADR-085](ADR-085-a-queue-with-only-one-exit.md),
+  which took option A rather than B:** a handler can now declare that a row can never succeed, and
+  the queue records that conclusion instead of scheduling another attempt.
 
-A reader finding the cleanup in the git history and reading it as a decision would close a question
-that nobody has answered. It is recorded here so that reading is not available.
+A reader finding the cleanup in the git history and reading it as a decision would still be reading
+it wrong — the decision is ADR-085's and it is a different one. This is recorded here so that
+neither reading is available.
 
 ## Not decided
 

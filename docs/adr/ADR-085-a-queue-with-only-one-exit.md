@@ -1,6 +1,6 @@
 ---
 title: ADR-085 — A queue with only one exit
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -185,6 +185,15 @@ complete.
 **Recommendation, for when it is decided:** cancel at Stripe with `cancellation_reason: "abandoned"`
 after a window measured against real payment latency, then conclude as `CANCELED` through the same
 `conclude()` path this change introduces. The mechanism is already here; only the policy is missing.
+
+**Open, with a trigger: the first venue carrying real traffic.** Founder decision, 2026-09-13, and
+the reasoning is the part worth keeping. The window is a number about how long after a payment
+begins it can still legitimately complete, and **that number cannot be measured at zero traffic** —
+there is nothing to measure. Guessing it is not a smaller version of measuring it: a window guessed
+short cancels the payment of a guest who stepped outside for their phone, which is a real customer
+harmed by an invented constant. So this waits for data rather than for someone to feel ready, and
+until then the accumulation is a known cost, bounded by `PaymentReconciliationService`'s own batch
+of 100 and by ADR-086's harness sweep on the development side.
 
 ### Established as fact, because "non-terminal" was doing too much work in the sentence above
 
