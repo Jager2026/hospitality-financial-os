@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.22.0
+version: 2.23.0
 status: Active
 classification: Internal
 owner: Founder
@@ -308,7 +308,7 @@ Chargeback
 
 ---
 
-**Rules (ADR-089) — this one closes a REPRODUCED defect, not an invariant:** `processor_dispute_id` is **UNIQUE**. One `charge.dispute.created` delivered twice under two different event ids produced **two Chargeback rows and two CHARGEBACK journal entries** — the same dispute debited twice. Nothing caught it: the event-id claim sees two different ids, the refund path's cumulative guard has no counterpart here, the balance trigger checks that each entry balances and knows nothing about whether another describes the same dispute, and `PaymentReconciliationService` selects `status = PENDING` while a disputed payment is `SUCCEEDED` — so it never looks. After the index the second delivery **fails** rather than duplicating, which is better and not the whole answer; teaching the handler to recognise a dispute it already holds is webhook-deduplication semantics and has its own change.
+**Rules (ADR-089) — this one closes a REPRODUCED defect, not an invariant:** `processor_dispute_id` is **UNIQUE**. One `charge.dispute.created` delivered twice under two different event ids produced **two Chargeback rows and two CHARGEBACK journal entries** — the same dispute debited twice. Nothing caught it: the event-id claim sees two different ids, the refund path's cumulative guard has no counterpart here, the balance trigger checks that each entry balances and knows nothing about whether another describes the same dispute, and `PaymentReconciliationService` selects `status = PENDING` while a disputed payment is `SUCCEEDED` — so it never looks. **ADR-090 completed it the same day:** the handler now recognises a dispute it already holds — a conditional insert with `ON CONFLICT ("processor_dispute_id") DO NOTHING`, where the **row count** decides whether the Ledger entry is written, so a second delivery is acknowledged with 200 and writes nothing. Not an upsert: a blind upsert returns a row whether it inserted or updated, and the entry would go out twice.
 
 ---
 

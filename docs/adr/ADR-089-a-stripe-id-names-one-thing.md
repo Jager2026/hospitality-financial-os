@@ -1,6 +1,6 @@
 ---
 title: ADR-089 — A Stripe id names one thing, and two of the three were fine
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -114,6 +114,13 @@ instead of duplicating. That is better — loud beats silent — and it is not t
 dispute it already holds, the way the refund handler recognises a refund it has already reversed.
 **That is a hole in dedup semantics, found by this measurement, and it has its own change** — one
 risk per pull request.
+
+**Closed the same day by [ADR-090](ADR-090-the-dispute-handler-converges.md)**, and its first
+measurement settled the severity this one could only bound: `claimEvent` and the handler are **two
+transactions**, and `handleEvent` **deletes the claim** when dispatch throws. So the defect was the
+loop rather than a silent loss — nothing was lost and no money was wrong, and the cost was an
+endpoint answering 5xx to one event for up to three days, which is Stripe’s documented retry
+window.
 
 **The read-modify-write class**, still. ADR-088 said two fixes and a constraint are not a mechanism;
 three more constraints do not make one either. What closes, table by table, is the consequence.
