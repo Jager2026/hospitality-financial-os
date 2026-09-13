@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { PinoLogger } from "nestjs-pino";
 import Stripe from "stripe";
 import { AlertService } from "../common/alerting/alert.service";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import type { Env } from "../config/env.validation";
 
 export interface CreateConnectAccountParams {
@@ -34,6 +35,27 @@ export interface CreatedPaymentIntent {
   clientSecret: string;
   amount: number;
   currency: string;
+}
+
+/**
+ * ADR-085. True only for Stripe's "this object does not exist" answer.
+ *
+ * Matched on `code`, not on the HTTP status and not on the message: a 404 from Stripe can also
+ * mean a wrong API version path, and a message is prose that changes between library versions.
+ * `resource_missing` is part of Stripe's documented error-code vocabulary and is the one thing
+ * here that is safe to build a terminal decision on.
+ *
+ * Written against the shape rather than `instanceof Stripe.errors.StripeError` so that a fake
+ * client in a test — which cannot produce a real Stripe error instance — is classified by the same
+ * rule the real one is. The alternative was a guard no test could exercise.
+ */
+function isStripeResourceMissing(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "resource_missing"
+  );
 }
 
 export interface RetrievedPaymentIntent {
@@ -215,12 +237,30 @@ export class StripeService implements OnModuleInit {
     stripeAccountId: string,
     paymentIntentId: string,
   ): Promise<RetrievedPaymentIntent> {
-    const intent = await this.stripe.paymentIntents.retrieve(
-      paymentIntentId,
-      {},
-      { stripeAccount: stripeAccountId },
-    );
-    return { id: intent.id, status: intent.status };
+    try {
+      const intent = await this.stripe.paymentIntents.retrieve(
+        paymentIntentId,
+        {},
+        { stripeAccount: stripeAccountId },
+      );
+      return { id: intent.id, status: intent.status };
+    } catch (err) {
+      // ADR-085. Translating Stripe's vocabulary into ours, here rather than at the call site,
+      // because this class is the only place that should know what a Stripe error looks like.
+      //
+      // `resource_missing` on a retrieve means this PaymentIntent does not exist on this connected
+      // account, and asking again will not bring it into being: a PaymentIntent id is assigned by
+      // Stripe at creation and never becomes valid later. Everything else Stripe can raise — rate
+      // limits, connection errors, a temporarily revoked key, Stripe itself being down — is
+      // transient and is rethrown untouched, because misreading a transient failure as permanent
+      // is how a caller would conclude a Payment that is in fact fine.
+      if (isStripeResourceMissing(err)) {
+        throw new PermanentRejection(
+          `Stripe PaymentIntent ${paymentIntentId} does not exist on connected account ${stripeAccountId}`,
+        );
+      }
+      throw err;
+    }
   }
 
   /** ADR-004 / API_Contract.md, Incoming Webhooks: "Verifies the Stripe signature before any

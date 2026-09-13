@@ -3,6 +3,7 @@ import { Interval } from "@nestjs/schedule";
 import type { Payment, Restaurant } from "@prisma/client";
 import { PinoLogger } from "nestjs-pino";
 import { AlertService } from "../common/alerting/alert.service";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import { PrismaService } from "../prisma/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { WebhooksService } from "../webhooks/webhooks.service";
@@ -40,6 +41,13 @@ export class PaymentReconciliationService {
     // checked against Stripe on every cycle regardless of alert history, so a payment that
     // resolves on Stripe's side AFTER already being alerted about still gets self-healed on the
     // very next cycle. Only the alert-SENDING step (below) is gated by that marker.
+    // ADR-085. This query needed no new clause, and that is the whole point of the change below:
+    // `Payment.status` has had CANCELED, FAILED and DECLINED in its enum since the schema was
+    // written, and nothing in this codebase has ever written any of them. A Payment could leave
+    // PENDING in exactly one way — by succeeding — so every payment that did not succeed stayed in
+    // this batch of 100 forever, oldest-first, and a genuinely stuck one behind them was never
+    // reached. The terminal states were designed in from the start; they were simply never wired
+    // up.
     const stuck = await this.prisma.payment.findMany({
       where: {
         status: "PENDING",
@@ -91,6 +99,21 @@ export class PaymentReconciliationService {
       );
       intentStatus = intent.status;
     } catch (err) {
+      // ADR-085. StripeService raises PermanentRejection for one thing only: this PaymentIntent
+      // does not exist on this connected account. That is not "Stripe could not be reached" — it
+      // is an answer, and the answer will not change. A Payment row pointing at an id Stripe has
+      // never heard of is a divergence between our records and the processor's, so it alerts as
+      // loudly as before; what it no longer does is ask the same unanswerable question every five
+      // minutes forever from the head of the batch.
+      if (err instanceof PermanentRejection) {
+        await this.conclude(
+          payment,
+          "FAILED",
+          `Payment ${payment.id} has been PENDING for over 15 minutes and Stripe does not have it. ${err.message}`,
+        );
+        return;
+      }
+
       await this.alert(
         payment,
         `Payment ${payment.id} has been PENDING for over 15 minutes and Stripe could not be reached to verify it. ${err instanceof Error ? err.message : String(err)}`,
@@ -107,9 +130,58 @@ export class PaymentReconciliationService {
       return;
     }
 
+    // ADR-085. `canceled` is one of exactly two terminal PaymentIntent statuses (the other is
+    // `succeeded`, handled above): Stripe's own documentation says cancellation invalidates the
+    // intent for future payment attempts and cannot be undone. So this Payment is finished, and
+    // recording that is not "giving up" — it is copying a conclusion Stripe has already reached.
+    //
+    // Every other status — requires_payment_method, requires_confirmation, requires_action,
+    // processing, requires_capture — is NON-terminal, and this deliberately does nothing new with
+    // them. An intent sitting at requires_payment_method could still be paid, and marking our row
+    // CANCELED while the intent is live at Stripe would let a later success webhook capture money
+    // against a Payment we had already written off. Concluding those safely means cancelling the
+    // intent at Stripe first, which is an outward action against a customer's payment and a
+    // product decision, not an engineering one — recorded as the open case in ADR-085.
+    if (intentStatus === "canceled") {
+      await this.conclude(
+        payment,
+        "CANCELED",
+        `Payment ${payment.id} has been PENDING for over 15 minutes and Stripe reports it was canceled.`,
+      );
+      return;
+    }
+
     await this.alert(
       payment,
       `Payment ${payment.id} has been PENDING for over 15 minutes. Stripe reports status="${intentStatus}".`,
+    );
+  }
+
+  /**
+   * ADR-085. Writes the terminal status this Payment has actually reached, so it leaves the queue.
+   *
+   * **The alert count is deliberately unchanged by this method.** `alert()` below is already
+   * gated on `reconciliationAlertSentAt` and fires at most once per Payment; every case routed
+   * here alerted exactly once before this change too, on the same channel, and still does. What
+   * changes is the wording (it now says what was concluded rather than describing a status) and
+   * the fact that the row stops being re-asked about afterwards.
+   *
+   * The alert is sent BEFORE the status is written, and the order is not arbitrary: `alert()`
+   * reads `payment.reconciliationAlertSentAt` from the row this method was handed, so writing the
+   * status first would change nothing about it — but a future edit that filtered alerting by
+   * status would silently stop announcing the very transitions most worth announcing. Sending
+   * first makes that impossible to introduce by accident.
+   */
+  private async conclude(
+    payment: Payment,
+    status: "CANCELED" | "FAILED",
+    message: string,
+  ): Promise<void> {
+    await this.alert(payment, message);
+    await this.prisma.payment.update({ where: { id: payment.id }, data: { status } });
+    this.logger.warn(
+      { paymentId: payment.id, status },
+      "Reconciliation concluded a stuck PENDING Payment — it can never succeed (ADR-085)",
     );
   }
 

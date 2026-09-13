@@ -3,6 +3,7 @@ import type { OutboxEvent } from "@prisma/client";
 import { Interval } from "@nestjs/schedule";
 import { PinoLogger } from "nestjs-pino";
 import { AlertService } from "../common/alerting/alert.service";
+import { PermanentRejection } from "../common/errors/permanent-rejection";
 import {
   ABANDON_UNDELIVERED_AFTER_MS,
   EMAIL_OUTBOX_EVENT_TYPE,
@@ -40,6 +41,17 @@ const MAX_ATTEMPTS_BEFORE_ALERT = 5;
  * chosen against recovery latency, which is the thing a person actually waits for.
  */
 const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
+
+/**
+ * ADR-085. What a `journalEntryId` has to look like before this poller will take it to the
+ * database.
+ *
+ * Deliberately a shape check and not a lookup: an id that is well-formed but matches no
+ * JournalEntry is a successful no-op (`WalletProjectionService.handleJournalEntryEvent` finds no
+ * lines and does nothing), which is a normal outcome for an event whose entry was never
+ * membership-scoped. Only an id that could never identify a row at all is a rejection.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * How long an event waits after failing `attempts` times: 2s, 4s, 8s … capped at five minutes.
@@ -122,10 +134,21 @@ export class OutboxPollerService {
     // A journal-entry event is a money projection: abandoning one silently would leave a Wallet
     // permanently wrong, and nothing about this change has established that giving up on money is
     // ever right. Those keep exactly today behaviour — retried forever, alerted at five.
+    //
+    // ADR-085 does NOT weaken that. What it added is a different thing wearing a similar name: a
+    // money event can now be concluded when its payload refers to no JournalEntry at all, which is
+    // not giving up on money because there is no money behind it. The age rule below still applies
+    // to email and to nothing else.
     const abandonedBefore = new Date(Date.now() - ABANDON_UNDELIVERED_AFTER_MS);
     const unpublished = await this.prisma.outboxEvent.findMany({
       where: {
         publishedAt: null,
+        // ADR-085. The second exit. Without this clause the batch of 50 is oldest-first over rows
+        // that include ones nothing can ever publish, so a slot taken by an unprocessable event is
+        // taken forever — and a fresh event sorts behind every one of them. The clause is what
+        // makes "concluded" mean the row is actually gone from the queue rather than merely
+        // marked.
+        abandonedAt: null,
         // ADR-083. A row that failed recently is not due yet. Events that have never failed carry
         // `next_attempt_at = created_at`, so a healthy queue is selected exactly as it was before
         // the column existed — the backoff is invisible until something goes wrong, which is the
@@ -179,8 +202,27 @@ export class OutboxPollerService {
       // row, unrelated to Wallet, proving the write lands in the same transaction as the Ledger
       // write) — a real, permanent row this poller has to coexist with, not edit or delete.
       const payload = event.payload as { journalEntryId?: unknown };
-      if (typeof payload.journalEntryId !== "string" || payload.journalEntryId.length === 0) {
-        throw new Error(`OutboxEvent ${event.id} has no valid journalEntryId in its payload`);
+      if (
+        typeof payload.journalEntryId !== "string" ||
+        !UUID_PATTERN.test(payload.journalEntryId)
+      ) {
+        // ADR-085: a REJECTION, not a failure. Retrying cannot put a journalEntryId into a payload
+        // that does not have one, and there is no Wallet behind this row to leave wrong — it
+        // refers to no JournalEntry at all. That second half is what makes it safe to conclude,
+        // and it is the half that does NOT hold for a real projection that happens to be failing.
+        //
+        // **The shape is checked here, not left to Postgres, and that is a widening of this guard
+        // rather than a restatement of it.** It used to accept any non-empty string, so a payload
+        // carrying `"not-a-valid-uuid"` passed validation and failed one layer down, inside the
+        // dispatch transaction, as a cast error from the database. Same outcome, different place —
+        // and the difference matters now, because a failure raised by the driver is indistinguishable
+        // from a connection problem, while a failure raised here is a statement about the payload.
+        // The existing reason for validating at all (Prisma treats `journalEntryId: undefined` as
+        // "omit this filter" and would recompute every Membership in the database) applies to a
+        // malformed id for exactly the same reason it applies to a missing one.
+        throw new PermanentRejection(
+          `OutboxEvent ${event.id} has no valid journalEntryId in its payload`,
+        );
       }
       const journalEntryId = payload.journalEntryId;
 
@@ -189,6 +231,16 @@ export class OutboxPollerService {
         await tx.outboxEvent.update({ where: { id: event.id }, data: { publishedAt: new Date() } });
       });
     } catch (err) {
+      // ADR-085. The classification, and the order matters: transient is the DEFAULT. A network
+      // timeout, a database deadlock, a provider outage and a bug in our own projection code all
+      // land in the branch below and keep exactly the behaviour they had before this change —
+      // counted, backed off, alerted at five, retried forever. Only an error a handler raised
+      // deliberately, having seen that the input refers to no real work, takes the new path.
+      if (err instanceof PermanentRejection) {
+        await this.abandon(event, err);
+        return;
+      }
+
       const attempts = event.attempts + 1;
       // ADR-083. The increment and the delay are written together: an attempt that counted but did
       // not push the next one out would be counted twice within the same second, and the attempt
@@ -235,6 +287,58 @@ export class OutboxPollerService {
           "OutboxEvent dispatch failed, will retry on next poll",
         );
       }
+    }
+  }
+
+  /**
+   * ADR-085. Records that this event will never be dispatched, and why, so it leaves the queue.
+   *
+   * **Not a delete.** The row is the only surviving evidence that something wrote an event this
+   * system could not use; deleting it would make the defect that produced it unfindable afterwards
+   * and would leave `abandoned_reason` with nothing to be attached to. It stays, unpublished
+   * forever, with a terminal timestamp — queryable as "what has this system given up on".
+   *
+   * **The alert fires here, once, and this is a change worth naming rather than burying.** Before
+   * this method existed, a malformed event reached `MAX_ATTEMPTS_BEFORE_ALERT` and alerted on the
+   * fifth attempt, about ten seconds after it was written. It now alerts on the first, because
+   * there will not be a fifth. The NUMBER of alerts for such an event is unchanged — one — and the
+   * message says what actually happened instead of "has failed repeatedly". What is unchanged is
+   * everything about the existing threshold: a transient failure still counts to five and still
+   * alerts there, on the same channel, with the same wording.
+   *
+   * A silent terminal state would be the worse design by a long way: it is precisely the shape of
+   * ADR-045's invisible restart loop, where a system that has stopped doing something looks, from
+   * outside, exactly like one that is fine.
+   */
+  private async abandon(event: OutboxEvent, rejection: PermanentRejection): Promise<void> {
+    const reason = rejection.message.slice(0, 1000);
+
+    await this.prisma.outboxEvent.update({
+      where: { id: event.id },
+      // `attempts` still increments: it counts how many times this event was tried, and it was
+      // tried. Leaving it at zero would make an abandoned row indistinguishable from one that has
+      // never been looked at, which is the question that column exists to answer.
+      data: { attempts: { increment: 1 }, abandonedAt: new Date(), abandonedReason: reason },
+    });
+
+    // Unconditional and before the alert — ADR-038's rule, the same ordering as main.ts's own
+    // unhandled-rejection handler: an alert that exists only when ALERT_WEBHOOK_URL happens to be
+    // set is not an alert, so the log line is the mechanism that is always there.
+    this.logger.error(
+      { eventId: event.id, eventType: event.eventType, reason },
+      "OutboxEvent abandoned — it can never be dispatched (ADR-085)",
+    );
+
+    // Same defence in depth as the threshold alert below-and-above: AlertService catches its own
+    // delivery failures, but a throw escaping here would propagate out of dispatch() into poll()'s
+    // for-loop, which has no per-event guard, and abort the rest of the batch.
+    try {
+      await this.alertService.sendAlert(
+        `Outbox Abandoned: OutboxEvent ${event.id} (${event.eventType}) will never be dispatched. ${reason}`,
+        { eventId: event.id },
+      );
+    } catch (alertErr) {
+      this.logger.warn({ eventId: event.id, alertErr }, "AlertService.sendAlert() itself threw");
     }
   }
 }

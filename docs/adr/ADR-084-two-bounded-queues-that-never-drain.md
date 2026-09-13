@@ -1,7 +1,7 @@
 ---
 title: ADR-084 — Two bounded queues that never drain
-version: 1.1.0
-status: Proposed
+version: 1.2.0
+status: Superseded
 classification: Important
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,7 +9,12 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-084 — Two bounded queues that never drain
 
-**Status:** Proposed (Sprint 16), 2026-09-12. **Options, none chosen** — the dev database cannot be
+**Status:** Superseded by [ADR-085](ADR-085-a-queue-with-only-one-exit.md), which takes **option
+A** below and records what was established before choosing it — including that the growth rate this
+document could not measure is not a rate at all. The analysis here stands; the "none chosen" is no
+longer true and the options are kept as the reasoning ADR-085 decided against.
+
+**Status when written:** Proposed (Sprint 16), 2026-09-12. **Options, none chosen** — the dev database cannot be
 truncated before a run the way the e2e database can (ADR-082): demo venues live there and the
 Founder looks at them.
 
