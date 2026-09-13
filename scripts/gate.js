@@ -51,9 +51,20 @@ if (!process.env.NEXT_PUBLIC_API_URL) {
 
 /**
  * Every `run:` step of `.github/workflows/ci.yml`, in order, plus the browser suite from
- * `.github/workflows/e2e.yml`. The names are the workflow's step names, character for character:
- * a step that fails here should be searchable in the Actions log, and if the two lists are ever
- * compared mechanically (ADR-077 records the options), the name is the key that comparison uses.
+ * `.github/workflows/e2e.yml`. The names are the workflow's step names, character for character,
+ * so that a step failing here is searchable in the Actions log.
+ *
+ * **This list and `ci.yml`'s are two copies and nothing makes them agree. That was costed and
+ * left that way on purpose (ADR-077, Rejected):** nothing but a human typing `pnpm run gate` ever
+ * invokes this file, so a step missing here still runs in CI and shows up as a red check on the
+ * next push. The failure is loud, bounded and self-correcting, which is not what this project
+ * builds invariants for.
+ *
+ * If that ever changes — if the gate is called by CI, by a git hook, or by a deploy script — its
+ * completeness becomes load-bearing and ADR-077 should be reopened. **And the comparison would key
+ * on `run`, not on `name`:** an earlier version of this comment said the opposite, and a
+ * name-keyed comparison passes a renamed step straight through while missing a step whose command
+ * changed under an unchanged name — which is the case that alters what CI actually executes.
  *
  * `ci.yml`'s "Compose Stripe and Resend CI placeholders" step is deliberately absent: it invents
  * random credentials for a runner that has no `.env`, writing them to `$GITHUB_ENV`. Locally that
