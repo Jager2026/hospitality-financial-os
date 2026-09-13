@@ -235,10 +235,16 @@ export async function sweepStuckTestPayments(
  * (`IMPLEMENTATION_PLAN.md`, Deferred).
  */
 async function reportAccumulatedRows(prisma: PrismaClient): Promise<void> {
-  const [payments, outbox, unpublished] = await Promise.all([
+  const [payments, outbox, queued, abandoned] = await Promise.all([
     prisma.payment.count(),
     prisma.outboxEvent.count(),
-    prisma.outboxEvent.count({ where: { publishedAt: null } }),
+    // ADR-085/086. `published_at IS NULL` stopped being the right question the moment the queue
+    // gained a second exit: an abandoned event is unpublished forever BY DESIGN and occupies no
+    // batch slot, so counting it here would make this line shout about pressure that does not
+    // exist — and a warning that is always on is the rubber-stamp decay this instrument was
+    // written to avoid. What starves the poller is what it can still select.
+    prisma.outboxEvent.count({ where: { publishedAt: null, abandonedAt: null } }),
+    prisma.outboxEvent.count({ where: { abandonedAt: { not: null } } }),
   ]);
 
   // The unpublished count is called out against BATCH_SIZE specifically, because that is the one
@@ -246,16 +252,22 @@ async function reportAccumulatedRows(prisma: PrismaClient): Promise<void> {
   // per poll, oldest first, so once older debris fills a batch, the poller specs' own fresh events
   // never enter one and the specs fail for a reason that has nothing to do with the code.
   //
-  // The suite leaves permanently-unpublished events behind every run — deliberately malformed rows
-  // from the tests that assert the retry path, which by construction can never publish. How many
-  // varies: 0 after a reset, then 45, 10 and 61 across observed runs, because some events do get
-  // published and the debris depends on ordering. **No per-run rate is claimed here; only that it
-  // accumulates and that 50 is where it starts to bite** — a failure was seen at 61.
+  // The suite used to leave permanently-unpublished events behind every run — deliberately
+  // malformed rows from the tests that assert the retry path, which by construction can never
+  // publish. How many varied: 0 after a reset, then 45, 10 and 61 across observed runs, because
+  // some events do get published and the debris depends on ordering. **No per-run rate was claimed;
+  // only that it accumulated and that 50 is where it starts to bite** — a failure was seen at 61.
+  //
+  // ADR-085 ended that class: such a row is now concluded on its first attempt and leaves the
+  // queue. ADR-086 ended the other one, the undeliverable email events, at the start of each run.
+  // The number below therefore ought to stay small, and if it does not, it is reporting something
+  // new rather than the debris it was written for.
   const POLLER_BATCH_SIZE = 50;
-  const starving = unpublished >= POLLER_BATCH_SIZE;
+  const starving = queued >= POLLER_BATCH_SIZE;
 
   console.log(
-    `[db] accumulated rows — payments: ${payments}, outbox: ${outbox} (${unpublished} unpublished)` +
+    `[db] accumulated rows — payments: ${payments}, outbox: ${outbox} ` +
+      `(${queued} still queued, ${abandoned} concluded)` +
       (starving
         ? ` — WARNING: unpublished >= the poller's batch size of ${POLLER_BATCH_SIZE}, so outbox ` +
           `specs will starve. Run: pnpm run db:reset`
