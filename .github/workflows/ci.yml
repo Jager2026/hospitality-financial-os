@@ -149,6 +149,14 @@ jobs:
           node-version-file: ".nvmrc"
           cache: "pnpm"
 
+      # ADDING A `run:` STEP BELOW? Add it to `scripts/gate.js`'s STEPS as well.
+      #
+      # That file is the local copy of this list — `pnpm run gate` is how a change is checked
+      # before it is pushed — and nothing compares the two. ADR-077 costed four mechanisms for
+      # keeping them together and rejected all of them, on the grounds that the gate is advisory:
+      # a step missing from it still runs here, so forgetting costs one red check rather than a
+      # defect getting through. This comment is the whole mitigation, and it is a prompt rather
+      # than a guarantee.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

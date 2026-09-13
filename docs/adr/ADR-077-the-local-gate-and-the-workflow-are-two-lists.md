@@ -1,7 +1,7 @@
 ---
 title: ADR-077 — The local gate and the workflow are two lists, and nothing makes them agree
-version: 1.2.0
-status: Proposed
+version: 1.3.0
+status: Rejected
 classification: Critical
 owner: Founder
 technical_owner: AI Technical Co-Founder
@@ -9,9 +9,18 @@ technical_owner: AI Technical Co-Founder
 
 # ADR-077 — The local gate and the workflow are two lists, and nothing makes them agree
 
-**Status:** Proposed (Sprint 15), 2026-09-06. **Options only — no decision.** The gate itself is
-built (`pnpm run gate`); what is open is whether its step list is kept honest by a mechanism or by
-remembering, and this document exists so the answer is chosen rather than defaulted into.
+**Status: REJECTED, 2026-09-13.** No mechanism is built, and the reasoning is in *Re-costed on
+2026-09-13* at the end — including the argument for closing that does **not** work, because it was
+the tempting one. In short: the options really did get cheaper, and it did not matter, because the
+defect they guard against **cannot let anything through**. The gate is advisory — nothing but a
+human typing `pnpm run gate` ever invokes it — so a step missing from it produces a red CI check on
+the next push, one round trip later. The analysis below stands as written and is worth reading
+before reopening.
+
+**Status when written:** Proposed (Sprint 15), 2026-09-06. **Options only — no decision.** The gate
+itself is built (`pnpm run gate`); what is open is whether its step list is kept honest by a
+mechanism or by remembering, and this document exists so the answer is chosen rather than defaulted
+into.
 
 ---
 
@@ -240,3 +249,113 @@ two implementations of the same rule can agree on every input and still be hande
 time the gate and CI disagree about whether a conditional check applies.** That has now happened
 once, harmlessly, and it is the cheapest moment to look, because the disagreement is visible in two
 logs side by side.
+
+---
+
+## Re-costed on 2026-09-13, and Rejected
+
+Re-opened for costing under ADR-087's rule — *a deferred option's price is not a constant, and what
+makes it cheaper is usually work done for something else*. The options did get cheaper. **The
+decision still went the other way, because the one thing this document never costed was the
+problem.**
+
+### What the month made cheaper, counted rather than asserted
+
+| piece an option needed | state on 2026-09-13 |
+|---|---|
+| read a list out of a workflow file | **built and proven** — `e2ePathPrefixes()`, **12 lines**, reading `PATHS` out of `e2e.yml`, in use since #177 |
+| get at the gate's own step list | **built** — `gate.js` exports `STEPS` and five other seams |
+| a harness that tests gate tooling against a known-bad input | **built** — `gate-porcelain.spec.ts` constructs a real git repository per case |
+| the pattern of deriving a list from the system of record instead of copying it | **built** — ADR-082's `information_schema` sweep |
+
+So **Option 1** lost roughly half its price: what remains is a `ci.yml` parser of the same shape as
+the twelve-line one already running, plus the skip list, plus a test. **Option 2's** "read the
+workflow" half is no longer a proposal, it is a function with a week of service. **Option 3** is
+unchanged — it is a workflow restructure, and the 2026-09-04 decision that put the dependency audit
+last still depends on per-step reporting. **Option 4** is unchanged.
+
+### The lists agree today, checked with a parser rather than by eye
+
+Stated because a decision not to build a comparison should at least know what the comparison would
+have said. `ci.yml` has **twelve** `run:` steps; one — "Compose Stripe and Resend CI
+placeholders" — is the documented exception, and the remaining eleven match `gate.js`'s `STEPS`
+one for one, in order, with the browser suite from `e2e.yml` as the twelfth. No drift, seven days
+in.
+
+### What was never costed, and it decides this
+
+**The defect cannot let anything through.** Verified rather than assumed:
+
+- `pnpm run gate` appears **once** in the repository, as a `package.json` script. It is not called
+  by `ci.yml`, not by `e2e.yml`, and there are **no git hooks at all** — no `.husky`, nothing
+  installed in `.git/hooks`.
+- So CI never consults the gate. Every `run:` step in `ci.yml` executes on the runner whether or not
+  `gate.js` has heard of it.
+
+Which makes the whole failure mode this document was written about:
+
+> the gate reports green, CI reports red on the new step, the developer sees it within one round
+> trip — **2m40s**, measured on this week's own runs — and the fix is the one thing they were
+> already going to do.
+
+It is **loud, bounded, and self-correcting.** That is categorically different from every invariant
+this project has built, each of which guards a failure that announces nothing: a permission matrix
+silently granting the wrong rights, two copies of the rules answering the same question differently,
+a document version standing still, a cross-Organization leak. **Those are checks because nothing
+else would ever say. This one has CI saying it, every time, by construction.**
+
+A mechanism here would buy minutes, and it would cost a parser we wrote — which `CLAUDE.md` records
+errs in its own favour and quietly — plus a skip list, which this repository has watched rot twice.
+**Spending a silent-failure-prone guard to prevent a loud, cheap failure is a trade in the wrong
+direction.**
+
+### The argument for closing that does NOT work, stated because it was the tempting one
+
+*"Two weeks and no step was added, so the hazard is not real."* Measured, it is **seven** days —
+`gate.js` landed 2026-09-06 — and the historical rate makes that silence unremarkable:
+
+```
+step-additions to ci.yml, excluding the Sprint-0 scaffold:  6 over 33 days
+                                            -> one per 5.5 days
+P(zero additions in 7 days at that rate)    = 28%
+```
+
+**Twenty-eight percent is noise, not evidence.** This is ADR-083's own lesson arriving from the
+other side: there, thirteen runs were shown to prove nothing about a defect's absence; here, a week
+of quiet proves nothing about a hazard's absence. The hazard is live and will fire, probably within
+days. It is being rejected **on its consequence, not on its likelihood**, and those are different
+arguments that reach the same place only by accident.
+
+### One thing was done instead, and it is not a mechanism
+
+The person who adds a step to `ci.yml` is the only person positioned to keep the two lists together,
+and at the moment they are editing they cannot see the other list. So `ci.yml` now names it, at the
+top of its step list, and says what happens if they forget. That is Option 4 — a habit — moved from
+a PR checklist nobody reads to the file being edited. **It is a prompt, not a guarantee, and calling
+it anything else would be the false confidence this document was written to avoid.**
+
+### A claim inside `gate.js` was wrong, and is corrected
+
+Its `STEPS` docstring said: *"if the two lists are ever compared mechanically (ADR-077 records the
+options), **the name is the key that comparison uses**."* That is the implementation the Founder's
+own falsification rules out — **a name-keyed comparison passes a renamed step straight through**,
+and it would also miss a step whose name held still while its `run:` changed, which is the case that
+actually alters what CI executes. The key would have to be the command. Corrected in place so that
+whoever reopens this does not inherit the wrong design from the file they are about to change.
+
+### What would reopen it
+
+The old trigger — *the next step added to `ci.yml`* — is kept as a **prompt to re-read this
+section**, not as a reason to build. What would actually overturn the decision is the premise
+failing:
+
+1. **The gate stops being advisory.** If `pnpm run gate` is ever called by CI, by a git hook, or by
+   a deploy script, then its completeness becomes load-bearing and the failure stops being loud.
+   This is the one worth watching, because it would arrive as a convenience.
+2. **Drift survives a round trip.** If the two lists are ever found to have disagreed for more than
+   one pull request — meaning somebody saw CI fail on a step the gate lacked and did not wire it —
+   then the correction is not self-executing after all.
+3. **A second conditional check.** `browser-e2e` is the only step with a condition, and its
+   condition is read from `e2e.yml` rather than copied. A second one would create a second pair of
+   conditions to keep in agreement, and #189 already showed that agreeing lists can still produce
+   disagreeing answers.
