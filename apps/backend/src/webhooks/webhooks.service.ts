@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type Stripe from "stripe";
@@ -560,20 +561,55 @@ export class WebhooksService {
       payment.amount,
     );
 
+    const evidenceDueBy = dispute.evidence_details?.due_by
+      ? new Date(dispute.evidence_details.due_by * 1000)
+      : null;
+
     await this.prisma.$transaction(async (tx) => {
-      const chargeback = await tx.chargeback.create({
-        data: {
-          transactionId: transaction.id,
-          processorDisputeId: dispute.id,
-          reason: dispute.reason,
-          amount: disputeAmount,
-          currency: transaction.currency,
-          status: "UNDER_REVIEW",
-          evidenceDueBy: dispute.evidence_details?.due_by
-            ? new Date(dispute.evidence_details.due_by * 1000)
-            : null,
-        },
-      });
+      // ADR-090. A CONDITIONAL INSERT, and the signal is the number of rows — not whether this
+      // method reached the end.
+      //
+      // `charge.dispute.created` is the only event type that creates a Chargeback, so a second
+      // delivery is a RETRY. Stripe retries for up to three days with exponential back-off (its own
+      // documentation), and `handleEvent` deletes the claim when `dispatch` throws — measured, not
+      // assumed — so a delivery that fails is retried and fails again. Before this, the failure was
+      // the unique index added in ADR-089 refusing the second row: correct, and a loop.
+      //
+      // `ON CONFLICT DO NOTHING` makes the insert the thing that decides. `$executeRaw` returns the
+      // number of rows written, which is the only fact that separates "this delivery created the
+      // dispute" from "some earlier delivery did" — **a blind upsert cannot**: it returns a row
+      // either way, and the Ledger entry would go out twice.
+      //
+      // Third use of this idiom in the project, deliberately not a fourth variant:
+      // `RestaurantService.createOnboardingLink` guards a first-request stamp, ADR-088 claims an
+      // invitation, and this claims a dispute.
+      //
+      // The id is generated here rather than read back, because `DO NOTHING` returns no row. When
+      // `inserted === 1` this id is the row's; when it is 0 nothing below runs and the id is unused.
+      const chargebackId = randomUUID();
+      const inserted = await tx.$executeRaw`
+        INSERT INTO "chargeback" (
+          "id", "transaction_id", "processor_dispute_id", "reason",
+          "amount", "currency", "status", "evidence_due_by", "created_at"
+        )
+        VALUES (
+          ${chargebackId}::uuid, ${transaction.id}::uuid, ${dispute.id}, ${dispute.reason},
+          ${disputeAmount}, ${transaction.currency}, 'under_review'::chargeback_status,
+          ${evidenceDueBy}, now()
+        )
+        ON CONFLICT ("processor_dispute_id") DO NOTHING
+      `;
+
+      if (inserted !== 1) {
+        // Converged: we already hold this dispute. Answering with success is what stops the retry —
+        // and it is the same answer `handleChargeRefunded` gives when the cumulative amount says
+        // there is nothing new. Reported at `info` because a retry is Stripe working as documented,
+        // not an incident (ADR-087).
+        this.logger.log(
+          `charge.dispute.created for a dispute already recorded (${dispute.id}) — acknowledged, nothing written`,
+        );
+        return;
+      }
 
       await tx.transaction.update({ where: { id: transaction.id }, data: { status: "DISPUTED" } });
 
@@ -581,7 +617,7 @@ export class WebhooksService {
         {
           entryType: "CHARGEBACK",
           transactionId: transaction.id,
-          chargebackId: chargeback.id,
+          chargebackId,
           description: "Provisional loss — dispute opened",
           lines: [
             // Each omitted when its share rounds to exactly zero — same convention

@@ -170,14 +170,15 @@ describe("processor ids are unique (ADR-089)", { timeout: 30_000 }, () => {
   }
 
   it(
-    "one dispute delivered twice under DIFFERENT event ids leaves ONE Chargeback — the reproduced " +
-      "defect: before the index this was two rows and two CHARGEBACK journal entries, the same " +
-      "dispute debited twice, and nothing anywhere noticed",
+    "one dispute delivered twice is ACKNOWLEDGED the second time, leaving one Chargeback and one " +
+      "entry — the handler recognises a dispute it already holds (ADR-090). Until then the second " +
+      "delivery answered with an error, which stopped the duplicate and started a retry loop",
     async () => {
       const { paymentId, intentId } = await capturedPayment();
       const disputeId = `dp_unique_${randomUUID()}`;
-      const dispute = () =>
-        envelope(`evt_dp_${randomUUID()}`, "charge.dispute.created", {
+      const secondEventId = `evt_dp_${randomUUID()}`;
+      const dispute = (eventId: string) =>
+        envelope(eventId, "charge.dispute.created", {
           id: disputeId,
           object: "dispute",
           payment_intent: intentId,
@@ -186,15 +187,14 @@ describe("processor ids are unique (ADR-089)", { timeout: 30_000 }, () => {
           evidence_details: { due_by: Math.floor(Date.now() / 1000) + 86_400 },
         });
 
-      const first = sign(dispute());
+      const first = sign(dispute(`evt_dp_${randomUUID()}`));
       await webhooks.handleEvent(first.rawBody, first.signature);
 
-      const second = sign(dispute());
-      // It FAILS rather than duplicating, which is the improvement and not the whole answer:
-      // `handleEvent` rethrows, so Stripe sees an error and retries. Teaching the handler to
-      // recognise a dispute it already holds is webhook-deduplication semantics and has its own
-      // change (ADR-089, "what this does not close").
-      await expect(webhooks.handleEvent(second.rawBody, second.signature)).rejects.toThrow();
+      const second = sign(dispute(secondEventId));
+      await expect(
+        webhooks.handleEvent(second.rawBody, second.signature),
+        "the second delivery answered with an error, which is what Stripe retries for three days",
+      ).resolves.toEqual({ received: true });
 
       const txn = await prisma.transaction.findUniqueOrThrow({ where: { paymentId } });
       expect(
@@ -207,6 +207,14 @@ describe("processor ids are unique (ADR-089)", { timeout: 30_000 }, () => {
         }),
         "one dispute was debited from the Ledger twice",
       ).toBe(1);
+
+      // The claim of the second delivery is what actually ends the retry. `handleEvent` DELETES the
+      // claim when dispatch throws — measured — so an erroring handler is re-claimed and re-run on
+      // every retry. A COMPLETED claim is the difference between converging and looping.
+      const claim = await prisma.idempotencyKey.findUnique({ where: { key: secondEventId } });
+      expect(claim?.status, "the failed delivery's claim was deleted, so Stripe retries it").toBe(
+        "COMPLETED",
+      );
     },
   );
 
