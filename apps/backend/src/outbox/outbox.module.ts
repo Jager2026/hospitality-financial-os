@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ScheduleModule } from "@nestjs/schedule";
 import { AlertModule } from "../common/alerting/alert.module";
 import { EmailModule } from "../email/email.module";
+import { ProcessorFeeModule } from "../processor-fee/processor-fee.module";
 import { WalletModule } from "../wallet/wallet.module";
 import { OutboxPollerService } from "./outbox-poller.service";
 
@@ -11,7 +12,8 @@ import { OutboxPollerService } from "./outbox-poller.service";
   // ADR-069: EmailModule provides EmailOutboxService, the poller's second dispatch target. The
   // import is required even though the Guard-style trap does not apply here — a provider injected
   // without its module imported fails at Nest bootstrap, not at compile time.
-  imports: [ScheduleModule.forRoot(), WalletModule, AlertModule, EmailModule],
+  // ADR-094: ProcessorFeeModule provides the poller's THIRD dispatch target.
+  imports: [ScheduleModule.forRoot(), WalletModule, AlertModule, EmailModule, ProcessorFeeModule],
   providers: [OutboxPollerService],
 })
 export class OutboxModule {}

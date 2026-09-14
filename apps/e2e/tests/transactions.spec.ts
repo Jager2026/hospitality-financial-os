@@ -212,10 +212,17 @@ test("the card answers what the row cannot — where the money went", async ({ p
   await expect(breakdown, "the venue's share").toContainText("99,00");
   await expect(breakdown, "the tip").toContainText("15,00");
   await expect(breakdown, "our fee").toContainText("1,00");
-  // ADR-025: unavailable is not zero, and in a money breakdown a blank reads as zero.
+  // ADR-025 still holds — unavailable is not zero, and a blank in a money breakdown reads as
+  // zero — and ADR-094 splits "unavailable" in two. This Transaction is seeded directly, so no
+  // fee was ever requested for it: the honest answer is that none is coming, and the screen has to
+  // say THAT rather than the sentence that promises a number shortly.
   await expect(breakdown, "an unavailable figure was shown as a number").toContainText(
-    "Not available",
+    "Never received from Stripe",
   );
+  await expect(
+    breakdown,
+    "a fee that will never arrive was worded as one still on its way",
+  ).not.toContainText("Not in yet");
 });
 
 test("the dashboard leads here, because that is where the question starts", async ({

@@ -41,6 +41,14 @@ export async function setup(): Promise<void> {
     );
   }
 
+  const feesConcluded = await concludeUnfetchableProcessorFees(prisma);
+  if (feesConcluded > 0) {
+    console.log(
+      `[db] concluded ${feesConcluded} processing-fee request${feesConcluded === 1 ? "" : "s"} left by ` +
+        `earlier runs — every test Restaurant carries a synthetic Stripe account, so none of them could ever be answered`,
+    );
+  }
+
   const swept = await sweepStuckTestPayments(prisma);
   console.log(
     `[db] swept ${swept.swept} stuck PENDING payment${swept.swept === 1 ? "" : "s"} left by earlier runs` +
@@ -51,6 +59,53 @@ export async function setup(): Promise<void> {
   await reportAccumulatedRows(prisma);
 
   await prisma.$disconnect();
+}
+
+/**
+ * ADR-094, and it exists because the change that created these rows measured what they do.
+ *
+ * **The same shape as the email sweep below, for the same reason.** A `processor_fee.fetch_requested`
+ * event asks Stripe for a BalanceTransaction belonging to a connected account. Every Restaurant a
+ * test creates carries a synthetic one — `acct_fake_…`, `acct_e2e_…` — so the question can never be
+ * answered from this environment. The rows are **unpublishable by construction**, which is what
+ * `PermanentRejection` means and what `abandoned_at` records.
+ *
+ * **Why it is here rather than left to accumulate: it was measured, not feared.** The first full
+ * suite run after ADR-094 landed left **341 queued fee requests** against about 90 of everything
+ * else — one per captured payment, on a suite that captures a great many — and two consecutive runs
+ * failed in two *different* places in the outbox family, both consistent with `OutboxPollerService`'s
+ * batch of 50 being filled by rows nothing can publish. That is OC-10's mechanism, and this change
+ * is what pushed it over.
+ *
+ * **It marks rather than deletes**, the same distinction ADR-075 draws for email: the row is the
+ * trace of a fee that was asked for, and a sweep that erased it would leave no record that the
+ * question was ever put. Nothing is redacted here — the payload is `{ paymentId }` and carries
+ * nothing personal.
+ */
+export async function concludeUnfetchableProcessorFees(
+  prisma: PrismaClient,
+  onlyEventIds?: string[],
+): Promise<number> {
+  await assertLocalDatabase(
+    prisma,
+    "the test harness concludes processing-fee requests that no test environment could answer",
+  );
+
+  const result = await prisma.outboxEvent.updateMany({
+    where: {
+      eventType: "processor_fee.fetch_requested",
+      publishedAt: null,
+      abandonedAt: null,
+      ...(onlyEventIds ? { id: { in: onlyEventIds } } : {}),
+    },
+    data: {
+      abandonedAt: new Date(),
+      abandonedReason:
+        "Left unpublished by an earlier test run. Test Restaurants carry synthetic Stripe accounts, " +
+        "so no BalanceTransaction could ever be fetched from this environment (ADR-094).",
+    },
+  });
+  return result.count;
 }
 
 /**
@@ -283,7 +338,10 @@ async function reportAccumulatedRows(prisma: PrismaClient): Promise<void> {
   // queue. ADR-086 ended the other one, the undeliverable email events, at the start of each run.
   // The number below therefore ought to stay small, and if it does not, it is reporting something
   // new rather than the debris it was written for.
-  const POLLER_BATCH_SIZE = 50;
+  // Kept in step with OutboxPollerService by hand, and that is the standing risk of a second copy:
+  // ADR-094 moved the real one from 50 to 200 and this line had to follow. A drift here makes the
+  // warning fire at the wrong depth, which is worse than not warning at all.
+  const POLLER_BATCH_SIZE = 200;
   const starving = queued >= POLLER_BATCH_SIZE;
 
   console.log(

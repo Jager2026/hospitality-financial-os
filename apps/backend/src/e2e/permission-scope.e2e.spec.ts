@@ -62,6 +62,22 @@ class FakeStripeService {
       currency: "eur",
     };
   }
+  /**
+   * ADR-094. A fake that never reaches Stripe has no BalanceTransaction to offer, and `null` is the
+   * real method's own word for *not yet* — so the poller retries and, after its four attempts,
+   * abandons the request. Nothing is posted to the Ledger, which keeps this double's behaviour
+   * where it was before the fee existed.
+   *
+   * It is defined in five copies because `FakeStripeService` is, and that is the standing cost of
+   * five hand-written doubles of one interface: the method was added to the real service and every
+   * copy broke at runtime, not at compile time.
+   */
+  async retrieveProcessingFee(
+    _stripeAccountId: string,
+    _paymentIntentId: string,
+  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
+    return null;
+  }
 }
 
 interface Actor {

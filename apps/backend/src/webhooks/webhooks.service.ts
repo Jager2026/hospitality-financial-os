@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { PROCESSOR_FEE_EVENT_TYPE } from "../processor-fee/processor-fee.service";
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type Stripe from "stripe";
@@ -178,6 +179,23 @@ export class WebhooksService {
           grossAmount: payment.amount,
           currency: payment.currency,
           status: "COMPLETED",
+        },
+      });
+
+      // ADR-094. The request for this payment's processing fee, written in the SAME transaction
+      // as the Transaction it belongs to (ADR-003) — so a capture that commits always has a fee
+      // fetch behind it, and a capture that does not commit leaves no orphan asking for one.
+      //
+      // It is a request rather than the value because the value does not exist yet: Stripe
+      // publishes the fee on a BalanceTransaction that is measurably not populated at the instant
+      // the charge succeeds (ADR-093). Fetching here would be a network call inside a database
+      // transaction returning null most of the time.
+      await tx.outboxEvent.create({
+        data: {
+          aggregateType: "Payment",
+          aggregateId: payment.id,
+          eventType: PROCESSOR_FEE_EVENT_TYPE,
+          payload: { paymentId: payment.id },
         },
       });
 

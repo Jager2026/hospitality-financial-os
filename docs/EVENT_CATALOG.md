@@ -1,6 +1,6 @@
 ---
 title: EVENT_CATALOG
-version: 1.5.0
+version: 1.6.0
 status: Active
 classification: Internal
 owner: Founder
@@ -64,8 +64,11 @@ Applying that formula to every value of `JournalEntryType` gives the complete, c
 | `chargeback` | `journal_entry.chargeback` | **Real, live** — two separate call sites in `WebhooksService`: `charge.dispute.created` (provisional loss) and, if the dispute is later won, `charge.dispute.closed` (reversal) — ADR-016's own documented one-`Chargeback`-to-many-`JournalEntry` shape, not a hypothetical |
 | `adjustment` | `journal_entry.adjustment` | Not yet implemented — no code path exists |
 | `payout` | `journal_entry.payout` | Not yet implemented — no code path exists (`Withdrawal`/`Settlement` are Future Entities, `DATABASE.md`) |
+| `processor_fee` | `journal_entry.processor_fee` | **Real, live** — `ProcessorFeeService` posts it once Stripe publishes the BalanceTransaction for a captured payment (ADR-094). Seconds after capture rather than during it: the fee is not in the webhook payload and is not populated at the instant the charge succeeds (ADR-093, measured) |
 
-**Payload shape**, identical for all six — deliberately thin:
+**A second producer, and it is not a JournalEntry event.** `processor_fee.fetch_requested` is written by the capture handler in the same transaction as the Transaction (ADR-003) and carries `{ paymentId }`. It is a **request for a value that does not exist yet**, which is what distinguishes it from every row above: those announce something already written, this one asks for something Stripe has not published. Its consumer is `ProcessorFeeService`, the poller's third (ADR-094), and a `null` answer from Stripe is a retry rather than a result — with an explicit limit of four attempts, after which the event is abandoned, the abandonment alerts, and the Transaction Details screen says *never* instead of *not yet*.
+
+**Payload shape**, identical for all seven `journal_entry.*` rows — deliberately thin:
 
 ```json
 { "journalEntryId": "<uuid>", "entryType": "PAYMENT_CAPTURED" }

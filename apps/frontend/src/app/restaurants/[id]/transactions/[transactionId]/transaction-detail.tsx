@@ -17,10 +17,16 @@ import { clockTime, statusLabel } from "../transactions-view";
  * accountant when a figure is queried; a link can be forwarded and a expanded row cannot. The row
  * says which payment. This says what became of it.
  *
- * **`processingFee` is absent on purpose and is not an oversight** (ADR-025): Stripe deducts it
- * from the connected account's balance, and our webhook never observes it. A `0` there would be a
- * false figure in a financial breakdown, so the field is `null` and nothing renders — the same
- * "null, never zero" rule the Dashboard's Average Tip already follows.
+ * **`processingFee` is a real number now (ADR-094), and it carries THREE states rather than two.**
+ * Stripe deducts the fee from the connected account's balance and publishes it on a
+ * BalanceTransaction seconds after the charge — so it is fetched on the Outbox's schedule, and
+ * between the payment and the fetch there is a window where the amount genuinely is not known yet.
+ *
+ * *Known* renders the money. *Not yet* says so, and says it in words that promise a number. *Never*
+ * says something different, because it is a different fact: nothing further will arrive, and a
+ * reader who cannot tell it from "not yet" will keep waiting for a figure that is not coming. The
+ * "null, never zero" rule of ADR-025 is unchanged — a known fee of zero renders as zero, and only
+ * an unknown one renders as words.
  */
 interface TransactionDetail {
   id: string;
@@ -34,6 +40,7 @@ interface TransactionDetail {
   netPlatformFee: string;
   tax: string | null;
   processingFee: string | null;
+  processingFeeStatus: "available" | "pending" | "unavailable";
   refundedAmount: string;
   refunds: Array<{
     id: string;
@@ -152,11 +159,17 @@ function Loaded({
           label={t("transaction.line.tax")}
           value={d.tax === null ? t("transaction.unavailable") : money(d.tax)}
         />
-        {/* Unavailable, never 0 (ADR-025) — and said in words rather than left blank, because a
-            blank in a money breakdown reads as zero. */}
+        {/* Never blank and never a false 0 (ADR-025) — a blank in a money breakdown reads as zero,
+            and the two kinds of "no number" read as each other unless they are worded apart. */}
         <Line
           label={t("transaction.line.processingFee")}
-          value={d.processingFee === null ? t("transaction.unavailable") : money(d.processingFee)}
+          value={
+            d.processingFeeStatus === "available" && d.processingFee !== null
+              ? money(d.processingFee)
+              : d.processingFeeStatus === "pending"
+                ? t("transaction.processingFee.pending")
+                : t("transaction.processingFee.never")
+          }
         />
       </dl>
 

@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.8.0
+version: 1.9.0
 status: Active
 classification: Critical
 owner: Founder
@@ -477,6 +477,21 @@ self-written instrument erring in the direction of finding something, which is t
 **None of that changes what closes this row.** Resetting the database made the run pass and left the
 assertion exactly as dependent on global queue depth as it was.
 
+### It became load-bearing the next day (2026-09-14, ADR-094)
+
+Adding one Outbox row per payment — the processing-fee request — turned this from an occasional
+flake into a **reliable** gate failure, in four different tests across five runs. Measured at the
+moment of failure: **341 queued fee requests against about 90 of everything else.**
+
+Three things absorbed it and **none of them is this row's remedy**: the harness now concludes fee
+requests between runs, the poller spec's double became the real service so foreign requests back off
+and abandon, and `BATCH_SIZE` moved from 50 to 200 to match the new row-per-payment rate. Two of the
+poller spec's own assertions were also rewritten to poll **until their event moves** rather than a
+fixed number of times — which *is* this row's remedy, applied to two tests out of the file.
+
+**The rest of the file still asserts about the depth of the queue**, and the next change that adds a
+row per payment will find it again.
+
 ---
 
 ## OC-11 — The recovery window is three days, and one thing about it is not found
@@ -553,7 +568,7 @@ reason sits beside them in `schema.prisma`: one UAB legitimately owns several ve
 |---|---|
 | **Status** | Open, and **reformulated on 2026-09-14** after the measurement in **ADR-092**. |
 | **Open since** | 2026-09-13 |
-| **What closes it** | An **entry**, not an account: recording that the restaurant's money left. It cannot be written until the fee's amount is available, and that arrives on `charge.dispute.funds_withdrawn` — the event that falls to `default` today (**OC-7**). |
+| **What closes it** | An **entry**, not an account: recording that the restaurant's money left. It cannot be written until the fee's amount is available, and that arrives on `charge.dispute.funds_withdrawn` — the event that falls to `default` today (**OC-7**). **Cheaper since ADR-094**: the account to put it in and the shape of a scheduled fetch that reads a Stripe object the webhook does not carry both exist now. |
 | **Owner** | Founder — it is a question about what this Ledger is for before it is a schema question. |
 | **What it gates** | The accuracy of any figure claiming to describe what a venue actually received. |
 | **Trigger** | **The first venue taking real traffic** — not the first dispute, which is the event that produces the gap. |
@@ -582,9 +597,9 @@ upstream of this row.
 
 | | |
 |---|---|
-| **Status** | Open, and **measured on 2026-09-14** rather than argued — see **ADR-093**. The measurement narrowed it: no venue-facing number is wrong, so this is a rename and a decision, not a repair. |
+| **Status** | Open, and **halved on 2026-09-14**. The fetch is built (**ADR-094**); the rename is not. What remains is a decision about three account classes, with no code behind it. |
 | **Open since** | 2026-09-14 |
-| **What closes it** | Two separable things, and the second is now cheap and specific: **(1)** a decision on the three account classes below; **(2)** fetching the fee — `paymentIntents.retrieve(id, { expand: ["latest_charge.balance_transaction"] })` with the `{ stripeAccount }` option, one call, measured returning `fee=63 net=1137`. |
+| **What closes it** | **(1)** a decision on the three account classes below — all that is left. ~~**(2)** fetching the fee~~ — **done, ADR-094**: the request is written by capture, fetched on the Outbox's schedule, posted as a `PROCESSOR_FEE` entry, and shown on the screen with three states. |
 | **Owner** | Founder for (1); AI Technical Co-Founder for (2). |
 | **What it gates** | Nothing on screen today. It gates any future claim that a figure shows what a venue *receives*, and the `processingFee` line that currently renders "Not available". |
 | **Trigger** | **Before the first report is shown to a venue** — a number is hardest to correct after somebody has read it. |
@@ -610,19 +625,49 @@ zero. **One sentence of prose is the exception:** ADR-025 says that field *"answ
 restaurant actually keep'"*, and the venue keeps that figure minus its share of Stripe's fee.
 Corrected in ADR-025 itself.
 
-**The second half is no longer a philosophical gap.** Two places in the source still say the fee is
-something *"this system cannot see"*. Measured: the fee is not in the webhook payload — the event
-carries `latest_charge` as a bare id and no Stripe-fee field — and it **is** in the
-`BalanceTransaction`, one `expand` away. **Unfetched, not unseeable.** On the measured charge it
-was **63 against a platform fee of 10**, so the deduction nobody shows is several times the one that
-is announced.
+**The second half is closed rather than argued.** ADR-094 built it: the fee is requested by capture
+in the same transaction as the Transaction, fetched by the poller's third consumer, posted as a
+second entry claimed by `transaction.processor_fee_balance_txn_id`, and rendered with three states
+rather than two. The two source comments saying the fee is something *"this system cannot see"*
+went with it.
 
-**A constraint for whoever implements (2):** `charge.balance_transaction` came back **null** on a
-retrieve immediately after confirmation and populated seconds later, so the fetch belongs on the
-Outbox's schedule rather than inside the webhook's own transaction.
+**The constraint that shaped it:** `charge.balance_transaction` came back **null** on a retrieve
+immediately after confirmation and populated seconds later — which is why the fetch runs on the
+Outbox's schedule, where *not yet* is a retry, rather than inside the webhook's transaction, where
+it would have been a silent blank.
 
-**This row stays the general case of which OC-14 is one instance** — the dispute fee is the same
-money on the rare path; this is the same money on every payment.
+**What is left is only the naming**, and it moves no figure: nothing venue-facing reads
+`PROCESSOR_CLEARING`, and `netRestaurantRevenue` is credits minus debits of one account, which a
+rename does not enter. The new `PROCESSOR_FEE` account is deliberately part of that decision rather
+than ahead of it — it is named for what it holds and carries no class.
+
+---
+
+## OC-17 — The Outbox has three consumers and no handler registry, and that was the written trigger
+
+| | |
+|---|---|
+| **Status** | Open, 2026-09-14. **The trigger has fired** — `ProcessorFeeService` is the third consumer (ADR-094) — and was deliberately not taken. |
+| **Open since** | 2026-09-14 |
+| **What closes it** | Both halves together: a handler registry **and** the claim step. The poller's own comment names them as one threshold, and half of it is not what was promised. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Nothing today. Three branches in a `dispatch` method is legible; the fourth author is the risk. |
+| **Trigger** | **The fourth consumer** — or the first change to claim semantics, whichever comes first, since the second half is the expensive one. |
+
+`OutboxPollerService.dispatch` reads: *"NOT a handler registry yet… The third one is when this
+becomes a registry — and by then the claim step should be fixed too, because that is the same
+threshold."* The third arrived on 2026-09-14 and got a third `if`.
+
+**Why the trigger was recorded rather than honoured.** The claim step is what the poller does when a
+handler throws — it **deletes** the claim, measured in ADR-090, which is deliberate and is what
+makes a permanent failure loop. Changing dispatch and changing claim semantics in one pull request
+makes it impossible to say afterwards which one moved the behaviour: ADR-058's attribution loss,
+with the cause isolable exactly once.
+
+**What this row prevents.** Not the registry being late — the *reason* being forgotten. A trigger
+that fires and is silently passed over becomes a comment nobody believes, and the next author reads
+"the third one is when this becomes a registry" beside four branches and learns that the file's
+comments are aspirational.
 
 ---
 

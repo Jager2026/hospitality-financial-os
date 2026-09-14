@@ -94,6 +94,11 @@ enum JournalEntryType {
   CHARGEBACK       @map("chargeback")
   ADJUSTMENT       @map("adjustment")
   PAYOUT           @map("payout")
+  /// ADR-094. The processor's own fee, posted as a SECOND entry rather than as a correction of
+  /// PAYMENT_CAPTURED: the amount is not known when the payment is captured — Stripe publishes it
+  /// on the BalanceTransaction seconds later — and ADR-002 forbids editing a posted entry. Same
+  /// reasoning as ADR-090's dispute reversal.
+  PROCESSOR_FEE    @map("processor_fee")
 
   @@map("journal_entry_type")
 }
@@ -106,6 +111,12 @@ enum LedgerAccount {
   PLATFORM_FEE_REVENUE       @map("platform_fee_revenue")
   TAX_PAYABLE                @map("tax_payable")
   REFUND_CONTRA              @map("refund_contra")
+  /// ADR-094. What Stripe deducted for processing this payment. Deliberately NOT named as the
+  /// platform's expense: ADR-092 established that with direct charges the fee comes off the
+  /// CONNECTED account's balance, so this is the venue's cost passing through our books, not ours.
+  /// Its class under the chart of accounts is part of the rename ADR-093 left open (OC-15) and is
+  /// not decided here.
+  PROCESSOR_FEE              @map("processor_fee")
 
   @@map("ledger_account")
 }
@@ -558,6 +569,16 @@ model Transaction {
   status       TransactionStatus @default(COMPLETED)
   createdAt    DateTime          @default(now()) @map("created_at")
   // No updated_at: never edited (ADR-002) — corrections are new JournalEntry rows.
+  /// ADR-094. The Stripe BalanceTransaction this Transaction's processing fee was read from, and
+  /// the CLAIM that makes posting that fee idempotent: the fee entry is written only by the
+  /// delivery whose conditional update moved this column from NULL, so a redelivered event debits
+  /// the Ledger once. Fourth use of the project's named idiom — conditional write, row count as
+  /// the signal (CLAUDE_RULES.md) — deliberately not a fourth variant of it.
+  ///
+  /// Unique because it is an identifier issued by Stripe and names exactly one object, which is
+  /// the rule OC-13 records; NULL means the fee has not been posted yet, and many rows may be NULL
+  /// at once, which a plain unique index permits.
+  processorFeeBalanceTxnId String? @unique @map("processor_fee_balance_txn_id")
 
   payment        Payment        @relation(fields: [paymentId], references: [id])
   restaurant     Restaurant     @relation(fields: [restaurantId], references: [id])

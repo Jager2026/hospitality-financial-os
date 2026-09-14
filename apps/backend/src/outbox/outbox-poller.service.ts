@@ -9,11 +9,24 @@ import {
   EMAIL_OUTBOX_EVENT_TYPE,
   EmailOutboxService,
 } from "../email/email-outbox.service";
+import {
+  ProcessorFeeService,
+  PROCESSOR_FEE_EVENT_TYPE,
+} from "../processor-fee/processor-fee.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { WalletProjectionService } from "../wallet/wallet-projection.service";
 
 const POLL_INTERVAL_MS = 2000; // SEQUENCE_PAYMENT_TIP.md: "Every 1-2 seconds"
-const BATCH_SIZE = 50;
+// ADR-094 raised this from 50, and the reason is arithmetic rather than tuning: a captured payment
+// used to produce one or two Outbox rows and now produces one more — the request for its processing
+// fee. A batch sized for the old rate covers proportionally fewer PAYMENTS per tick, so the number
+// had to move with the rate or the queue would lengthen under exactly the load it was sized for.
+//
+// It is also what OC-10 costs when it is not paid: the batch is oldest-first, so a full one starves
+// whatever is newest, and the extra row per payment made that reliable instead of occasional.
+// Raising the batch does not close OC-10 — an assertion about queue depth is still an assertion
+// about queue depth — it only stops this change from making it worse.
+const BATCH_SIZE = 200;
 
 /**
  * The attempt count at which one alert is sent. **It bounds the ALERTING and nothing else.**
@@ -98,6 +111,7 @@ export class OutboxPollerService {
     private readonly prisma: PrismaService,
     private readonly walletProjection: WalletProjectionService,
     private readonly emailOutbox: EmailOutboxService,
+    private readonly processorFee: ProcessorFeeService,
     private readonly logger: PinoLogger,
     private readonly alertService: AlertService,
   ) {
@@ -190,6 +204,21 @@ export class OutboxPollerService {
         // Marking published happens inside the handler, not here: the send must not run inside a
         // database transaction, so the handler owns both its own transaction and its own ordering.
         await this.emailOutbox.handle(event);
+        return;
+      }
+
+      // ADR-094 — the THIRD consumer, and the comment above named this as the moment a registry is
+      // earned. **It is not taken here, deliberately, and the reason is the rest of that sentence:
+      // "and by then the claim step should be fixed too, because that is the same threshold."**
+      // The claim step is how this poller behaves when a handler throws, which is the axis ADR-090
+      // measured and deliberately left alone; changing dispatch and changing claim semantics in
+      // one pull request would make an attribution loss of exactly the kind ADR-058 records. The
+      // trigger has fired and is recorded as fired (OPEN_CONDITIONS), with both halves together.
+      //
+      // Same ownership as the email branch: a network round trip must not run inside a database
+      // transaction, so the handler owns its own transaction and marks the event published itself.
+      if (event.eventType === PROCESSOR_FEE_EVENT_TYPE) {
+        await this.processorFee.handle(event);
         return;
       }
 

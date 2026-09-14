@@ -26,7 +26,7 @@ ALTER TABLE journal_entry
       AND chargeback_id IS NOT NULL AND refund_id IS NULL AND adjustment_id IS NULL)
     OR (entry_type = 'adjustment'
       AND adjustment_id IS NOT NULL AND refund_id IS NULL AND chargeback_id IS NULL)
-    OR (entry_type IN ('payment_captured', 'tip_allocated', 'payout')
+    OR (entry_type IN ('payment_captured', 'tip_allocated', 'payout', 'processor_fee')
       AND refund_id IS NULL AND chargeback_id IS NULL AND adjustment_id IS NULL)
   );
 

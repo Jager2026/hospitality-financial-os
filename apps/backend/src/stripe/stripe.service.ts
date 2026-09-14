@@ -263,6 +263,54 @@ export class StripeService implements OnModuleInit {
     }
   }
 
+  /**
+   * ADR-094. What Stripe actually deducted for processing one payment.
+   *
+   * **It is not in anything we already receive — measured, not assumed (ADR-093).** The
+   * `payment_intent.succeeded` event carries `latest_charge` as a bare id string, and its only
+   * fee-shaped field is `application_fee_amount`, which is OUR fee. Stripe's own fee lives on the
+   * BalanceTransaction, one level further down, and this is the single round trip that reaches it.
+   *
+   * `{ stripeAccount }` because these are direct charges: the BalanceTransaction belongs to the
+   * connected account, not to the platform (ADR-092).
+   *
+   * **Returns `null` for "not yet", which is a different answer from an error.** The
+   * BalanceTransaction is not populated at the instant the charge succeeds — measured null on a
+   * retrieve immediately after confirmation and present seconds later — so the caller retries
+   * rather than concluding. Anything genuinely wrong still throws.
+   */
+  async retrieveProcessingFee(
+    stripeAccountId: string,
+    paymentIntentId: string,
+  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
+    try {
+      const intent = await this.stripe.paymentIntents.retrieve(
+        paymentIntentId,
+        { expand: ["latest_charge.balance_transaction"] },
+        { stripeAccount: stripeAccountId },
+      );
+      const charge = intent.latest_charge;
+      if (!charge || typeof charge === "string") return null;
+      const balanceTransaction = charge.balance_transaction;
+      if (!balanceTransaction || typeof balanceTransaction === "string") return null;
+      return {
+        balanceTransactionId: balanceTransaction.id,
+        fee: BigInt(balanceTransaction.fee),
+        currency: balanceTransaction.currency.toUpperCase(),
+      };
+    } catch (err) {
+      // Same translation as retrievePaymentIntent, and for the same reason: a PaymentIntent id is
+      // assigned at creation and never becomes valid later, so `resource_missing` cannot be cured
+      // by asking again.
+      if (isStripeResourceMissing(err)) {
+        throw new PermanentRejection(
+          `Stripe PaymentIntent ${paymentIntentId} does not exist on connected account ${stripeAccountId}`,
+        );
+      }
+      throw err;
+    }
+  }
+
   /** ADR-004 / API_Contract.md, Incoming Webhooks: "Verifies the Stripe signature before any
    * processing." rawBody must be the exact, unparsed request bytes (main.ts's `rawBody: true`) —
    * constructEvent HMACs the raw bytes, not a re-serialized JSON.stringify of the parsed body. */

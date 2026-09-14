@@ -7,6 +7,11 @@ const COMPENSATING_ENTITY_BY_TYPE: Record<
   PAYMENT_CAPTURED: null,
   TIP_ALLOCATED: null,
   PAYOUT: null,
+  // ADR-094. No compensating entity: the processor deduction is not modelled as an entity, and
+  // there is no reason for it to be. Absent from this map it would not default to null — the
+  // lookup returns undefined and the guard below rejects the entry, which is how a missing key
+  // here fails loudly rather than silently permitting anything.
+  PROCESSOR_FEE: null,
   REFUND_ISSUED: "refundId",
   CHARGEBACK: "chargebackId",
   ADJUSTMENT: "adjustmentId",
