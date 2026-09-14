@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.7.0
+version: 1.8.0
 status: Active
 classification: Critical
 owner: Founder
@@ -437,7 +437,7 @@ property of the pipeline, and the next event type inherits zero.
 
 | | |
 |---|---|
-| **Status** | Open, 2026-09-13. |
+| **Status** | Open, 2026-09-13. **It has now cost a red gate and the mechanism is measured** — 2026-09-14, below. |
 | **Open since** | 2026-09-13 |
 | **What closes it** | Scoping the assertion to the events the test itself created — **isolation, not cleanup**. |
 | **Owner** | AI Technical Co-Founder |
@@ -447,6 +447,35 @@ Draining the queue makes a run pass; it does not make the assertion true. ADR-08
 thing by excluding money events from the harness sweep, and that is a **different requirement** from
 this one: *"do not delete it"* and *"do not let it reach the assertion"* are two rules, and only the
 second makes the test independent of whatever else the shared development database happens to hold.
+
+### What it actually costs, measured 2026-09-14
+
+`outbox-poller.service.spec.ts:949` — *"a failing event is not retried immediately, and each gap is
+longer than the one before"* — failed with **`expected 1 to be 2`** on a documentation-only branch.
+The test's own event was never selected by the third poll.
+
+**The mechanism, and it is sharper than "an accumulated database".** The poller takes
+`orderBy: createdAt asc, take: 50`, filtered on `attempts = 0 OR nextAttemptAt <= now()`. The
+test's event is the **newest** row in the queue, so it is selected only while fewer than fifty
+*older* rows are due. The first poll reached it — `attempts` became 1, and an assertion two lines
+earlier would have failed otherwise. The third poll did not, and what happens in between is the
+test's own `vi.setSystemTime(Date.now() + firstGap)`: **advancing the clock by the backoff gap pulls
+every older row whose retry falls inside that jump into the due set at once**, and they are all
+older. The test evicts itself from the batch it is waiting for.
+
+Measured at the moment of the failure: **90 queued, 85 due, batch size 50.** After
+`pnpm run db:reset`, the same suite on the same commit was green — a discriminating pair on queue
+depth alone, with no code changed between the runs.
+
+**Seven of those rows were money events whose `journal_entry` no longer existed** — litter from
+measurement scripts whose teardown deleted the JournalEntry but not the OutboxEvent it produced.
+They were marked abandoned with that reason rather than deleted. **The first count of them was 27
+and was wrong**: the query matched email events too, which carry no `journalEntryId` at all — a
+self-written instrument erring in the direction of finding something, which is the direction
+`CLAUDE_RULES.md` warns about.
+
+**None of that changes what closes this row.** Resetting the database made the run pass and left the
+assertion exactly as dependent on global queue depth as it was.
 
 ---
 
@@ -549,29 +578,51 @@ upstream of this row.
 
 ---
 
-## OC-15 — The chart of accounts describes a Connect topology this code does not use
+## OC-15 — Three account classes are wrong under direct charges, and the fee is unfetched rather than unseeable
 
 | | |
 |---|---|
-| **Status** | Open. Measured 2026-09-14 (**ADR-092**), while answering a narrower question. |
+| **Status** | Open, and **measured on 2026-09-14** rather than argued — see **ADR-093**. The measurement narrowed it: no venue-facing number is wrong, so this is a rename and a decision, not a repair. |
 | **Open since** | 2026-09-14 |
-| **What closes it** | A decision — **not a repair** — about which of the two documents is describing something that is not happening: ADR-002's chart of accounts, or the integration. |
-| **Owner** | Founder |
-| **What it gates** | What `RESTAURANT_REVENUE_PAYABLE` means in any report; what a `PAYOUT` entry would ever be for; whether Stripe's per-payment processing fee belongs in these books. |
+| **What closes it** | Two separable things, and the second is now cheap and specific: **(1)** a decision on the three account classes below; **(2)** fetching the fee — `paymentIntents.retrieve(id, { expand: ["latest_charge.balance_transaction"] })` with the `{ stripeAccount }` option, one call, measured returning `fee=63 net=1137`. |
+| **Owner** | Founder for (1); AI Technical Co-Founder for (2). |
+| **What it gates** | Nothing on screen today. It gates any future claim that a figure shows what a venue *receives*, and the `processingFee` line that currently renders "Not available". |
 | **Trigger** | **Before the first report is shown to a venue** — a number is hardest to correct after somebody has read it. |
 
-ADR-002 names *"Processor Clearing (asset)"* and *"Restaurant Revenue Payable (liability)"* — a
-platform that holds the customer's money and owes the restaurant its share. That is correct for
-destination charges or separate charges and transfers. **This integration creates direct charges:**
-the money lands on the restaurant's own Stripe balance, the platform's `application_fee_amount` is
-pulled out of it, and Stripe's fees are deducted from the same balance. **The platform holds no
-asset and owes no liability.**
+**Which classes, and what each asserts.** ADR-002 names the chart of accounts with classes that
+belong to a platform holding the customer's money:
 
-**This is not an assertion that the numbers are wrong.** A ledger of transaction *economics* — who
-earned what — is a defensible thing to keep, and every entry balances. What is in question is the
-**labels**, and one consequence of them: Stripe's processing fee reduces what the venue actually
-receives **on every payment**, not only on the ones that go wrong, and these books do not show it.
-That makes this row the general case of which **OC-14** is one instance.
+- `PROCESSOR_CLEARING` (**asset**) — the platform holds nothing; the funds are on the venue's own
+  Stripe balance. It is a clearing contra, not a claim on money.
+- `RESTAURANT_REVENUE_PAYABLE` (**liability**) — the platform owes nothing; the venue already
+  holds it. The figure is the venue's share of the bill.
+- `TIP_PAYABLE` (**liability**) — under Model A the employer distributes tips (ADR-053), so the
+  entitlement is against the venue, not against us.
+
+`PLATFORM_FEE_REVENUE` (**income**) is the one class that survives: the application fee really does
+land on the platform's balance.
+
+**Do the numbers change? No — and that is the finding, not a hope.** Nothing venue-facing reads
+`PROCESSOR_CLEARING`; `netRestaurantRevenue` is `credits − debits` of one account and a name is
+not an input to arithmetic; the UI labels — *"The restaurant's share"*, *"Before platform fee
+deduction"* — are accurate; and `processingFee` renders **"Not available"** rather than a false
+zero. **One sentence of prose is the exception:** ADR-025 says that field *"answers 'what does the
+restaurant actually keep'"*, and the venue keeps that figure minus its share of Stripe's fee.
+Corrected in ADR-025 itself.
+
+**The second half is no longer a philosophical gap.** Two places in the source still say the fee is
+something *"this system cannot see"*. Measured: the fee is not in the webhook payload — the event
+carries `latest_charge` as a bare id and no Stripe-fee field — and it **is** in the
+`BalanceTransaction`, one `expand` away. **Unfetched, not unseeable.** On the measured charge it
+was **63 against a platform fee of 10**, so the deduction nobody shows is several times the one that
+is announced.
+
+**A constraint for whoever implements (2):** `charge.balance_transaction` came back **null** on a
+retrieve immediately after confirmation and populated seconds later, so the fetch belongs on the
+Outbox's schedule rather than inside the webhook's own transaction.
+
+**This row stays the general case of which OC-14 is one instance** — the dispute fee is the same
+money on the rare path; this is the same money on every payment.
 
 ---
 
