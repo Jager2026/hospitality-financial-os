@@ -76,7 +76,14 @@ function splitCsvLine(line: string): string[] {
   return out;
 }
 
-describe("AnalyticsService (real database)", () => {
+// The budget goes where the cost is, on the suite rather than in the global config
+// (CLAUDE_RULES.md). Every case in this block seeds an Organization, a Restaurant, a shift and up
+// to six staff with tips against a REAL database, and one of them — topStaff, which seeds six
+// people to prove the cap drops the sixth — timed out at the 5000ms default during a full gate run
+// on 2026-09-14 while passing the same suite standalone minutes earlier. That is the documented
+// shape of this defect: not wrong until the machine is busy, and then failing somewhere unrelated
+// to whatever changed.
+describe("AnalyticsService (real database)", { timeout: 30_000 }, () => {
   const prisma = new PrismaService();
   let analyticsService: AnalyticsService;
   let webhooks: WebhooksService;

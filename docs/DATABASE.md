@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.23.0
+version: 2.24.0
 status: Active
 classification: Internal
 owner: Founder
@@ -236,7 +236,9 @@ JournalEntry
 ############################################################
 **Purpose:** One balanced financial event — the header row of a double-entry posting (ADR-002).
 
-**Fields:** id, entry_type (`payment_captured` / `tip_allocated` / `refund_issued` / `chargeback` / `adjustment` / `payout`), transaction_id (nullable), refund_id (nullable), chargeback_id (nullable), adjustment_id (nullable), description, created_at
+**Fields:** id, entry_type (`payment_captured` / `tip_allocated` / `refund_issued` / `chargeback` / `adjustment` / `payout` / `processor_fee`), transaction_id (nullable), refund_id (nullable), chargeback_id (nullable), adjustment_id (nullable), description, created_at
+
+**`processor_fee` (ADR-094)** sets no compensating FK — it hangs off a Transaction like `payment_captured` does, and the thing it accounts for is the processor's own deduction, which this system does not model as an entity. It is always a SECOND entry: Stripe publishes the amount on a BalanceTransaction seconds after the charge, so it cannot be part of the capture, and ADR-002 forbids editing a posted entry.
 
 **Relationships:** JournalEntry → zero-or-one Transaction · JournalEntry → many LedgerLine · JournalEntry → zero-or-one Refund · JournalEntry → zero-or-one Chargeback · JournalEntry → zero-or-one Adjustment
 
@@ -252,7 +254,9 @@ LedgerLine
 ############################################################
 **Purpose:** One debit or credit inside a JournalEntry — the actual money movement (ADR-002).
 
-**Fields:** id, journal_entry_id, account (`processor_clearing` / `restaurant_revenue_payable` / `tip_payable` / `platform_fee_revenue` / `tax_payable` / `refund_contra`), direction (`debit` / `credit`), amount (BIGINT, minor units), currency, restaurant_id (nullable), membership_id (nullable), shift_id (nullable), created_at
+**Fields:** id, journal_entry_id, account (`processor_clearing` / `restaurant_revenue_payable` / `tip_payable` / `platform_fee_revenue` / `tax_payable` / `refund_contra` / `processor_fee`), direction (`debit` / `credit`), amount (BIGINT, minor units), currency, restaurant_id (nullable), membership_id (nullable), shift_id (nullable), created_at
+
+**`processor_fee` (ADR-094)** holds what Stripe deducted for processing a payment. Deliberately not named as the platform's expense: ADR-092 established that with direct charges the fee comes off the **connected** account's balance, so it is the venue's cost passing through these books. Its class in the chart of accounts is part of the rename OC-15 holds open and is not settled by this field existing.
 
 **Two labels, and neither derives the other (ADR-064).** `created_at` is the **calendar instant** — unchanged, because accounting and tax are calendar-bound. `shift_id` is the **operational** label: which of the venue's own working days this money belongs to. A payment at 01:30 on a shift nobody has closed carries that shift *and* today's calendar timestamp, both at once. On LedgerLine rather than Transaction because this is where every figure is already aggregated (ADR-024, ADR-025, ADR-026), so a shift-scoped total is the same query with a different filter rather than a second way of counting. Nullable: rows written before ADR-064 have no shift, and a line with no `restaurant_id` has none to belong to.
 

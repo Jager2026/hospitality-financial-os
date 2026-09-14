@@ -311,6 +311,10 @@ export const en = {
   "transaction.line.platformFee": "Our fee",
   "transaction.line.tax": "Tax",
   "transaction.line.processingFee": "Card processing fee",
+  // ADR-094. Two different absences, worded so they cannot be read as each other: one promises a
+  // number, the other withdraws the promise.
+  "transaction.processingFee.pending": "Not in yet — usually within a minute",
+  "transaction.processingFee.never": "Never received from Stripe",
   // ADR-025: unavailable is not zero, and in a money breakdown a blank reads as zero.
   "transaction.unavailable": "Not available",
   "transaction.refunds.title": "Refunds",

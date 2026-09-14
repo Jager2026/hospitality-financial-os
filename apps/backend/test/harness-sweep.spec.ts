@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { concludeUndeliverableEmails, sweepStuckTestPayments } from "./global-setup";
+import {
+  concludeUndeliverableEmails,
+  concludeUnfetchableProcessorFees,
+  sweepStuckTestPayments,
+} from "./global-setup";
 
 /** This file owns every row created under this name — see the teardown. */
 const FIXTURE_RESTAURANT = "Harness Sweep Test Restaurant";
@@ -218,6 +222,37 @@ describe("the harness sweep (ADR-086)", () => {
       "an abandoned event must never be marked published — it was not sent",
     ).toBeNull();
   });
+
+  it(
+    "concludes a processing-fee request, because every test Restaurant carries a synthetic Stripe " +
+      "account and the question can never be answered from here (ADR-094)",
+    async () => {
+      const fee = await seedOutboxEvent("processor_fee.fetch_requested");
+
+      const concluded = await concludeUnfetchableProcessorFees(prisma, [fee.id]);
+
+      expect(concluded).toBe(1);
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: fee.id } });
+      expect(after.abandonedAt, "an unanswerable fee request was left in the queue").not.toBeNull();
+      expect(after.abandonedReason).toContain("synthetic Stripe accounts");
+      expect(after.publishedAt, "nothing was fetched, so nothing was published").toBeNull();
+    },
+  );
+
+  it(
+    "REFUSES an email event — the discriminating pair for the fee sweep: two rules about two " +
+      "different impossibilities, and neither may conclude the other's rows",
+    async () => {
+      const email = await seedOutboxEvent("email.send_requested");
+
+      const concluded = await concludeUnfetchableProcessorFees(prisma, [email.id]);
+
+      expect(concluded, "an email event was concluded by a rule about Stripe accounts").toBe(0);
+      const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: email.id } });
+      expect(after.abandonedAt).toBeNull();
+      await prisma.outboxEvent.delete({ where: { id: email.id } });
+    },
+  );
 
   it("REFUSES a money event of the same age — the discriminating pair: the rule is about what THIS ENVIRONMENT can send, and a journal-entry projection has nothing to do with an email provider", async () => {
     const money = await seedOutboxEvent("journal_entry.payment_captured");

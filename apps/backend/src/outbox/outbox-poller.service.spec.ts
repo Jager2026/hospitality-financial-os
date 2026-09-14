@@ -4,6 +4,7 @@ import Stripe from "stripe";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { ProcessorFeeService } from "../processor-fee/processor-fee.service";
 import type { RestaurantService } from "../restaurant/restaurant.service";
 import { StripeService } from "../stripe/stripe.service";
 import { IndividualTipAllocationStrategy } from "../tip/individual-tip-allocation.strategy";
@@ -20,6 +21,32 @@ import { OutboxPollerService, retryDelayMs } from "./outbox-poller.service";
 /** ADR-069. The poller gained a second dispatch target; this file is about the FIRST one. A handler
  * that throws on contact is the honest stub here — if the money path ever routes an event into the
  * email branch, these tests must fail loudly rather than pass with nothing having happened. */
+/**
+ * ADR-094: the THIRD consumer, and it is the REAL service with a Stripe that always answers *not
+ * yet* — not a stub that throws.
+ *
+ * **The difference was measured rather than chosen for style.** A fee request carries `attempts: 0`,
+ * and the poller treats every `attempts: 0` row as due on every poll — so a handler that throws a
+ * plain error leaves it due forever, occupying one of the fifty slots for the rest of the run. Once
+ * capture began writing one of these per payment, that was enough to starve this very file: the
+ * alerting spec lost its own event behind other specs' fee requests, twice, in different tests.
+ *
+ * The real service backs off and, at its fourth attempt, raises `PermanentRejection`, so the row
+ * leaves the queue exactly as it would in production when Stripe never publishes. That is OC-10
+ * being paid for rather than argued with.
+ */
+function processorFeeThatCannotFetch(prismaClient: PrismaService) {
+  return new ProcessorFeeService(
+    prismaClient,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { retrieveProcessingFee: async () => null } as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    {} as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { info: () => undefined, warn: () => undefined, error: () => undefined } as any,
+  );
+}
+
 function emailOutboxThatMustNotBeCalled(): EmailOutboxService {
   return {
     handle: async () => {
@@ -169,6 +196,7 @@ describe("OutboxPollerService (real database)", () => {
       // about the MONEY path, so an email handler being reached at all would be a defect, and a
       // stub that silently succeeded would hide it.
       emailOutboxThatMustNotBeCalled(),
+      processorFeeThatCannotFetch(prisma),
       fakeLogger,
       fakeAlertServiceNoop,
     );
@@ -588,6 +616,7 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
         prisma,
         walletProjection,
         emailOutboxThatMustNotBeCalled(),
+        processorFeeThatCannotFetch(prisma),
         fakeLogger,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { sendAlert } as any,
@@ -618,19 +647,26 @@ describe("OutboxPollerService alerting (ADR-031/032)", () => {
         prisma,
         walletProjection,
         emailOutboxThatMustNotBeCalled(),
+        processorFeeThatCannotFetch(prisma),
         fakeLogger,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { sendAlert } as any,
       );
       const event = await seedFailingEvent();
 
-      for (let i = 0; i < 8; i++) {
-        await expect(poller.poll()).resolves.toBeUndefined();
-        // ADR-083: same reason as pollUntilAttempts — without moving the clock this loop would
-        // poll eight times and retry once, and the assertion below would be about the backoff
-        // rather than about a throwing AlertService.
-        vi.setSystemTime(new Date(Date.now() + retryDelayMs(i + 1)));
-      }
+      // OC-10, and this loop is where it was paid for. A fixed eight polls asserts about the
+      // DEPTH OF THE QUEUE, not about this event: the poller takes the fifty oldest due rows, and
+      // once other specs' rows outnumber that, this event is in some polls and not others — it
+      // reached two attempts of the required five on the run that exposed this.
+      // `pollUntilAttempts` asks the only question this test is about: do the attempts climb past
+      // the threshold while
+      // the alert keeps rejecting? Bounded by the same iteration cap, so a genuinely stuck event
+      // still fails rather than hanging.
+      //
+      // Each poll is still asserted to resolve, which is the actual subject: a rejecting
+      // AlertService must not crash `poll()`.
+      await expect(poller.poll()).resolves.toBeUndefined();
+      await pollUntilAttempts(poller, event.id, 5);
 
       const after = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
       expect(after.attempts).toBeGreaterThanOrEqual(5);
@@ -689,10 +725,17 @@ describe("OutboxPollerService routing by eventType (ADR-069)", () => {
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
-    const poller = new OutboxPollerService(prisma, walletStub, emailStub, fakeLoggerLocal, {
-      sendAlert: async () => undefined,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    const poller = new OutboxPollerService(
+      prisma,
+      walletStub,
+      emailStub,
+      processorFeeThatCannotFetch(prisma),
+      fakeLoggerLocal,
+      {
+        sendAlert: async () => undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+    );
     return { poller, seen };
   }
 
@@ -787,6 +830,7 @@ describe("OutboxPollerService retry backoff and finality (ADR-083)", () => {
       prisma,
       walletProjectionFailingFor(prisma, failingIds),
       emailOutboxThatMustNotBeCalled(),
+      processorFeeThatCannotFetch(prisma),
       fakeLogger,
       fakeAlertServiceNoop,
     );
@@ -1027,6 +1071,7 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
       prisma,
       new WalletProjectionService(prisma),
       emailOutboxThatMustNotBeCalled(),
+      processorFeeThatCannotFetch(prisma),
       fakeLogger,
       {
         sendAlert: (_message: string, context?: { eventId?: string }) => {
@@ -1164,6 +1209,7 @@ describe("OutboxPollerService abandonment (ADR-085)", () => {
         prisma,
         walletProjectionFailingFor(prisma, new Set([journalEntryId])),
         emailOutboxThatMustNotBeCalled(),
+        processorFeeThatCannotFetch(prisma),
         fakeLogger,
         fakeAlertServiceNoop,
       );
@@ -1240,6 +1286,7 @@ describe("OutboxPollerService alert semantics (ADR-087)", () => {
       prisma,
       new WalletProjectionService(prisma),
       emailOutbox,
+      processorFeeThatCannotFetch(prisma),
       fakeLogger,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { sendAlert } as any,

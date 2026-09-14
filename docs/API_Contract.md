@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.25.0
+version: 2.26.0
 status: Active
 classification: Internal
 owner: Founder
@@ -326,15 +326,25 @@ Response: `{ data: [{ id, restaurantId, paymentId, grossAmount, currency, tip, s
 ## Transaction Details
 GET /transactions/{id} — **requires `reports.view`**, re-checked at the Transaction's own Restaurant (PR #109); the list and the export already carried it and this route did not. Includes a Ledger breakdown, computed at read time from **every** `JournalEntry`/`LedgerLine` row this Transaction has — not just the original `PAYMENT_CAPTURED` entry — so a refunded or disputed Transaction shows its current net effect, not a snapshot frozen at capture (`UX_MAP.md`: "an owner is never left wondering why a number changed"). Not stored directly on Transaction (ADR-002).
 
-Response: `{ id, restaurantId, paymentId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, processingFee, refundedAmount, refunds, chargebacks }`.
+Response: `{ id, restaurantId, paymentId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, processingFee, processingFeeStatus, refundedAmount, refunds, chargebacks }`.
 
 - `netRestaurantRevenue`, `netTip`, `netPlatformFee`, `refundedAmount` — each the sum of `CREDIT` minus the sum of `DEBIT` `LedgerLine` amounts for that account (`RESTAURANT_REVENUE_PAYABLE`/`TIP_PAYABLE`/`PLATFORM_FEE_REVENUE`/`REFUND_CONTRA`), across every `JournalEntry` under this Transaction — that subtraction, applied per account, **is** the definition of an account balance in double-entry bookkeeping; no special handling is needed for the general, not-yet-attributed `TIP_PAYABLE` line `PAYMENT_CAPTURED` posts (ADR-022) — it and `TIP_ALLOCATED`'s own reversal of it cancel exactly, by construction. `refundedAmount` aggregates both Refund- and Chargeback-driven activity, since both post to `REFUND_CONTRA` (ADR-008/ADR-016). These four, plus `tax`, always sum to exactly `grossAmount` — this Sprint's own Definition of Done, and true for any Transaction regardless of how many partial refunds or chargebacks it has, since `PROCESSOR_CLEARING` is debited exactly once, at capture, for the full `grossAmount`, and never touched again.
 - `tax` — always `"0"` for MVP. `TAX_PAYABLE` exists in the chart of accounts (`schema.prisma`) but no code path writes to it yet — the same "schema ready, not yet used" state as Pool/Shift tip allocation strategies (ADR-007).
-- `processingFee` — always `null` for MVP, **never `"0"`** (a literal zero would misstate a real, nonzero fee Stripe actually collects). Not the same gap as `tax`: this isn't unbuilt logic, it's a fact-checked Stripe limitation. Under ADR-014's Direct Charge + `fees_collector: "stripe"` configuration, Stripe deducts its own processing fee directly from the Restaurant's own connected-account balance — a fact our `payment_intent.succeeded` webhook payload never carries. The real figure exists only via a separate Stripe `balance_transaction` API call (with the `Stripe-Account` header), which is out of this Sprint's scope ("breakdown computed from `LedgerLine`," `IMPLEMENTATION_PLAN.md`). `MASTERPLAN.md` names Processing Fee and Platform Fee as two distinct concepts — kept as two distinct fields here, not collapsed into the one (`netPlatformFee`) that is actually available.
+- `processingFee` / `processingFeeStatus` — **a real figure since ADR-094**, read from the `PROCESSOR_FEE` account like every other line here. The paragraph this replaces was accurate about the facts and wrong about the conclusion: Stripe does deduct the fee from the Restaurant's own connected-account balance and the `payment_intent.succeeded` payload does not carry it (both re-measured in ADR-093) — but the separate `balance_transaction` call it named as out of scope is **one round trip**, and the figure was unfetched rather than unavailable.
+
+  The amount arrives seconds after the charge, so the field carries a **state** rather than only a nullable number, and there are three of them, not two:
+
+  | `processingFeeStatus` | `processingFee` | meaning |
+  |---|---|---|
+  | `available` | the amount, possibly `"0"` | read from Stripe. A known zero is a real answer |
+  | `pending` | `null` | the fetch is still queued — the payment is recent and the number is coming |
+  | `unavailable` | `null` | it is not coming: the fetch was abandoned after its attempt limit, or the payment predates the mechanism |
+
+  **`null` still never means zero** (ADR-025's rule, unchanged), and the third state must not be rendered like the second: a reader who cannot tell them apart waits for a figure that will never arrive. `MASTERPLAN.md` names Processing Fee and Platform Fee as two distinct concepts and they remain two distinct fields.
 - `refunds` / `chargebacks` — this Transaction's own `Refund`/`Chargeback` rows (see below), so the client never has to make a second round trip to answer "why did this number change."
 
 ## Export
-GET /transactions/export — CSV for MVP (Excel, PDF: future). Same filters as Transaction List, no pagination — every matching row. Columns: `id, restaurantId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, refundedAmount` — `processingFee` omitted from the export entirely (same reasoning as Transaction Details: `null` has no honest CSV representation that isn't confusable with a real `0`).
+GET /transactions/export — CSV for MVP (Excel, PDF: future). Same filters as Transaction List, no pagination — every matching row. Columns: `id, restaurantId, grossAmount, currency, status, createdAt, netRestaurantRevenue, netTip, netPlatformFee, tax, refundedAmount` — `processingFee` **still omitted from the export entirely**, and the reason survives ADR-094 rather than being made obsolete by it: a CSV cell has no way to distinguish *pending* from *never* from a real `0`, and the three-state field this endpoint would have to flatten is exactly what a spreadsheet cannot carry. The export asks the service for the account nets alone, so it also does not pay for the status lookup on every row.
 Requires: `data.export`
 
 ---

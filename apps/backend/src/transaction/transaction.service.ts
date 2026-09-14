@@ -4,6 +4,10 @@ import type { AuthenticatedUser } from "../auth/guards/jwt-auth.guard";
 import { AppException } from "../common/exceptions/app.exception";
 import { permittedScope } from "../common/restaurant-reachability.util";
 import { PrismaService } from "../prisma/prisma.service";
+import {
+  processorFeeStatus,
+  type ProcessorFeeStatus,
+} from "../processor-fee/processor-fee-status.util";
 import { hasPermissionAtRestaurant } from "../common/restaurant-reachability.util";
 import type {
   TransactionExportQueryDto,
@@ -19,7 +23,16 @@ export interface TransactionBreakdown {
   netTip: string;
   netPlatformFee: string;
   tax: string;
-  processingFee: null; // ADR-025: never "0" — a real, Stripe-held figure this system cannot see
+  /**
+   * ADR-094. A real figure now, read from the Ledger like every other line here.
+   *
+   * **`null` still never means zero.** It means the amount is not known, and `processingFeeStatus`
+   * says which kind of not-known it is — still coming, or never coming. ADR-025's rule against a
+   * false `"0"` in a financial breakdown is unchanged and is the reason these are two fields
+   * rather than one: a known zero fee and an unfetched fee are different facts.
+   */
+  processingFee: string | null;
+  processingFeeStatus: ProcessorFeeStatus;
   refundedAmount: string;
 }
 
@@ -87,7 +100,7 @@ export class TransactionService {
     }
     await this.assertPermittedAtRestaurant(transaction.restaurantId, user);
 
-    const breakdown = await this.computeBreakdown(transaction.id);
+    const breakdown = await this.computeBreakdown(transaction);
 
     return {
       id: transaction.id,
@@ -129,7 +142,11 @@ export class TransactionService {
    * capture, for the full `grossAmount`, and every `JournalEntry` under this Transaction is
    * individually balanced (`ledger_line_balanced`, the DB trigger), so the sum of every OTHER
    * account's net movement is constrained to equal that one fixed debit. */
-  private async computeBreakdown(transactionId: string): Promise<TransactionBreakdown> {
+  private async computeNets(transactionId: string): Promise<
+    Omit<TransactionBreakdown, "processingFee" | "processingFeeStatus"> & {
+      processorFeeNet: string;
+    }
+  > {
     const groups = await this.prisma.ledgerLine.groupBy({
       by: ["account", "direction"],
       where: { journalEntry: { transactionId } },
@@ -144,13 +161,36 @@ export class TransactionService {
       return credit - debit;
     };
 
+    // ADR-094. The fee is a DEBIT to PROCESSOR_FEE, so the generic `credit − debit` net is
+    // negative for it; the screen wants the size of the deduction, which is its absolute value.
+    // Written as a negation rather than an absolute so a positive net — which would mean somebody
+    // credited this account — comes out negative and visibly wrong instead of being hidden.
     return {
       netRestaurantRevenue: net("RESTAURANT_REVENUE_PAYABLE").toString(),
       netTip: net("TIP_PAYABLE").toString(),
       netPlatformFee: net("PLATFORM_FEE_REVENUE").toString(),
       tax: net("TAX_PAYABLE").toString(),
-      processingFee: null,
+      processorFeeNet: net("PROCESSOR_FEE").toString(),
       refundedAmount: net("REFUND_CONTRA").toString(),
+    };
+  }
+
+  /** ADR-094. The account nets plus the one thing they cannot answer on their own: whether the
+   *  processing fee is known. The fee is a DEBIT to PROCESSOR_FEE, so the generic credit-minus-debit
+   *  net is negative for it and the screen wants the size of the deduction — written as a negation
+   *  rather than an absolute value, so a positive net (which would mean somebody CREDITED this
+   *  account) comes out negative and visibly wrong instead of being quietly hidden. */
+  private async computeBreakdown(transaction: {
+    id: string;
+    paymentId: string;
+    processorFeeBalanceTxnId: string | null;
+  }): Promise<TransactionBreakdown> {
+    const { processorFeeNet, ...nets } = await this.computeNets(transaction.id);
+    const status = await processorFeeStatus(this.prisma, transaction);
+    return {
+      ...nets,
+      processingFee: status === "available" ? (-BigInt(processorFeeNet)).toString() : null,
+      processingFeeStatus: status,
     };
   }
 
@@ -196,7 +236,10 @@ export class TransactionService {
       "id,restaurantId,grossAmount,currency,status,createdAt,netRestaurantRevenue,netTip,netPlatformFee,tax,refundedAmount";
     const lines = await Promise.all(
       rows.map(async (t) => {
-        const b = await this.computeBreakdown(t.id);
+        // ADR-094. The CSV omits processingFee entirely (ADR-025), so it asks for the account
+        // nets alone and never pays for the fee-status lookup — one query per row here, not two,
+        // on an export that has no pagination.
+        const b = await this.computeNets(t.id);
         return [
           t.id,
           t.restaurantId,
@@ -216,12 +259,6 @@ export class TransactionService {
     return [header, ...lines].join("\n");
   }
 
-  /**
-   * ADR-043. Scoped by the Memberships that actually carry , not by every
-   * Membership the caller holds. The earlier version filtered by reachability alone, which let a
-   * permission held in one Organization widen a list built from a Membership in another — proved
-   * by , which exported another restaurant's rows as a Waiter.
-   */
   /**
    * ADR-043. Scoped by the Memberships that actually carry `reports.view`, never by every
    * Membership the caller holds.
