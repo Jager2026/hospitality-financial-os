@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.38.0
+version: 2.39.0
 status: Active
 classification: Critical
 priority: Highest
@@ -467,6 +467,10 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **A second one, 2026-09-14 — and this time the evidence was destroyed by the session that needed it, one step earlier than last time.** Branch `docs/sprint16-processor-costs` (documentation only: four files under `docs/`, no code, no schema): `pnpm run gate` failed at step 9 with **one backend test failing, 458 of 459**. The gate's output had been piped to `tail -12`, so the failing test's name scrolled past unread. Nothing else held it — this project's `vitest` writes no `results.json`, confirmed by searching for one **before** anything was re-run. A captured re-run of the same suite was green, 459 of 459. **Known:** the branch changes no code, so nothing under test moved; the run was against the accumulated development database rather than a reset one. **Unknown:** which test, which assertion — so it stays open on exactly the terms of the entry above.
 
   **The rule it breaks was already written, which is the finding.** `CLAUDE.md` says the failure log is read before anything is re-run, and nothing *was* re-run before looking. The rule was broken earlier than the re-run: `| tail -12` is a decision about what to keep, taken before there is anything to keep. **A pipe that truncates is the same act as deleting the log, moved earlier in time** — so the gate's output goes to a file with `tee`, and the file is what gets read.
+
+  **The next day the same count came back, and this time it had a name — because the output went to a file.** 2026-09-14, branch `docs/sprint16-oc15-labels`, again documentation only, again **458 of 459**: `outbox-poller.service.spec.ts:949`, ADR-083's backoff test, `expected 1 to be 2`. Diagnosed rather than re-run: the poller takes the fifty oldest due rows, the test's event is the newest, and the test's own clock jump pulls a crowd of older backed-off rows into the due set — **90 queued, 85 due, batch 50** at the moment of failure. Green on the same commit after `pnpm run db:reset`, which is a discriminating pair on queue depth with no code changed between the runs. It is **OC-10**, whose whole content this is.
+
+  **What this says about the entry above, carefully.** The 2026-09-14 failure matches the 2026-09-13 one in count (458 of 459) and in circumstance — documentation-only branch, accumulated database — and the session that produced the earlier run had just executed measurement scripts that leave exactly this litter. **That is a resemblance, not an identification.** The earlier failure has no test name and never will; it stays recorded as unknown, and the established claim covers 2026-09-14 alone.
 
   **Deferred, with two things shipped in the meantime** (ADR-046's PR): `global-setup.ts` prints the counts unconditionally, and escalates to an explicit WARNING naming `db:reset` once `unpublished >= 50`. Neither fixes accumulation; together they remove the need to remember the rule before suspecting it, and turn a vague "too many rows" into the one number with a hard edge. **No trigger date — next whenever test infrastructure gets a slot.** The instrument stays useful afterwards: a count near zero is the fastest confirmation that cleanup actually works.
 
