@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.6.0
+version: 1.7.0
 status: Active
 classification: Critical
 owner: Founder
@@ -518,28 +518,83 @@ reason sits beside them in `schema.prisma`: one UAB legitimately owns several ve
 
 ---
 
-## OC-14 — The dispute fee is real money that nothing records
+## OC-14 — The dispute fee leaves the restaurant's balance and nothing records it
 
 | | |
 |---|---|
-| **Status** | Open. Measured 2026-09-13 (**ADR-091**). |
+| **Status** | Open, and **reformulated on 2026-09-14** after the measurement in **ADR-092**. |
 | **Open since** | 2026-09-13 |
-| **What closes it** | A decision about where a **processor cost** lives in the Ledger — there is no account for one today — and then an entry actually posted for it. |
-| **Owner** | Founder. It is a cost question before it is a schema question. |
-| **What it gates** | The accuracy of any per-restaurant profitability figure, once disputes exist. |
+| **What closes it** | An **entry**, not an account: recording that the restaurant's money left. It cannot be written until the fee's amount is available, and that arrives on `charge.dispute.funds_withdrawn` — the event that falls to `default` today (**OC-7**). |
+| **Owner** | Founder — it is a question about what this Ledger is for before it is a schema question. |
+| **What it gates** | The accuracy of any figure claiming to describe what a venue actually received. |
 | **Trigger** | **The first venue taking real traffic** — not the first dispute, which is the event that produces the gap. |
 
-Stripe debits the payment amount **and** the dispute fee, and does not return the fee whether the
-dispute is won or lost — both quoted verbatim in ADR-091. This Ledger posts the amount and nothing
-else: `ledger_account` holds no processor-cost account (`processor_clearing`,
-`restaurant_revenue_payable`, `tip_payable`, `platform_fee_revenue`, `tax_payable`,
-`refund_contra`) and `journal_entry_type` holds no entry a fee could be.
+**What the first version of this row got wrong.** It called the dispute fee a platform cost and
+asked where a *processor-cost account* should live. That was reasoning rather than measurement.
+**ADR-092 established the opposite by reading the configuration the accounts are created with:**
+these are direct charges on the restaurant's connected account, `fees_collector` is `stripe`, and
+Stripe's own fee-payer table bills the dispute fee to the **connected account**. The disputed
+amount, separately, *"Stripe debits […] from the connected account's balance, not your platform's
+balance."*
 
-**Nothing recorded is wrong; something real is unrecorded.** That is the distinction that makes this
-a condition rather than a defect — every number in the Ledger balances, and the missing entry is for
-an event this system does not process. Its **size is also unknown**: the fee is per-network and
-per-contract, and this project has never seen a live one. Measuring that is part of closing the row,
-not a precondition for opening it.
+**So the shape is: a missing entry, never a missing account.** The restaurant loses the disputed
+amount *plus* the fee; the Ledger records the amount and is silent about the rest. Nothing recorded
+is wrong, which is why this is a condition — but the silence is about somebody else's money, which
+is a different kind of silence than a cost we forgot to book.
+
+**The size is still unknown**, and unknowable from here: the fee is per-network and per-contract and
+this project has never seen a live one. **The blocker is structural rather than commercial** — the
+number arrives in a `balance_transaction` on an event we acknowledge and discard, so OC-7 is
+upstream of this row.
+
+---
+
+## OC-15 — The chart of accounts describes a Connect topology this code does not use
+
+| | |
+|---|---|
+| **Status** | Open. Measured 2026-09-14 (**ADR-092**), while answering a narrower question. |
+| **Open since** | 2026-09-14 |
+| **What closes it** | A decision — **not a repair** — about which of the two documents is describing something that is not happening: ADR-002's chart of accounts, or the integration. |
+| **Owner** | Founder |
+| **What it gates** | What `RESTAURANT_REVENUE_PAYABLE` means in any report; what a `PAYOUT` entry would ever be for; whether Stripe's per-payment processing fee belongs in these books. |
+| **Trigger** | **Before the first report is shown to a venue** — a number is hardest to correct after somebody has read it. |
+
+ADR-002 names *"Processor Clearing (asset)"* and *"Restaurant Revenue Payable (liability)"* — a
+platform that holds the customer's money and owes the restaurant its share. That is correct for
+destination charges or separate charges and transfers. **This integration creates direct charges:**
+the money lands on the restaurant's own Stripe balance, the platform's `application_fee_amount` is
+pulled out of it, and Stripe's fees are deducted from the same balance. **The platform holds no
+asset and owes no liability.**
+
+**This is not an assertion that the numbers are wrong.** A ledger of transaction *economics* — who
+earned what — is a defensible thing to keep, and every entry balances. What is in question is the
+**labels**, and one consequence of them: Stripe's processing fee reduces what the venue actually
+receives **on every payment**, not only on the ones that go wrong, and these books do not show it.
+That makes this row the general case of which **OC-14** is one instance.
+
+---
+
+## OC-16 — A late win after a lost dispute would be acknowledged and ignored
+
+| | |
+|---|---|
+| **Status** | Open. Found in Stripe's documentation on 2026-09-14 (ADR-092), not reproduced. |
+| **Open since** | 2026-09-14 |
+| **What closes it** | Allowing `handleDisputeClosed` to act on a Chargeback that is already `LOST` when the dispute's status comes back `won`. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Nothing today. It is one venue's money on a rare path. |
+| **Trigger** | **The first venue taking real traffic** — a late win is only possible after a real loss. |
+
+> "Although the outcome of a dispute is normally final, in rare cases the status can change from
+> lost to won. When this occurs, Stripe labels the dispute as a **late win** and returns the funds
+> to your balance." — `stripe docs /disputes/how-disputes-work`
+
+`handleDisputeClosed` returns early when `chargeback.status !== "UNDER_REVIEW"`. That early return
+is the dedup safety net ADR-090 relies on, and it is right for a redelivered `closed`. **It is also
+what would swallow a genuine second outcome**, leaving the provisional loss standing against money
+that came back. Recorded rather than fixed because the two cases are told apart by the payload's own
+status, and separating them is a change to the dispute handler — its own axis, its own pull request.
 
 ---
 
