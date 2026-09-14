@@ -1,6 +1,6 @@
 ---
 title: IMPLEMENTATION_PLAN
-version: 2.37.0
+version: 2.38.0
 status: Active
 classification: Critical
 priority: Highest
@@ -463,6 +463,10 @@ Not a dependency upgrade, but deferred by the same rule — an explicit decision
   **Consequence for whoever picks this up: a fix for accumulation does not fix interference.** Per-file transactional rollback would close both; a cleanup hook that runs between files closes only the first, and would have left this failure exactly where it is.
 
   **An unreproduced failure on the same day, recorded rather than closed.** 2026-09-02, branch `docs/masterplan-positioning` (documentation only, code identical to `main`): `db:reset` followed by the full suite → **one backend test failed, 343 of 344**; frontend green. **The log was deleted before it was read**, and two subsequent full runs were green (344/344). vitest's `results.json` was checked afterwards and had already been overwritten by the green runs. **Known:** it was not this entry's mechanism — the run was on a freshly reset database, and the poller spec passes in isolation against far more debris than a fresh database holds. **Unknown:** which test, which assertion. It stays open as a failure of unknown cause; two green runs establish non-reproducibility, not absence. The rule this produced is in `CLAUDE.md`, Testing Review.
+
+  **A second one, 2026-09-14 — and this time the evidence was destroyed by the session that needed it, one step earlier than last time.** Branch `docs/sprint16-processor-costs` (documentation only: four files under `docs/`, no code, no schema): `pnpm run gate` failed at step 9 with **one backend test failing, 458 of 459**. The gate's output had been piped to `tail -12`, so the failing test's name scrolled past unread. Nothing else held it — this project's `vitest` writes no `results.json`, confirmed by searching for one **before** anything was re-run. A captured re-run of the same suite was green, 459 of 459. **Known:** the branch changes no code, so nothing under test moved; the run was against the accumulated development database rather than a reset one. **Unknown:** which test, which assertion — so it stays open on exactly the terms of the entry above.
+
+  **The rule it breaks was already written, which is the finding.** `CLAUDE.md` says the failure log is read before anything is re-run, and nothing *was* re-run before looking. The rule was broken earlier than the re-run: `| tail -12` is a decision about what to keep, taken before there is anything to keep. **A pipe that truncates is the same act as deleting the log, moved earlier in time** — so the gate's output goes to a file with `tee`, and the file is what gets read.
 
   **Deferred, with two things shipped in the meantime** (ADR-046's PR): `global-setup.ts` prints the counts unconditionally, and escalates to an explicit WARNING naming `db:reset` once `unpublished >= 50`. Neither fixes accumulation; together they remove the need to remember the rule before suspecting it, and turn a vague "too many rows" into the one number with a hard edge. **No trigger date — next whenever test infrastructure gets a slot.** The instrument stays useful afterwards: a count near zero is the fastest confirmation that cleanup actually works.
 

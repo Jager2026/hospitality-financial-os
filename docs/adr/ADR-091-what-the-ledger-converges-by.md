@@ -1,6 +1,6 @@
 ---
 title: ADR-091 — What the Ledger converges by when a dispute closes
-version: 1.0.0
+version: 1.1.0
 status: Accepted
 classification: Critical
 owner: Founder
@@ -155,10 +155,17 @@ nothing in this Ledger.
 
 **This is an open condition, not a defect, and the distinction is exact:** every number the Ledger
 holds is right, and the Ledger's own invariant (each entry balances per currency) is untouched.
-What is missing is an entry for an event we do not process — the platform's own cost, borne
-somewhere off-book. Recorded as **OC-14**, with the trigger on the precondition rather than on the
-occurrence: a dispute is itself the thing that makes the gap real, so waiting for one is waiting too
-long.
+What is missing is an entry for an event we do not process. Recorded as **OC-14**, with the trigger
+on the precondition rather than on the occurrence: a dispute is itself the thing that makes the gap
+real, so waiting for one is waiting too long.
+
+**Corrected the next day by [ADR-092](ADR-092-the-platform-pays-stripe-nothing.md), and the
+correction matters.** The sentence that first stood here called the fee *"the platform's own cost,
+borne somewhere off-book"* — that was reasoning, not measurement, and it was wrong. These are
+**direct charges** on the restaurant's connected account, and the account is created with
+`fees_collector: "stripe"`, which per Stripe's own fee-payer table bills the dispute fee to the
+**connected account**. So the fee is the restaurant's money leaving, not ours; the missing thing is
+an **entry**, never an account. OC-14 is rewritten on that footing.
 
 ---
 
