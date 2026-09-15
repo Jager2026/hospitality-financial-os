@@ -63,8 +63,30 @@ const MANAGER_PERMISSIONS = [
   "data.export",
 ];
 
+/**
+ * **The seeded Role names, and the one place they are written.**
+ *
+ * They existed in three copies until 2026-09-15: here, in `test/fixtures/authenticated-user.ts`,
+ * and inline inside the repository invariant whose whole job is to stop fixtures inventing a
+ * seeded Role's permissions. **The invariant's copy had already drifted** — it listed four names
+ * and did not list `Accountant`, so a fixture wearing that name with an invented permission list
+ * would have passed the check written to catch exactly that. Nothing was wrong in the tree; the
+ * hole was open.
+ *
+ * `as const` is load-bearing: `ROLES` below is typed against this tuple, so adding a Role to that
+ * array without adding its name here does not compile.
+ */
+export const SEEDED_ROLE_NAMES = [
+  "Owner",
+  "Administrator",
+  "Manager",
+  "Accountant",
+  "Waiter",
+] as const;
+export type SeededRoleName = (typeof SEEDED_ROLE_NAMES)[number];
+
 const ROLES: Array<{
-  name: string;
+  name: SeededRoleName;
   description: string;
   permissions: readonly string[];
   /** ADR-044: true = ours to grant, never offered to a Restaurant. */

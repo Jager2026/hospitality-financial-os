@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SEEDED_ROLE_NAMES } from "../../prisma/seed";
 import {
   REDACTED_USER_STRING_FIELDS,
   RETAINED_USER_STRING_FIELDS,
@@ -266,7 +267,10 @@ describe("repository invariants", () => {
   // and `syntheticCaller()` refuses one at runtime too.
   it("keeps seeded Role names out of hand-written permission fixtures", () => {
     const SRC = join(REPO_ROOT, "apps", "backend", "src");
-    const SEEDED = ["Owner", "Administrator", "Manager", "Waiter"];
+    // Read from the seed, never retyped. This line used to be a fourth-hand copy missing
+    // "Accountant", so the check that exists to stop a fixture inventing a seeded Role's
+    // permissions could not see one wearing that name. The list and the checker are now one thing.
+    const SEEDED = [...SEEDED_ROLE_NAMES];
 
     function walk(dir: string): string[] {
       return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

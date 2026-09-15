@@ -7,13 +7,8 @@ import { AppModule } from "../../src/app.module";
 import { hashPassword } from "../../src/auth/password.util";
 import { OutboxPollerService } from "../../src/outbox/outbox-poller.service";
 import { PrismaService } from "../../src/prisma/prisma.service";
-import type {
-  ConnectAccountStatus,
-  CreateConnectAccountParams,
-  CreatedPaymentIntent,
-  CreatePaymentIntentParams,
-} from "../../src/stripe/stripe.service";
 import { StripeService } from "../../src/stripe/stripe.service";
+import { createFakeStripe } from "../fixtures/fake-stripe";
 
 // IMPLEMENTATION_PLAN.md, Sprint 12: "Load testing on the Payment/Ledger path." Lives under
 // test/, not src/ — vitest.config.ts's own `include: ["src/**/*.spec.ts"]` never picks this file
@@ -29,51 +24,6 @@ import { StripeService } from "../../src/stripe/stripe.service";
 // 429s caused by an earlier phase's own traffic, not a Ledger correctness problem — found exactly
 // this way on the first run of this file, not assumed in advance.
 const WEBHOOK_SECRET = "whsec_load_test_secret";
-
-class FakeStripeService {
-  private readonly stripe = new Stripe("sk_test_load_never_calls_network");
-
-  async createConnectAccount(_params: CreateConnectAccountParams): Promise<string> {
-    return `acct_load_${randomUUID()}`;
-  }
-
-  async createOnboardingLink(): Promise<string> {
-    return "https://example.com/onboarding";
-  }
-
-  async getAccountStatus(): Promise<ConnectAccountStatus> {
-    return { cardPaymentsStatus: "active", payoutsStatus: "active", requirementsDue: null };
-  }
-
-  async createPaymentIntent(params: CreatePaymentIntentParams): Promise<CreatedPaymentIntent> {
-    return {
-      id: `pi_load_${randomUUID()}`,
-      clientSecret: `pi_load_secret_${randomUUID()}`,
-      amount: Number(params.amount),
-      currency: params.currency.toLowerCase(),
-    };
-  }
-
-  constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
-    return this.stripe.webhooks.constructEvent(rawBody, signature, WEBHOOK_SECRET);
-  }
-  /**
-   * ADR-094. A fake that never reaches Stripe has no BalanceTransaction to offer, and `null` is the
-   * real method's own word for *not yet* — so the poller retries and, after its four attempts,
-   * abandons the request. Nothing is posted to the Ledger, which keeps this double's behaviour
-   * where it was before the fee existed.
-   *
-   * It is defined in five copies because `FakeStripeService` is, and that is the standing cost of
-   * five hand-written doubles of one interface: the method was added to the real service and every
-   * copy broke at runtime, not at compile time.
-   */
-  async retrieveProcessingFee(
-    _stripeAccountId: string,
-    _paymentIntentId: string,
-  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
-    return null;
-  }
-}
 
 function signEvent(payload: object): { rawBody: string; signature: string } {
   const raw = JSON.stringify(payload);
@@ -119,7 +69,13 @@ async function bootLoadTestApp(label: string): Promise<LoadTestContext> {
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(StripeService)
-    .useValue(new FakeStripeService())
+    .useValue(
+      createFakeStripe({
+        accountPrefix: "acct_load",
+        webhookSecret: WEBHOOK_SECRET,
+        requirementsDue: null,
+      }),
+    )
     .compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   app.setGlobalPrefix("api/v1", { exclude: ["health", "webhooks/stripe"] });

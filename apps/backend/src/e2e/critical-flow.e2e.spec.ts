@@ -9,67 +9,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../app.module";
 import { OutboxPollerService } from "../outbox/outbox-poller.service";
 import { PrismaService } from "../prisma/prisma.service";
-import type {
-  ConnectAccountStatus,
-  CreateConnectAccountParams,
-  CreatedPaymentIntent,
-  CreatePaymentIntentParams,
-} from "../stripe/stripe.service";
 import { StripeService } from "../stripe/stripe.service";
 import { PLATFORM_TERMS_PLACEHOLDER } from "../common/agreements/agreement-versions";
+import { createFakeStripe } from "../../test/fixtures/fake-stripe";
 
 const WEBHOOK_SECRET = "whsec_e2e_test_secret";
-
-/** Stands in for the real StripeService at exactly the network boundary — every other real
- * Controller/Guard/Service/Prisma/Ledger/Outbox class in the app runs unmodified, driven by real
- * HTTP requests through the actual AppModule. Only the literal outbound call to Stripe's API is
- * replaced — the same boundary every other spec file in this codebase already stubs (no test
- * anywhere makes a live Stripe network call). `constructWebhookEvent` is real local HMAC
- * verification (no network), so the webhook step still proves real signature verification. */
-class FakeStripeService {
-  private readonly stripe = new Stripe("sk_test_e2e_never_calls_network");
-
-  async createConnectAccount(_params: CreateConnectAccountParams): Promise<string> {
-    return `acct_e2e_${randomUUID()}`;
-  }
-
-  async createOnboardingLink(): Promise<string> {
-    return "https://example.com/onboarding";
-  }
-
-  async getAccountStatus(): Promise<ConnectAccountStatus> {
-    return { cardPaymentsStatus: "active", payoutsStatus: "active", requirementsDue: null };
-  }
-
-  async createPaymentIntent(params: CreatePaymentIntentParams): Promise<CreatedPaymentIntent> {
-    return {
-      id: `pi_e2e_${randomUUID()}`,
-      clientSecret: `pi_e2e_secret_${randomUUID()}`,
-      amount: Number(params.amount),
-      currency: params.currency.toLowerCase(),
-    };
-  }
-
-  constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
-    return this.stripe.webhooks.constructEvent(rawBody, signature, WEBHOOK_SECRET);
-  }
-  /**
-   * ADR-094. A fake that never reaches Stripe has no BalanceTransaction to offer, and `null` is the
-   * real method's own word for *not yet* — so the poller retries and, after its four attempts,
-   * abandons the request. Nothing is posted to the Ledger, which keeps this double's behaviour
-   * where it was before the fee existed.
-   *
-   * It is defined in five copies because `FakeStripeService` is, and that is the standing cost of
-   * five hand-written doubles of one interface: the method was added to the real service and every
-   * copy broke at runtime, not at compile time.
-   */
-  async retrieveProcessingFee(
-    _stripeAccountId: string,
-    _paymentIntentId: string,
-  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
-    return null;
-  }
-}
 
 // Returns the raw JSON *string*, not a Buffer — supertest/superagent, given an explicit
 // `Content-Type: application/json` and a Buffer body, re-serializes it via JSON.stringify (which
@@ -135,7 +79,13 @@ describe("Critical flow (E2E, real HTTP, real database)", () => {
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(StripeService)
-      .useValue(new FakeStripeService())
+      .useValue(
+        createFakeStripe({
+          accountPrefix: "acct_e2e",
+          webhookSecret: WEBHOOK_SECRET,
+          requirementsDue: null,
+        }),
+      )
       .compile();
 
     app = moduleRef.createNestApplication({ rawBody: true });
