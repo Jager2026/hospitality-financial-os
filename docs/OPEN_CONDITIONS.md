@@ -1,6 +1,6 @@
 ---
 title: OPEN_CONDITIONS
-version: 1.9.0
+version: 1.10.0
 status: Active
 classification: Critical
 owner: Founder
@@ -691,6 +691,62 @@ is the dedup safety net ADR-090 relies on, and it is right for a redelivered `cl
 what would swallow a genuine second outcome**, leaving the provisional loss standing against money
 that came back. Recorded rather than fixed because the two cases are told apart by the payload's own
 status, and separating them is a change to the dispute handler — its own axis, its own pull request.
+
+---
+
+## OC-18 — Seventy-one places where the compiler was told to stop checking
+
+| | |
+|---|---|
+| **Status** | Open. Measured 2026-09-15 (**ADR-095**). |
+| **Open since** | 2026-09-15 |
+| **What closes it** | Nothing in one change. Each `as any` is a spec-by-spec judgment: some stand in for a real service and should carry a contract, others silence a library type and are reasonable. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | The reach of ADR-095's contract, which cannot see past an assertion. |
+| **Trigger** | **Whenever a service gains a method** — that is the moment a silenced double lies, and the moment the cost is visible. |
+
+**71 `as any` assertions across 15 spec files**, plus **31 `ConfigService` stand-ins in 19 files**
+that retype the product's own configuration with nothing comparing them to `env.validation.ts`.
+
+**A type-level mechanism cannot reach them by construction** — that is what the assertion is for.
+ADR-095's contract covers the one double that was worth a contract; this row is the rest of the
+population, written down so the mechanism is not mistaken for coverage of the whole class.
+
+**The `ConfigService` half is the sharper one.** A stub answering `DEFAULT_PLATFORM_FEE_BASIS_POINTS`
+with `100` keeps answering `100` after the product's default moves, and every test built on it keeps
+passing while describing a system that no longer exists. That is the fixture-drift class ADR-095
+measured, in the one place where no mechanism exists at all.
+
+---
+
+## OC-19 — One hundred and fifty-one positional constructions, and nothing holds the order
+
+| | |
+|---|---|
+| **Status** | Open. Measured 2026-09-15 (**ADR-095**), deliberately not repaired. |
+| **Open since** | 2026-09-15 |
+| **What closes it** | A decision about whether specs construct services positionally at all — and if they keep doing so, what makes a wrong order fail to compile. |
+| **Owner** | AI Technical Co-Founder |
+| **What it gates** | Nothing today. It is the cost of the next dependency added to a constructor. |
+| **Trigger** | **Before the next dependency is inserted anywhere but the end of a constructor.** |
+
+**151 positional `new …Service(...)` sites in specs.** The widest is **`WebhooksService` at six
+arguments, across nine files**; `OutboxPollerService` has eight sites in one file, also six. 42 of
+the 151 take no arguments at all.
+
+**What holds the order today: the type checker, and only where the types differ.** Two adjacent
+parameters of different types cannot be swapped silently — but two of the same type can, and a
+dependency inserted in the *middle* shifts every argument after it while each still typechecks if
+the shapes happen to line up.
+
+**The price, paid in ADR-094's own pull request:** a dependency inserted before `logger` shifted the
+argument after it at **eight** call sites in one file. Nothing failed to compile — the logger was
+accepted in the new parameter's position — and the failure arrived at runtime as
+`this.logger.setContext is not a function` in **seven** tests, naming nothing about the real cause.
+
+**Not repaired here on purpose.** 151 sites is its own axis; changing them alongside the doubles
+would make the next failure unattributable, which is ADR-058's lesson about isolating a cause
+exactly once.
 
 ---
 

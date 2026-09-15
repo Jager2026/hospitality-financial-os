@@ -7,78 +7,12 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../app.module";
 import { PrismaService } from "../prisma/prisma.service";
-import type {
-  ConnectAccountStatus,
-  CreateConnectAccountParams,
-  CreatedPaymentIntent,
-  CreatePaymentIntentParams,
-} from "../stripe/stripe.service";
 import { StripeService } from "../stripe/stripe.service";
 import { PLATFORM_TERMS_PLACEHOLDER } from "../common/agreements/agreement-versions";
+import { createFakeStripe } from "../../test/fixtures/fake-stripe";
 
 const WEBHOOK_SECRET = "whsec_e2e_test_secret";
 const PASSWORD = "correct horse battery staple";
-
-/**
- * What closing a venue does, and what it deliberately does not do (ADR-054).
- *
- * Closing was implemented in Sprint 3 and **had no test of any kind** until this file — eleven
- * filtered read sites and eight deliberately unfiltered ones, none of them asserted anywhere. The
- * behaviour was correct by reading and unproven by execution, which is a weaker basis than an
- * access-affecting flag deserves.
- *
- * Three claims, each with the falsification that would break it:
- *
- *   1. A closed venue disappears from every OPERATIONAL route. Remove `deletedAt: null` from a
- *      gate and the matching case here fails.
- *   2. A closed venue's money stays visible on REPORTING routes. Add the filter there and these
- *      fail. Both halves are required: a suite that only proved disappearance would pass against
- *      an implementation that erased the venue's financial history, which is the outcome the
- *      ten-year retention floor forbids.
- *   3. A webhook arriving AFTER closure is processed and reaches the Ledger. This is the case
- *      that cannot be checked by reading a route table at all — the capture that was in flight
- *      when the owner clicked close, and the chargeback six months later.
- */
-class FakeStripeService {
-  private readonly stripe = new Stripe("sk_test_e2e_never_calls_network");
-
-  async createConnectAccount(_params: CreateConnectAccountParams): Promise<string> {
-    return `acct_closed_${randomUUID()}`;
-  }
-  async getAccountStatus(_accountId: string): Promise<ConnectAccountStatus> {
-    return { cardPaymentsStatus: "active", payoutsStatus: "active", requirementsDue: [] };
-  }
-  async createAccountLink(_accountId: string): Promise<string> {
-    return "https://connect.stripe.test/never-followed";
-  }
-  async createPaymentIntent(params: CreatePaymentIntentParams): Promise<CreatedPaymentIntent> {
-    return {
-      id: `pi_closed_${randomUUID()}`,
-      clientSecret: `pi_closed_secret_${randomUUID()}`,
-      amount: Number(params.amount),
-      currency: params.currency.toLowerCase(),
-    };
-  }
-  constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
-    return this.stripe.webhooks.constructEvent(rawBody, signature, WEBHOOK_SECRET);
-  }
-  /**
-   * ADR-094. A fake that never reaches Stripe has no BalanceTransaction to offer, and `null` is the
-   * real method's own word for *not yet* — so the poller retries and, after its four attempts,
-   * abandons the request. Nothing is posted to the Ledger, which keeps this double's behaviour
-   * where it was before the fee existed.
-   *
-   * It is defined in five copies because `FakeStripeService` is, and that is the standing cost of
-   * five hand-written doubles of one interface: the method was added to the real service and every
-   * copy broke at runtime, not at compile time.
-   */
-  async retrieveProcessingFee(
-    _stripeAccountId: string,
-    _paymentIntentId: string,
-  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
-    return null;
-  }
-}
 
 /** A raw JSON *string*, not a Buffer — superagent re-serialises a Buffer under a json
  * Content-Type and breaks byte equality with what was signed. Same reasoning, and same hard-won
@@ -150,7 +84,7 @@ describe("A closed venue (E2E, real HTTP, real database)", () => {
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(StripeService)
-      .useValue(new FakeStripeService())
+      .useValue(createFakeStripe({ accountPrefix: "acct_closed", webhookSecret: WEBHOOK_SECRET }))
       .compile();
 
     app = moduleRef.createNestApplication({ rawBody: true });

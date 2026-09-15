@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import type { AuthenticatedUser } from "../../src/auth/guards/jwt-auth.guard";
+import { SEEDED_ROLE_NAMES, type SeededRoleName } from "../../prisma/seed";
 
 /**
  * Two ways to build an `AuthenticatedUser`, and the whole point is that they are two.
@@ -21,14 +22,10 @@ import type { AuthenticatedUser } from "../../src/auth/guards/jwt-auth.guard";
  * runtime**, which puts the rule where someone will meet it rather than only in a review comment.
  */
 
-export const SEEDED_ROLE_NAMES = [
-  "Owner",
-  "Administrator",
-  "Manager",
-  "Accountant",
-  "Waiter",
-] as const;
-export type SeededRoleName = (typeof SEEDED_ROLE_NAMES)[number];
+// Re-exported rather than restated: `prisma/seed.ts` owns this list (2026-09-15). The copy that
+// used to live here agreed with the seed, which is precisely why nobody noticed that a THIRD copy,
+// inside the invariant, did not.
+export { SEEDED_ROLE_NAMES, type SeededRoleName };
 
 /** The Role exactly as seeded — id, name, and the Permission names actually granted to it. */
 export async function seededRole(

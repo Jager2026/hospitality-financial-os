@@ -8,14 +8,9 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../app.module";
 import { PrismaService } from "../prisma/prisma.service";
-import type {
-  ConnectAccountStatus,
-  CreateConnectAccountParams,
-  CreatedPaymentIntent,
-  CreatePaymentIntentParams,
-} from "../stripe/stripe.service";
 import { StripeService } from "../stripe/stripe.service";
 import { PLATFORM_TERMS_PLACEHOLDER } from "../common/agreements/agreement-versions";
+import { createFakeStripe } from "../../test/fixtures/fake-stripe";
 
 /**
  * Does a permission held in ONE Organization leak into a Restaurant in ANOTHER?
@@ -43,42 +38,6 @@ import { PLATFORM_TERMS_PLACEHOLDER } from "../common/agreements/agreement-versi
  */
 
 const OWNER_PASSWORD = "correct horse battery staple";
-
-class FakeStripeService {
-  async createConnectAccount(_params: CreateConnectAccountParams): Promise<string> {
-    return `acct_scope_${randomUUID()}`;
-  }
-  async getAccountStatus(_accountId: string): Promise<ConnectAccountStatus> {
-    return { cardPaymentsStatus: "active", payoutsStatus: "active", requirementsDue: [] };
-  }
-  async createAccountLink(_accountId: string): Promise<string> {
-    return "https://connect.stripe.test/never-followed";
-  }
-  async createPaymentIntent(_params: CreatePaymentIntentParams): Promise<CreatedPaymentIntent> {
-    return {
-      id: `pi_scope_${randomUUID()}`,
-      clientSecret: "cs_scope_never_used",
-      amount: 0,
-      currency: "eur",
-    };
-  }
-  /**
-   * ADR-094. A fake that never reaches Stripe has no BalanceTransaction to offer, and `null` is the
-   * real method's own word for *not yet* — so the poller retries and, after its four attempts,
-   * abandons the request. Nothing is posted to the Ledger, which keeps this double's behaviour
-   * where it was before the fee existed.
-   *
-   * It is defined in five copies because `FakeStripeService` is, and that is the standing cost of
-   * five hand-written doubles of one interface: the method was added to the real service and every
-   * copy broke at runtime, not at compile time.
-   */
-  async retrieveProcessingFee(
-    _stripeAccountId: string,
-    _paymentIntentId: string,
-  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
-    return null;
-  }
-}
 
 interface Actor {
   email: string;
@@ -208,7 +167,7 @@ describe("Permission scope across Organizations (E2E, real HTTP, real database)"
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(StripeService)
-      .useValue(new FakeStripeService())
+      .useValue(createFakeStripe({ accountPrefix: "acct_scope" }))
       .compile();
 
     app = moduleRef.createNestApplication({ rawBody: true });
