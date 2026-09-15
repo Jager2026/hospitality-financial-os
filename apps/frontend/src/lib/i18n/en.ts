@@ -349,6 +349,20 @@ export const en = {
   "error.retry": "Try again",
 
   // Sample content used by the specimen — real strings, never lorem
+  // ADR-096. One question, one sentence. "Available", never "in your account": Stripe makes the
+  // money available on that date, and the payout and the bank each take their own time after it.
+  "shiftClose.title": "Last closed shift",
+  "shiftClose.arrival": "{amount} available {date}",
+  "shiftClose.counting": "Counting up — a moment",
+  "shiftClose.stillCounting": "{count} more still counting up",
+  "shiftClose.neverKnown": "Stripe never sent the figures for this shift",
+  "shiftClose.someNeverKnown": "{count} payments Stripe never sent figures for",
+  "shiftClose.unknown": "Not in yet",
+  "shiftClose.gross": "Bill total",
+  "shiftClose.tips": "Tips (the staff’s)",
+  "shiftClose.stripeFee": "Card processing",
+  "shiftClose.platformFee": "Our fee",
+  "shiftClose.net": "Yours from this shift",
   "dashboard.todayRevenue": "Today’s revenue",
   "dashboard.todayRevenueNote": "Before platform fee deduction",
   "dashboard.todayTips": "Tips today",

@@ -1,6 +1,6 @@
 ---
 title: DATABASE
-version: 2.24.0
+version: 2.25.0
 status: Active
 classification: Internal
 owner: Founder
@@ -255,6 +255,8 @@ LedgerLine
 **Purpose:** One debit or credit inside a JournalEntry — the actual money movement (ADR-002).
 
 **Fields:** id, journal_entry_id, account (`processor_clearing` / `restaurant_revenue_payable` / `tip_payable` / `platform_fee_revenue` / `tax_payable` / `refund_contra` / `processor_fee`), direction (`debit` / `credit`), amount (BIGINT, minor units), currency, restaurant_id (nullable), membership_id (nullable), shift_id (nullable), created_at
+
+**`funds_available_on` (ADR-096)** holds when this Transaction's money becomes available for payout — Stripe's `BalanceTransaction.available_on`, measured to be midnight UTC of the charge's UTC date plus the account's payout delay. It arrives in the same object as the fee and is written by the **same conditional update**, so the two cannot disagree about which delivery produced them. Keeping it is not about saving calls: without it, answering *when does this money arrive* at shift close would need Stripe reachable, and a venue's own closing figure must not fail for a reason outside that venue. **It is a snapshot, not a promise** — the payout delay shortens as an account matures, and whether Stripe re-dates existing transactions is not established.
 
 **`processor_fee` (ADR-094)** holds what Stripe deducted for processing a payment. Deliberately not named as the platform's expense: ADR-092 established that with direct charges the fee comes off the **connected** account's balance, so it is the venue's cost passing through these books. Its class in the chart of accounts is part of the rename OC-15 holds open and is not settled by this field existing.
 

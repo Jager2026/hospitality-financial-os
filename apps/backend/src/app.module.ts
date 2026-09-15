@@ -28,6 +28,7 @@ import { TipModule } from "./tip/tip.module";
 import { TransactionModule } from "./transaction/transaction.module";
 import { WalletModule } from "./wallet/wallet.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
+import { ShiftModule } from "./shift/shift.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { PaymentReconciliationModule } from "./payment-reconciliation/payment-reconciliation.module";
@@ -100,6 +101,7 @@ import { AuditLogInterceptor } from "./common/interceptors/audit-log.interceptor
     SettingsModule,
     WalletModule,
     TransactionModule,
+    ShiftModule,
     DashboardModule,
     AnalyticsModule,
     WebhooksModule,

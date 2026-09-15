@@ -1,6 +1,6 @@
 ---
 title: UX_MAP
-version: 2.14.0
+version: 2.15.0
 status: Active
 classification: Internal
 owner: Founder
@@ -386,6 +386,8 @@ If these questions cannot be answered within five seconds, the dashboard has fai
 **"Timeline" removed, "Audit Events" kept.** They were two names for one idea, and only one of them is buildable: every mutating action is already recorded (ADR-010), including who did it. Reading that back has no endpoint yet — a real gap, and a scheduled one, since an audit log nobody can read is the expensive half of an audit log.
 
 **New (ADR-008):** a Refund / Chargeback status, shown only when one exists on this Transaction — status, amount, and whether the tip was refunded. No action is available here for MVP; refunds are initiated through Stripe, not this screen (see `API_Contract.md`). This exists so an owner is never left wondering why a number changed. Every figure here — Net Amount, Tips, Processing Fee — reflects the current state after any Refund/Chargeback activity, not a snapshot frozen at the moment of capture, which is exactly why this exists: "why did this number change" always has an answer on this screen.
+
+**The Dashboard answers one question about the last closed shift, above everything else (ADR-096).** How much the shift earned and when the money arrives — *"€X available on 22 September"*, in the venue's own language. Below it and smaller: the bill total, the tips (labelled as the staff's, because they are), card processing, our fee, and what is left. **Two arrival dates stay two lines.** UTC midnight falls at 03:00 Vilnius in summer and 02:00 in winter, so a venue trading past those hours genuinely has two dates for one evening, and one line would state a date the money does not arrive on. The wording is **"available"**, never "in your account": Stripe makes funds available on that date and the payout and the bank each take their own time afterwards. While the last seconds of the evening are still being counted the line says so; when the figures will never arrive it says something different, because those are different facts. The block renders nothing at all when the venue has never closed a shift, or when its own request fails — the rest of the screen is still true, and an error where a figure belongs would claim otherwise.
 
 **Processing Fee is a real number since ADR-094 (Sprint 16), and carries three states rather than two.** *Known* renders the money — including a genuine `0`, which is an answer rather than an absence. *Not in yet* says a number is coming, because between the payment and the scheduled fetch there is a window of seconds where it truly is not known. *Never received from Stripe* says the opposite, and the two are worded apart on purpose: a reader who cannot distinguish them keeps waiting for a figure that is not coming. The paragraph below is what this screen said before, kept because its facts were right and its conclusion was wrong — the figure was unfetched, not unavailable:
 

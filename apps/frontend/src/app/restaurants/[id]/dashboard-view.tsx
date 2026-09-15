@@ -7,6 +7,7 @@ import { authedGet } from "../../../lib/auth/authed-fetch";
 import { RequireSession } from "../../../lib/auth/require-session";
 import { t } from "../../../lib/i18n";
 import { formatBasisPoints, formatMoney, venueMoneyLocale } from "../../../lib/money";
+import { ShiftCloseAnswer } from "./shift-close-answer";
 import { stripeBannerState, type StripeBannerState } from "../../../lib/stripe-state";
 
 /** The subset of `DashboardSummary` this screen reads. Money arrives as minor-unit strings. */
@@ -114,6 +115,12 @@ function Loaded({ id }: { id: string }): JSX.Element {
     <div className="space-y-8" data-testid="dashboard">
       <Header name={restaurant.data?.name ?? null} shift={data.shift} />
       <StripeBanner state={stripeBannerState(restaurant.data)} restaurantId={id} />
+      {/* ADR-096. The answer to the one question a closed shift is for, placed above the
+          current shift's figures because it is what somebody opens this screen at midnight to
+          read. It renders nothing at all when there is no closed shift yet, or when its own
+          request fails — the rest of the screen is still true, and an error where a figure
+          belongs would say otherwise. */}
+      <ShiftCloseAnswer restaurantId={id} currency={currency} locale={moneyLocale} />
       {data.shift === null ? (
         <Explanation titleKey="dashboard.noShift.title" explainKey="dashboard.noShift.explain" />
       ) : data.shiftTransactions === 0 ? (

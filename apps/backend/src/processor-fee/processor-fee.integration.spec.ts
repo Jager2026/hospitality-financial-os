@@ -76,7 +76,15 @@ function envelope(id: string, type: string, object: Record<string, unknown>) {
   };
 }
 
-type FeeReply = { balanceTransactionId: string; fee: bigint; currency: string } | null;
+// ADR-096 added `availableOn` to what the real method returns. This local type is a hand-written
+// copy of that shape, and the stub carrying it is silenced by an `as any` — so the compiler could
+// not see the drift and the suite had to. OC-18, biting inside the pull request that recorded it.
+type FeeReply = {
+  balanceTransactionId: string;
+  fee: bigint;
+  currency: string;
+  availableOn: Date;
+} | null;
 
 describe("the processing fee enters the Ledger (ADR-094)", { timeout: 30_000 }, () => {
   const prisma = new PrismaService();
@@ -280,7 +288,12 @@ describe("the processing fee enters the Ledger (ADR-094)", { timeout: 30_000 }, 
       const events = await feeEventFor(paymentId);
       expect(events, "capture did not request this payment's processing fee").toHaveLength(1);
 
-      feeReply = { balanceTransactionId: `txn_${randomUUID()}`, fee: 63n, currency: "EUR" };
+      feeReply = {
+        balanceTransactionId: `txn_${randomUUID()}`,
+        fee: 63n,
+        currency: "EUR",
+        availableOn: new Date(Date.UTC(2026, 8, 22)),
+      };
       await feeService().handle(events[0]);
 
       const entries = await prisma.journalEntry.findMany({
@@ -318,7 +331,12 @@ describe("the processing fee enters the Ledger (ADR-094)", { timeout: 30_000 }, 
     const { paymentId, transactionId } = await capturedPayment();
     const [event] = await feeEventFor(paymentId);
 
-    feeReply = { balanceTransactionId: `txn_${randomUUID()}`, fee: 63n, currency: "EUR" };
+    feeReply = {
+      balanceTransactionId: `txn_${randomUUID()}`,
+      fee: 63n,
+      currency: "EUR",
+      availableOn: new Date(Date.UTC(2026, 8, 22)),
+    };
     await feeService().handle(event);
 
     // A redelivery: the poller re-reads the row, so the second call sees it exactly as the first
@@ -406,7 +424,12 @@ describe("the processing fee enters the Ledger (ADR-094)", { timeout: 30_000 }, 
     const { paymentId, transactionId } = await capturedPayment();
     const [event] = await feeEventFor(paymentId);
 
-    feeReply = { balanceTransactionId: `txn_${randomUUID()}`, fee: 55n, currency: "USD" };
+    feeReply = {
+      balanceTransactionId: `txn_${randomUUID()}`,
+      fee: 55n,
+      currency: "USD",
+      availableOn: new Date(Date.UTC(2026, 8, 22)),
+    };
     await expect(feeService().handle(event)).rejects.toBeInstanceOf(PermanentRejection);
 
     const entries = await prisma.journalEntry.count({
