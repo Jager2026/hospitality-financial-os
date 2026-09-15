@@ -274,6 +274,14 @@ export class StripeService implements OnModuleInit {
    * `{ stripeAccount }` because these are direct charges: the BalanceTransaction belongs to the
    * connected account, not to the platform (ADR-092).
    *
+   * **What this deliberately does NOT return, listed so each omission stays a decision.** A real
+   * BalanceTransaction carries sixteen fields; this returns four. The rest —
+   * `amount`, `net`, `balance_type`, `created`, `description`, `exchange_rate`, `fee_details`,
+   * `reporting_category`, `source`, `status`, `type` — are not taken. Two are worth naming because
+   * somebody will want them: `net` (which we can compute as amount − fee and therefore need not
+   * store twice) and `status` (`pending` until `available_on`, then `available` — a live fact that
+   * would be stale the moment it was written down).
+   *
    * **Returns `null` for "not yet", which is a different answer from an error.** The
    * BalanceTransaction is not populated at the instant the charge succeeds — measured null on a
    * retrieve immediately after confirmation and present seconds later — so the caller retries
@@ -282,7 +290,12 @@ export class StripeService implements OnModuleInit {
   async retrieveProcessingFee(
     stripeAccountId: string,
     paymentIntentId: string,
-  ): Promise<{ balanceTransactionId: string; fee: bigint; currency: string } | null> {
+  ): Promise<{
+    balanceTransactionId: string;
+    fee: bigint;
+    currency: string;
+    availableOn: Date;
+  } | null> {
     try {
       const intent = await this.stripe.paymentIntents.retrieve(
         paymentIntentId,
@@ -297,6 +310,8 @@ export class StripeService implements OnModuleInit {
         balanceTransactionId: balanceTransaction.id,
         fee: BigInt(balanceTransaction.fee),
         currency: balanceTransaction.currency.toUpperCase(),
+        // ADR-096. Same object, same call — this used to be read and thrown away.
+        availableOn: new Date(balanceTransaction.available_on * 1000),
       };
     } catch (err) {
       // Same translation as retrievePaymentIntent, and for the same reason: a PaymentIntent id is

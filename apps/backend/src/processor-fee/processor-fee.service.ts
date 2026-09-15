@@ -140,7 +140,12 @@ export class ProcessorFeeService {
       // a silent hole created by the very mechanism meant to prevent one.
       const claimed = await tx.transaction.updateMany({
         where: { id: transaction.id, processorFeeBalanceTxnId: null },
-        data: { processorFeeBalanceTxnId: fee.balanceTransactionId },
+        data: {
+          processorFeeBalanceTxnId: fee.balanceTransactionId,
+          // ADR-096. Written by the same conditional update, so the date and the fee can never
+          // disagree about which delivery produced them.
+          fundsAvailableOn: fee.availableOn,
+        },
       });
       if (claimed.count !== 1) {
         this.logger.info(
@@ -193,6 +198,7 @@ export class ProcessorFeeService {
         transactionId: transaction.id,
         balanceTransactionId: fee.balanceTransactionId,
         fee: fee.fee.toString(),
+        availableOn: fee.availableOn.toISOString(),
       },
       "Processing fee posted to the Ledger",
     );

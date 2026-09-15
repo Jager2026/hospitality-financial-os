@@ -1,6 +1,6 @@
 ---
 title: API_SPECIFICATION
-version: 2.26.0
+version: 2.27.0
 status: Active
 classification: Internal
 owner: Founder
@@ -352,6 +352,51 @@ Requires: `data.export`
 # ANALYTICS
 
 **Two vocabularies, on purpose (ADR-065).** The JSON endpoints below are **operational screens and count SHIFTS**: a range like `from=2026-09-01&to=2026-09-07` means the seven working days the venue calls by those names, so a shift opened on the 7th and closed at 02:00 on the 8th is included in full, after-midnight takings and all. The `/export` CSVs are **accounting output and stay CALENDAR**, because the accountant is bound by law to a calendar period — the same shift is split across two dated rows there. **Both come from the same LedgerLine rows, so the two can never disagree about the money, only about how it is grouped.**
+
+## SHIFTS
+
+**What a shift close is for: one question, answered in one object.** How much did this shift earn,
+and when does the money arrive. Every field exists to answer that or to say honestly that part of
+it is not answerable yet (ADR-096).
+
+POST /restaurants/{restaurantId}/shifts/close — closes the open shift and returns its summary.
+Requires: `payments.manage`
+
+**It waits, and the wait is measured rather than guessed.** The last payments of an evening are
+seconds old and Stripe has not published their fee. Measured 2026-09-15: a charge's
+BalanceTransaction appears **2.4–3.1 seconds** later (8 of 8, median 2635 ms), and ADR-094's fetch
+then runs on the Outbox's 2-second poll with a 2/4/8-second backoff and a four-attempt cap — about
+fourteen seconds in all. The close polls its own summary for up to **15 seconds** and returns as
+soon as nothing is `pending`. **Returning immediately would show a total that is about to change,
+which is worse than fifteen seconds of waiting for one that is not.**
+
+GET /restaurants/{restaurantId}/shifts/latest-closed/summary — the most recent closed shift, or
+`null` when the venue has never closed one. `null` is a real answer, not an error.
+Requires: `reports.view`
+
+GET /restaurants/{restaurantId}/shifts/{shiftId}/summary — one shift, no waiting: a shift read
+after the fact has stopped moving.
+Requires: `reports.view`
+
+Response: `{ shiftId, restaurantId, businessDate, openedAt, closedAt, currency, transactions, grossRevenue, tips, deductions, netToVenue, availability }`.
+
+**Every amount carries a state, and `null` never means zero** (ADR-094's three, unchanged):
+
+| state | meaning |
+|---|---|
+| `available` | read from Stripe. The amount may legitimately be `"0"` |
+| `pending` | the fetch is still queued — recent payments, the number is coming |
+| `unavailable` | it is not coming: the fetch was abandoned, or the payment predates the mechanism |
+
+- `grossRevenue` — the bill, before any deduction. Computed from our own Ledger, so always `available`.
+- `tips` — **separate from revenue on purpose: a tip is the staff's, not the venue's** (ADR-053), and folding it into revenue is what makes a venue think it earned money it owes somebody.
+- `deductions` — **a LIST of `{ kind, amount, state }`, never top-level fields.** Today `stripe_processing` (Stripe's real fee, `amount − net` as Stripe computed it, taken from the Ledger where ADR-094 posted it) and `platform_fee` (ours). **The shape is the decision:** a fourth deduction — currency conversion, an Instant Payout fee — is a fourth row, and every consumer that walks the list keeps working. The alternative, one field per deduction, breaks every consumer on the day a fourth appears and leaves no place to put a state.
+- `netToVenue` — gross less every deduction. Tips are not subtracted: they were never revenue.
+- `availability` — `{ rows: [{ availableOn, amount, transactions }], unresolved, state }`. **Always a list, even when it holds one row.** `available_on` is midnight UTC of the charge's UTC date plus the account's payout delay, and UTC midnight falls at **03:00 Vilnius in summer, 02:00 in winter** — so a venue trading past those hours genuinely has two arrival dates for one evening, and one number would state a date the money does not arrive on. `amount` is what lands: the charge less Stripe's own fee. Our platform fee leaves the venue's balance as its own movement (ADR-092) and is not subtracted here.
+
+**"Available", never "in your account".** Stripe makes funds available on that date; the payout then travels on the account's own schedule and the receiving bank takes its own time. We can promise the first and not the second.
+
+**The date is a snapshot, not a promise.** The payout delay shortens as an account matures — 7 calendar days in Lithuania initially, 3 business days once established — and whether Stripe re-dates transactions that already exist is **not established** (ADR-096). A later disagreement is therefore recorded as a correction beside the original, never written over it.
 
 ## Dashboard
 GET /dashboard?restaurantId={id} — `restaurantId` required (Sprint 9, ADR-026): a Dashboard is always exactly one Restaurant's view (an org-wide Owner lands on the Restaurants list instead, `UX_MAP.md`), and a restaurant-scoped Manager can hold Memberships at more than one Restaurant, so a bare call would be ambiguous about which one is meant. Requires `reports.view` (seeded, Owner/Administrator/Manager, not Waiter — the Waiter Portal's own navigation has no Dashboard item at all), checked at two layers: `PermissionsGuard` globally, then a resource-scoped check that the specific Membership reaching this Restaurant carries the permission (same shape as every other fine-grained permission check in this document).

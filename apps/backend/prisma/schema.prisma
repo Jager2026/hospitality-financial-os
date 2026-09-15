@@ -579,6 +579,21 @@ model Transaction {
   /// the rule OC-13 records; NULL means the fee has not been posted yet, and many rows may be NULL
   /// at once, which a plain unique index permits.
   processorFeeBalanceTxnId String? @unique @map("processor_fee_balance_txn_id")
+  /// ADR-096. When this transaction's money becomes available for payout, as Stripe stated it —
+  /// `BalanceTransaction.available_on`, measured to be midnight UTC of the charge's UTC date plus
+  /// the account's payout delay.
+  ///
+  /// **It arrives in the same object as the fee and is written by the same claim**, so keeping it
+  /// costs no extra call. The reason to keep it is not the call: without it, answering "when does
+  /// this money arrive" at shift close requires Stripe to be reachable, which makes a venue's own
+  /// figure depend on something that has nothing to do with the venue.
+  ///
+  /// **It is a SNAPSHOT, not a promise.** The payout delay shortens as an account matures (7
+  /// calendar days in Lithuania initially, 3 business days once established), and whether Stripe
+  /// re-dates transactions that already exist is NOT established — see ADR-096. So this is what
+  /// Stripe said when we asked, and a later disagreement is recorded as a correction rather than
+  /// overwritten.
+  fundsAvailableOn DateTime? @map("funds_available_on")
 
   payment        Payment        @relation(fields: [paymentId], references: [id])
   restaurant     Restaurant     @relation(fields: [restaurantId], references: [id])

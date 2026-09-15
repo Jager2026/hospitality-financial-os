@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { registerUser } from "../fixtures/api";
 import { queryOne } from "../fixtures/db";
-import { readInvitationLink } from "../fixtures/invitation";
+import { watchForInvitationLink } from "../fixtures/invitation";
 import { seedMemberWithRole, seedOrgWideOwner } from "../fixtures/org";
 import { resetRateLimits } from "../fixtures/throttle";
 
@@ -75,16 +75,20 @@ test("the whole path: invite, open the emailed link, accept, and sign in", async
 
   await page.getByTestId("staff-invite-email").fill(invitee);
   await page.getByTestId("staff-invite-role").selectOption({ label: "Waiter" });
+
+  // WATCH BEFORE CLICKING. The product destroys the email's body as soon as its Outbox poller
+  // reaches the event (ADR-075), and the token lives only there (ADR-070) — so this is a race the
+  // test has to win, not a value it can fetch afterwards. Reading straight after the click was
+  // measured losing it every time on a freshly reset database, where the poller has nothing older
+  // to work through.
+  const invitation = watchForInvitationLink(invitee);
   await page.getByTestId("staff-invite-submit").click();
   await expect(page.getByTestId("staff-invite-sent")).toBeVisible();
+  const { acceptPath } = await invitation.settled;
 
   // Still one row. The invited person does not appear until they accept, and asserting it here is
   // what makes the note on the screen a true statement rather than a hedge.
   await expect(page.getByTestId("staff-row")).toHaveCount(1);
-
-  // Read the way the recipient reads it: out of the queued email, never out of the API response,
-  // which deliberately carries no token.
-  const { acceptPath } = await readInvitationLink(invitee);
   expect(acceptPath).toContain("/invitations/accept");
 
   await page.evaluate(() => window.localStorage.removeItem("hos.session"));
@@ -131,10 +135,12 @@ test("the terms checkbox is unticked, and nothing is created without it", async 
   await page.goto(`/restaurants/${org.restaurantId}/staff`);
   await page.getByTestId("staff-invite-email").fill(invitee);
   await page.getByTestId("staff-invite-role").selectOption({ label: "Waiter" });
+
+  // Same race, same remedy — see the note in the test above.
+  const invitation = watchForInvitationLink(invitee);
   await page.getByTestId("staff-invite-submit").click();
   await expect(page.getByTestId("staff-invite-sent")).toBeVisible();
-
-  const { acceptPath } = await readInvitationLink(invitee);
+  const { acceptPath } = await invitation.settled;
   await page.evaluate(() => window.localStorage.removeItem("hos.session"));
   await page.goto(acceptPath);
 
